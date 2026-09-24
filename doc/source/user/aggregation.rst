@@ -681,8 +681,12 @@ tracked and is read in every possible world:
 The value displayed is the one plain SQL computes, as for any aggregate, and
 a probability or a moment over it is computed per world: ``expected(floor(
 avg(x)))`` is the average of the floors, which is not the floor of the
-average. A comparison on such a value is read per world too, and the groups
-where it can hold in no world are dropped, so the rows are SQL's.
+average. A comparison on such a value is read per world too, and in a
+``HAVING`` the groups where it can hold in no world are dropped, so the rows
+are SQL's. Written outside the aggregation -- a ``WHERE`` on a derived table's
+aggregate, a scalar subquery -- the necessary condition cannot be built at that
+level, and such a row is kept with a provenance of zero: it says of itself that
+no world holds it.
 
 Any other function reads the value of the aggregate on the data as it is and
 reports that reading once for the statement (see :ref:`plain-sql`); an
