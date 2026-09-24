@@ -154,3 +154,32 @@ remove_provenance
 rows_under_error
 3
 (1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end, although the statement also tracks rsib; mark it plain() to say so
+DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+id|p
+1|0.500000
+2|0.250000
+3|0.125000
+(3 rows)
+id
+1
+2
+3
+(3 rows)
+remove_provenance
+
+(1 row)
+id|p
+1|0.500000
+2|0.250000
+3|0.125000
+(3 rows)
+remove_provenance
+
+(1 row)

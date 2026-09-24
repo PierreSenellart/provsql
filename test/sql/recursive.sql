@@ -363,3 +363,57 @@ SELECT remove_provenance('bag_r');
 SELECT count(*) AS rows_under_error FROM bag_r;
 DROP TABLE bag_r;
 DROP TABLE bag_e, bag_seed, bag_param;
+
+-- A SIBLING CTE read from inside the RECURSIVE term.  The lowering deparses the
+-- two terms into standalone SQL for eval_recursive_all to run round by round, so
+-- every name in them has to resolve on its own.  A sibling read as a range-table
+-- entry was inlined -- inline_ctes_in_rtable follows range tables -- and one read
+-- from a SUBLINK was not: the walk that inlines a sublink's CTE references
+-- ignores the CTE subqueries, so a sublink inside a CTE body was reached by
+-- neither.  The recursive term therefore still named `starting`, and the INSERT
+-- of each round raised a bare "relation \"starting\" does not exist", with no
+-- DETAIL and no tag: difftest probe/recursive-sibling-cte, dba/175868.
+-- The inlining of a CTE body's sublinks now runs BEFORE the range-table pass,
+-- which is the pass that lowers a recursive CTE and freezes its text.
+-- Three rows at one half in a chain, 1 <- 2 <- 3: the first is reached by the
+-- non-recursive term and carries its own half, the second needs both it and its
+-- parent (0.25), the third the whole chain (0.125).  The bound itself is read on
+-- the data as it is and says so -- an uncertain bound would leave no round
+-- empty, so the rounds would not end.
+CREATE TABLE rsib(id int, name text, parent_id int);
+INSERT INTO rsib VALUES (1,'Father',NULL), (2,'Son',1), (3,'Grandson',2);
+SELECT add_provenance('rsib');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM rsib; END $$;
+CREATE TABLE rsib_r AS
+  WITH RECURSIVE starting(id) AS (SELECT id FROM rsib WHERE name = 'Father'),
+       d(id) AS (SELECT id FROM starting
+                 UNION ALL
+                 SELECT t.id FROM rsib t JOIN d ON t.parent_id = d.id
+                   WHERE t.id > (SELECT min(id) FROM starting))
+  SELECT id, probability(provenance()) AS p FROM d;
+SELECT remove_provenance('rsib_r');
+SELECT id, round(p::numeric, 6) AS p FROM rsib_r ORDER BY id;
+DROP TABLE rsib_r;
+-- The same rows plain SQL gives, which is what the row set has to be.
+SET provsql.active = off;
+WITH RECURSIVE starting(id) AS (SELECT id FROM rsib WHERE name = 'Father'),
+     d(id) AS (SELECT id FROM starting
+               UNION ALL
+               SELECT t.id FROM rsib t JOIN d ON t.parent_id = d.id
+                 WHERE t.id > (SELECT min(id) FROM starting))
+SELECT id FROM d ORDER BY id;
+SET provsql.active = on;
+-- The control that was never broken: the sibling read in the NON-recursive term
+-- only, where it is a range-table entry and was inlined all along.  No bound, so
+-- no reading of one: the same three rows and the same chain.
+CREATE TABLE rsib_r AS
+  WITH RECURSIVE starting(id) AS (SELECT id FROM rsib WHERE name = 'Father'),
+       d(id) AS (SELECT id FROM starting
+                 UNION ALL
+                 SELECT t.id FROM rsib t JOIN d ON t.parent_id = d.id)
+  SELECT id, probability(provenance()) AS p FROM d;
+SELECT remove_provenance('rsib_r');
+SELECT id, round(p::numeric, 6) AS p FROM rsib_r ORDER BY id;
+DROP TABLE rsib_r;
+SELECT remove_provenance('rsib');
+DROP TABLE rsib;

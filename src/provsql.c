@@ -3097,9 +3097,33 @@ static void inline_ctes(const constants_t *constants, Query *q) {
   reach_aggs = detect_reach_aggregations(q);
   reach_conjs = detect_reach_conjunctions(q);
 #endif
-  inline_ctes_in_rtable(q->rtable, q->cteList, &lowered, kept);
   {
     inline_ctes_sublink_ctx sctx = {q->cteList, &lowered, kept};
+    ListCell *lc2;
+
+    /* A sublink inside a CTE BODY is reached by neither pass below: the walk
+     * over @p q ignores the CTE subqueries, and @c inline_ctes_in_rtable
+     * follows range tables and not sublinks.  So a SIBLING CTE read from such a
+     * sublink kept its name -- which is why a sibling read as a range-table
+     * entry was inlined and one read from a sublink was not.  The recursive
+     * lowering then deparsed a term still naming a CTE that is no longer in the
+     * WITH clause, and eval_recursive_all's own INSERT raised a bare
+     * "relation \"starting\" does not exist" (difftest
+     * probe/recursive-sibling-cte, dba/175868).
+     *
+     * It runs BEFORE the range-table pass because that pass is what lowers a
+     * recursive CTE, deparsing its two terms as they stand: inlining after it
+     * would be too late for the text they carry.  A self-reference cannot
+     * appear here, PostgreSQL refusing a recursive reference inside a subquery
+     * of the recursive term. */
+    foreach (lc2, q->cteList) {
+      CommonTableExpr *c = (CommonTableExpr *)lfirst(lc2);
+
+      if (c->ctequery != NULL && IsA(c->ctequery, Query))
+        query_tree_walker((Query *)c->ctequery, inline_ctes_in_sublinks_walker,
+                          &sctx, QTW_IGNORE_CTE_SUBQUERIES);
+    }
+    inline_ctes_in_rtable(q->rtable, q->cteList, &lowered, kept);
     query_tree_walker(q, inline_ctes_in_sublinks_walker, &sctx,
                       QTW_IGNORE_CTE_SUBQUERIES);
   }
