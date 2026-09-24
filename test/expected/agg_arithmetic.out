@@ -482,3 +482,75 @@ p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.750000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+e
+1.382088
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.750000
+(1 row)
+remove_provenance
+
+(1 row)

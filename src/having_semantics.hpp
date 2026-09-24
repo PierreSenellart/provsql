@@ -982,6 +982,43 @@ void provsql_having(
             is_int = ai || aop != PROVSQL_ARITH_ROUND || w.size() == 1;
             return true;
           }
+          if (aop == PROVSQL_ARITH_POW || aop == PROVSQL_ARITH_LN ||
+              aop == PROVSQL_ARITH_EXP) {
+            /* The transform of the value this world gives.  Without these
+             * three the switch fell through to "no value in this world", which
+             * the caller reads as "the comparison does not hold here" -- in
+             * every world, so a HAVING over sqrt(sum(x)) (a POW of one half),
+             * over ln or exp, or over an expression holding one, answered
+             * probability 0 whatever the threshold.  The other five evaluators
+             * read them, or decline the shape and leave it to this one.
+             *
+             * Where the transform is undefined ON the value the world gives --
+             * the logarithm of a nonpositive number, a negative base raised to
+             * a fraction -- the world has no value, the reading a divisor of
+             * zero gets (see the DIV arm) rather than the error SQL raises
+             * there: raising in one world would take every other world's
+             * answer with it. */
+            double a;
+            bool ai;
+
+            if (w.empty() || !eval(w[0], world, a, ai)) return false;
+            if (aop == PROVSQL_ARITH_LN) {
+              if (!(a > 0)) return false;
+              out = std::log(a);
+            } else if (aop == PROVSQL_ARITH_EXP) {
+              out = std::exp(a);
+            } else {
+              double e;
+              bool ei;
+
+              if (w.size() != 2 || !eval(w[1], world, e, ei)) return false;
+              out = std::pow(a, e);
+              if (std::isnan(out)) return false;
+            }
+            if (!std::isfinite(out)) return false;
+            is_int = false;
+            return true;
+          }
           if (aop == PROVSQL_ARITH_MAX || aop == PROVSQL_ARITH_MIN) {
             if (w.empty()) return false;
             double r = 0; bool all_int = true, first = true;

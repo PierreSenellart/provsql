@@ -647,3 +647,96 @@ SELECT round(p::numeric, 6) AS p FROM agg_zd_r;
 DROP TABLE agg_zd_r;
 SELECT remove_provenance('agg_zd');
 DROP TABLE agg_zd;
+
+-- A HAVING whose aggregate side holds a POW, an LN or an EXP gate.  The
+-- per-world evaluator knew every other arithmetic it can meet and not those
+-- three, so the switch fell through to "this world has no value", which reads
+-- as "the comparison does not hold here" -- in every world.  Every such
+-- predicate therefore answered probability 0, silently, whatever the threshold:
+-- sqrt (whose gate is a POW of one half), ln, exp, the ^ operator, and anything
+-- holding one of them.  expected() of the same expression was already right,
+-- which is why it went unseen: the value is read by the sampler, which has the
+-- three arms, and only the COMPARISON went through the evaluator that lacked
+-- them.
+-- Two rows at one half, so the sums are 1, 2 and 3 in the three worlds that
+-- have one, each a quarter.  The telling one is "> 0", which every one of those
+-- worlds satisfies: 0.75 is the probability the group is there at all, against
+-- the 0 this answered.
+CREATE TABLE agg_tr_d(x int);
+INSERT INTO agg_tr_d VALUES (1), (2);
+SELECT add_provenance('agg_tr_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_tr_d; END $$;
+-- sqrt(sum) > 0, satisfied wherever the group is there: hand 0.75
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sqrt(sum(x)) > 0;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- sqrt(sum) > 1, the worlds summing 2 and 3: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sqrt(sum(x)) > 1;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- ln(sum) > 0.5, the logarithms being 0, 0.693147, 1.098612: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING ln(sum(x)) > 0.5;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- exp(sum) > 5, the exponentials being 2.72, 7.39, 20.09: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING exp(sum(x)) > 5;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- a POW nested inside a PLUS: sqrt(sum)+1 is 2, 2.414214, 2.732051: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sqrt(sum(x))+1 > 2.2;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- the ^ operator: the squares being 1, 4, 9: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sum(x)^2 > 2;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- the control, no transform in the way: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sum(x) > 1;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- expected() of the same expression, which the sampler has always read right:
+-- (1 + 1.4142136 + 1.7320508)/3 = 1.3820881.
+CREATE TABLE agg_tr_r AS
+  SELECT round(expected(sqrt(sum(x)))::numeric, 6) AS e FROM agg_tr_d;
+SELECT remove_provenance('agg_tr_r');
+SELECT * FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+SELECT remove_provenance('agg_tr_d');
+DROP TABLE agg_tr_d;
+-- Where the transform is undefined ON the value a world gives, that world has
+-- no value -- the reading a divisor of zero gets, not the error SQL raises
+-- there.  Rows 0 and 2: the world holding 0 alone sums to 0, whose logarithm is
+-- undefined, so it carries no value and no truth.  "> -1" then answers the two
+-- worlds that sum to 2, and not the 0.75 it would if the zero world counted.
+CREATE TABLE agg_tr_d(x int);
+INSERT INTO agg_tr_d VALUES (0), (2);
+SELECT add_provenance('agg_tr_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_tr_d; END $$;
+-- ln(sum) > -1, the zero-summing world carrying no value: hand 0.5
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING ln(sum(x)) > -1;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+-- the control, which that world does satisfy: hand 0.75
+CREATE TABLE agg_tr_r AS
+  SELECT probability(provenance()) AS p FROM agg_tr_d HAVING sum(x) > -1;
+SELECT remove_provenance('agg_tr_r');
+SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
+DROP TABLE agg_tr_r;
+SELECT remove_provenance('agg_tr_d');
+DROP TABLE agg_tr_d;
