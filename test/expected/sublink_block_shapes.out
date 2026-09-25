@@ -41,3 +41,34 @@ id|p
 2|0.375000
 3|0.250000
 (3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+4|0.500000
+5|1.000000
+6|0.500000
+(3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+4|0.000000
+5|1.000000
+6|0.000000
+(3 rows)
+id
+5
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

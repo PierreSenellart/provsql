@@ -28900,6 +28900,7 @@ static PlannedStmt *provsql_planner(Query *q,
     const constants_t constants = get_constants(false);
     bool untracked_sublink_warned = false;
     bool sublinks_lifted = false;     /* the query is the lift's, not the user's */
+    bool from_wrapped = false;        /* the provsql column is the wrap's, not the user's */
     Query *lifted_q = NULL;           /* the lift of a block whose sublinks are tracked */
 
     /* A subquery over a provenance-tracked relation used in an expression
@@ -28935,6 +28936,22 @@ static PlannedStmt *provsql_planner(Query *q,
         !query_has_inert_fetch(&constants, q) &&
         query_has_tracked_sublink(&constants, q))
       lifted_q = lift_tracked_sublinks(&constants, q);
+
+    /* The lift could not put the bodies in the FROM -- an antijoin is no entry
+     * of a FROM clause -- but a bare-VALUES FROM can carry a provenance column
+     * of its own, after which the block HAS provenance and the ordinary
+     * semijoin lowering does the rest.
+     *
+     * It is attempted here and not only inside process_query, which this level
+     * would never reach: with `SELECT *` nothing in the query asks for
+     * provenance, so the block was declared untracked and its sublink frozen --
+     * while the same query written with provenance() was tracked all along, the
+     * explicit call being what made has_provenance true.  That is difftest's
+     * dba/379ff1278c, and the difference between the two spellings was the whole
+     * of it. */
+    if (provsql_active && constants.ok && lifted_q == NULL &&
+        wrap_untracked_from_for_sublink(&constants, q))
+      from_wrapped = true;
 
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         lifted_q == NULL &&
@@ -29000,7 +29017,9 @@ static PlannedStmt *provsql_planner(Query *q,
        * original query before any rewriting -- so the intermediate queries the
        * rewriter builds (which legitimately carry a provsql column) are not
        * flagged. */
-      if (provsql_active && !sublinks_lifted &&
+      /* The wrap just above put that column there, as the lift puts its own
+       * query there: neither is the user writing a provsql column by hand. */
+      if (provsql_active && !sublinks_lifted && !from_wrapped &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
         provsql_error("a query may not define a column named \"%s\" by hand; "
                       "ProvSQL manages the provenance column itself",
