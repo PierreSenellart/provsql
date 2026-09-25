@@ -266,11 +266,11 @@ ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on th
 DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
 DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
-ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation of an outer join is read, and lowering the join puts that relation in a subquery, which has neither
+ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation is read, and the rewriting of an outer join -- the query's own, or one introduced for a sublink -- puts that relation in a subquery, which has neither
 DETAIL:  provsql-reason: outer-join-whole-row-or-system-column; scope: gap
-ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation of an outer join is read, and lowering the join puts that relation in a subquery, which has neither
+ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation is read, and the rewriting of an outer join -- the query's own, or one introduced for a sublink -- puts that relation in a subquery, which has neither
 DETAIL:  provsql-reason: outer-join-whole-row-or-system-column; scope: gap
-ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation of an outer join is read, and lowering the join puts that relation in a subquery, which has neither
+ERROR:  ProvSQL: a whole-row value, or a system column (ctid, xmin, ...), of a relation is read, and the rewriting of an outer join -- the query's own, or one introduced for a sublink -- puts that relation in a subquery, which has neither
 DETAIL:  provsql-reason: outer-join-whole-row-or-system-column; scope: gap
 remove_provenance
 
@@ -284,4 +284,16 @@ count|provsql
 (1 row)
 count|provsql
 1 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
+m|j|n|p
+a|[{"id":1,"m":"a"}] (*)|1 (*)|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+j
+[{"id":1,"m":"a"}] (*)
 (1 row)

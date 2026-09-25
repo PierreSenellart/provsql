@@ -403,5 +403,24 @@ DROP TABLE ojl_res;
 -- A system column without an outer join is not relocated, so it is read.
 SELECT count(r.ctid) FROM ojl_r r;
 SELECT count(r.ctid) FROM ojl_r r JOIN ojl_l l ON r.m = l.m;
+-- An aggregate over a whole row, with a sublink: the aggregate is split from
+-- the sublink, which sends the whole row to the inner query, where the join
+-- the sublink becomes is rewritten.  The record of the columns replaces it
+-- before the split, so these answer -- and the token is not in the record.
+-- Only (1, 'a') passes the EXISTS, and its row needs ojl_r's row too: 1/4.
+CREATE TABLE ojl_res AS
+  SELECT l.m, json_agg(l) AS j, count(l) AS n,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ojl_l l WHERE EXISTS (SELECT 1 FROM ojl_r r WHERE r.m = l.m) GROUP BY l.m;
+SELECT remove_provenance('ojl_res');
+SELECT * FROM ojl_res ORDER BY m;
+DROP TABLE ojl_res;
+-- The same over a derived table, whose row type is not a relation's.
+CREATE TABLE ojl_res AS
+  SELECT json_agg(base) AS j FROM (SELECT id, m FROM ojl_l) base
+  WHERE EXISTS (SELECT 1 FROM ojl_r r WHERE r.m = base.m);
+SELECT remove_provenance('ojl_res');
+SELECT * FROM ojl_res;
+DROP TABLE ojl_res;
 
 DROP TABLE ojl_l, ojl_r, ojl_o;

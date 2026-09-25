@@ -310,6 +310,8 @@ static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
 static bool expr_contains_aggref(Node *node);
+static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
+                                      bool top_level);
 static bool has_rv_or_provenance_call(Node *node, void *data);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
@@ -15585,8 +15587,9 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
     if (sc.found)
       provsql_unsupported(PROVSQL_GAP, "outer-join-whole-row-or-system-column",
                           "a whole-row value, or a system column (ctid, xmin, ...), of a "
-                          "relation of an outer join is read, and lowering the join puts "
-                          "that relation in a subquery, which has neither");
+                          "relation is read, and the rewriting of an outer join -- the "
+                          "query's own, or one introduced for a sublink -- puts that "
+                          "relation in a subquery, which has neither");
   }
 
 #if PG_VERSION_NUM >= 180000
@@ -25183,6 +25186,14 @@ static Query *split_aggregation_over_sublinks(const constants_t *constants,
   if (!tctx.found)
     return NULL;
 
+  /* The aggregate stays here and its argument goes to inner, so a whole-row
+   * value read by the aggregate (json_agg(t), count(t)) would become a record
+   * column of inner, which is not a read of a tracked relation any more: the
+   * hiding of the provsql column would no longer see it, and the whole-row Var
+   * inside inner would reach the outer-join lowering, which refuses it.  Hide
+   * it now, while the relation is still this query's. */
+  hide_provsql_in_wholerows(constants, q, false);
+
 #if PG_VERSION_NUM >= 180000
   strip_group_rte_pg18(q);
 #endif
@@ -25997,9 +26008,6 @@ static bool param_takes_any_row(Oid funcid, int i) {
   ReleaseSysCache(tp);
   return res;
 }
-
-static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
-                                      bool top_level);
 
 /**
  * @brief Mutator: replace the whole-row values of tracked relations read as
