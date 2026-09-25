@@ -61,3 +61,39 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|pr
+1|0.250000
+(1 row)
+remove_provenance
+
+(1 row)
+id|pr
+1|0.250000
+(1 row)
+id
+1
+(1 row)
+remove_provenance
+
+(1 row)
+id|pr
+1|0.500000
+2|0.250000
+3|0.500000
+(3 rows)
+id
+1
+2
+3
+(3 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body holds a subquery of its own over a tracked relation
+DETAIL:  provsql-reason: body-nested-subquery; scope: gap
+remove_provenance
+
+(1 row)

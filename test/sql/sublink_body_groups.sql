@@ -97,3 +97,88 @@ SELECT remove_provenance('bgt');
 SELECT remove_provenance('bgu');
 DROP TABLE bgt;
 DROP TABLE bgu;
+
+-- ----------------------------------------------------------------------
+-- A test NESTED inside a subquery body, whose own conjuncts read only the
+-- levels above it.  Such a conjunct takes the same value for every row the
+-- inner body scans, so it can be evaluated one level up:
+--
+--   x IN (SELECT a FROM Q WHERE t IN (SELECT b FROM R WHERE C))    C outer-only
+--   x IN (SELECT a FROM Q WHERE C AND t IN (SELECT b FROM R))
+--
+-- What that buys is the inner test becoming UNCORRELATED, which the membership
+-- rewriting lowers, leaving the outer body plain for the decorrelation.  Before
+-- it the outer test was refused with body-nested-subquery: difftest's
+-- sede/f42f1b3271, the last F1 query of its kind.  The lift is the mirror of
+-- wrap_body_sublinks, which moves the conjuncts that read nothing OUTSIDE a body
+-- into a derived table of it.
+-- Three rows at one half.  Row 1 qualifies because row 2 carries the same tags
+-- with an accepted answer, so it needs both: 0.25.  The emitted circuit is the
+-- one the hand-lifted query builds, down to the same provenance uuid.
+CREATE TABLE nsp(id int, tags text, kind int, answers int, accepted int);
+INSERT INTO nsp VALUES (1,'<a>',1,0,NULL), (2,'<a>',1,2,7), (3,'<b>',1,0,NULL);
+SELECT add_provenance('nsp');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM nsp; END $$;
+CREATE TABLE nsp_r AS
+  SELECT p.id, probability(provenance()) AS pr FROM nsp AS p
+   WHERE p.tags IN (SELECT tags FROM nsp AS p2
+                     WHERE id IN (SELECT id FROM nsp
+                                   WHERE p2.kind = 1 AND p2.answers > 0
+                                     AND p2.accepted IS NOT NULL
+                                     AND p2.tags = p.tags))
+     AND p.kind = 1 AND p.answers = 0;
+SELECT remove_provenance('nsp_r');
+SELECT id, round(pr::numeric, 6) AS pr FROM nsp_r ORDER BY id;
+DROP TABLE nsp_r;
+-- The same query with the conjuncts lifted by hand: the same answer, which is
+-- what the rewriting has to reproduce.
+CREATE TABLE nsp_r AS
+  SELECT p.id, probability(provenance()) AS pr FROM nsp AS p
+   WHERE p.tags IN (SELECT tags FROM nsp AS p2
+                     WHERE p2.kind = 1 AND p2.answers > 0
+                       AND p2.accepted IS NOT NULL AND p2.tags = p.tags
+                       AND p2.id IN (SELECT id FROM nsp))
+     AND p.kind = 1 AND p.answers = 0;
+SELECT remove_provenance('nsp_r');
+SELECT id, round(pr::numeric, 6) AS pr FROM nsp_r ORDER BY id;
+DROP TABLE nsp_r;
+-- And the row set plain SQL gives, which both must match.
+SET provsql.active = off;
+SELECT p.id FROM nsp AS p
+ WHERE p.tags IN (SELECT tags FROM nsp AS p2
+                   WHERE id IN (SELECT id FROM nsp
+                                 WHERE p2.kind = 1 AND p2.answers > 0
+                                   AND p2.accepted IS NOT NULL
+                                   AND p2.tags = p.tags))
+   AND p.kind = 1 AND p.answers = 0 ORDER BY 1;
+SET provsql.active = on;
+-- The lift DECLINES a negated inner test, on a NULL condition the body being
+-- empty either way: the positive test is then false either way and a WHERE drops
+-- the row, while under a NOT one reading is true and the other unknown.  It is
+-- answered all the same, by the antijoin path, and correctly -- which is why the
+-- decline costs nothing here.  Rows 1 and 3 have no answers, so their inner test
+-- is over an empty set and they qualify; row 2 has answers, so the inner set
+-- holds every present id and excludes it.  The body therefore offers '<a>' from
+-- row 1 and '<b>' from row 3: row 1 needs itself (0.5), row 2 needs row 1 for
+-- the tag and itself for the row (0.25), row 3 needs itself (0.5).
+CREATE TABLE nsp_r AS
+  SELECT p.id, probability(provenance()) AS pr FROM nsp AS p
+   WHERE p.tags IN (SELECT tags FROM nsp AS p2
+                     WHERE id NOT IN (SELECT id FROM nsp WHERE p2.answers > 0));
+SELECT remove_provenance('nsp_r');
+SELECT id, round(pr::numeric, 6) AS pr FROM nsp_r ORDER BY id;
+DROP TABLE nsp_r;
+SET provsql.active = off;
+SELECT p.id FROM nsp AS p
+ WHERE p.tags IN (SELECT tags FROM nsp AS p2
+                   WHERE id NOT IN (SELECT id FROM nsp WHERE p2.answers > 0))
+ ORDER BY 1;
+SET provsql.active = on;
+-- An inner body that AGGREGATES without grouping yields a row over no input at
+-- all, so it answers over the count 0 where the condition is false; lifting the
+-- condition out would make it answer nothing instead.
+SELECT p.id FROM nsp AS p
+ WHERE p.answers IN (SELECT count(*) FROM nsp AS p3 WHERE p3.id IN
+                      (SELECT count(*) FROM nsp WHERE p.kind = 99));
+SELECT remove_provenance('nsp');
+DROP TABLE nsp;

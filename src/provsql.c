@@ -16212,6 +16212,103 @@ static bool reads_outside_walker(Node *node, Index depth) {
 }
 
 /**
+ * @brief Lift the conjuncts of an inner sublink body's @c WHERE that read
+ *        nothing of that body's own relations into the qual holding the sublink.
+ *
+ * The mirror of @c wrap_body_sublinks, which moves the conjuncts that read
+ * nothing OUTSIDE a body into a derived table of it.  Here it is the other half:
+ * a conjunct of @c "id IN (SELECT id FROM posts WHERE p2.answercount > 0 AND
+ * p2.tags = p.tags)" reads only the levels ABOVE the body, so it takes the same
+ * value for every row the body scans and can be evaluated one level up:
+ *
+ *   x IN (SELECT a FROM Q WHERE t IN (SELECT b FROM R WHERE C))     C outer-only
+ *   x IN (SELECT a FROM Q WHERE C AND t IN (SELECT b FROM R))
+ *
+ * What that buys is the inner test becoming UNCORRELATED, which
+ * @c rewrite_uncorrelated_membership then lowers, leaving the outer body plain
+ * for the decorrelation -- where before, the outer test was refused with
+ * @c body-nested-subquery (difftest's sede/f42f1b3271, F1).
+ *
+ * Two shapes are declined rather than lifted.  A NEGATED test, because the
+ * equivalence fails on a NULL C: the body is empty either way, so the positive
+ * test is false either way and a @c WHERE filters the row, while under a @c NOT
+ * one reading is true and the other unknown.  And a body that AGGREGATES without
+ * grouping, because such a body yields a row over no input at all -- @c "x IN
+ * (SELECT count(*) FROM R WHERE C)" answers over the count 0 where C is false,
+ * and pulling C out would make it answer nothing.
+ *
+ * @return  Whether anything was lifted.
+ */
+static bool lift_body_outer_only_conjuncts(Query *sub) {
+  List *conjs, *lifted = NIL, *kept = NIL;
+  ListCell *lc, *lc2;
+  bool any = false;
+
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT || !sub->hasSubLinks ||
+      sub->jointree == NULL || sub->jointree->quals == NULL)
+    return false;
+
+  conjs = make_ands_implicit((Expr *)sub->jointree->quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    SubLink *sl;
+    Query *body;
+    List *bconjs, *bkeep = NIL;
+    bool moved_here = false;
+
+    /* Only a positive membership or existence test of this level. */
+    if (!IsA(c, SubLink))
+      continue;
+    sl = (SubLink *)c;
+    if ((sl->subLinkType != ANY_SUBLINK && sl->subLinkType != EXISTS_SUBLINK) ||
+        !IsA(sl->subselect, Query))
+      continue;
+    body = (Query *)sl->subselect;
+    if (body->commandType != CMD_SELECT || body->jointree == NULL ||
+        body->jointree->quals == NULL || body->setOperations != NULL ||
+        body->cteList != NIL)
+      continue;
+    /* A body that aggregates without grouping has a row over no input. */
+    if (body->hasAggs && body->groupClause == NIL && body->groupingSets == NIL)
+      continue;
+
+    bconjs = make_ands_implicit((Expr *)body->jointree->quals);
+    foreach (lc2, bconjs) {
+      Node *bc = (Node *)lfirst(lc2);
+
+      /* Reads nothing of the body's own relations, and is a plain condition:
+       * a sublink or an aggregate of its own is left where it stands. */
+      if (contain_vars_of_level(bc, 0) || checkExprHasSubLink(bc) ||
+          contain_aggs_of_level(bc, 0)) {
+        bkeep = lappend(bkeep, bc);
+        continue;
+      }
+      bc = copyObject(bc);
+      IncrementVarSublevelsUp(bc, -1, 1);
+      lifted = lappend(lifted, bc);
+      moved_here = true;
+    }
+    if (!moved_here) {
+      list_free(bconjs);
+      continue;
+    }
+    body->jointree->quals =
+      bkeep == NIL ? NULL : (Node *)make_ands_explicit(bkeep);
+    any = true;
+  }
+  if (!any)
+    return false;
+  /* The lifted conditions join this level's own qual, beside the test they
+   * came out of. */
+  foreach (lc, conjs)
+    kept = lappend(kept, lfirst(lc));
+  foreach (lc, lifted)
+    kept = lappend(kept, lfirst(lc));
+  sub->jointree->quals = (Node *)make_ands_explicit(kept);
+  return true;
+}
+
+/**
  * @brief Move the subquery tests of the @c WHERE of a subquery body @p sub into
  *        a derived table of it.
  *
@@ -17751,6 +17848,10 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     }
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
+      /* A test nested in this body whose own conjuncts read only the levels
+       * above it: lift them here, which leaves that test uncorrelated for the
+       * rewriting below and this body plain for the decorrelation. */
+      lift_body_outer_only_conjuncts((Query *)sl->subselect);
       wrap_body_sublinks((Query *)sl->subselect);
       /* A grouped body of an IN / op ANY / op ALL becomes a derived table the
        * semijoin reads; an EXISTS body is left as it is, its existence test
