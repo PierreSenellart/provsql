@@ -188,6 +188,9 @@ extern void _PG_fini(void);
 /** Alias of the two-row source the truth of a comparison of an aggregate
  *  explodes over (@c rewrite_explode_agg_cmp_truth). */
 #define PROVSQL_TRUTH_ALIAS "provsql_agg_truth"
+/** Name the recursion lowering gives, in the rounds, to the provenance column
+ *  a @c "SELECT *" put in a recursive CTE (@c neutralise_star_provenance). */
+#define PROVSQL_STAR_COLUMN_NAME "provsql_star"
 /** Column of the companion count that gates the NULL value of an exploded
  *  aggregate (@c rewrite_explode_agg_value). */
 #define PROVSQL_AGG_COUNT_COLNAME "provsql_agg_count"
@@ -1907,6 +1910,174 @@ static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
 }
 
 /**
+ * @brief Whether the columns of @p cte include a provenance one.
+ *
+ * @c "SELECT *" over a provenance-tracked relation expands to the provenance
+ * column at parse analysis, before any hook of ours runs, so a recursive term
+ * written that way asks for a token as data.  Told apart from the shapes the
+ * recursion lowering declines for their own reasons, since the cause is the
+ * star and what the user can do about it is to write the columns out.
+ */
+static bool cte_colnames_hold_provenance(CommonTableExpr *cte) {
+  ListCell *lc;
+
+  foreach (lc, cte->ctecolnames)
+    if (strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) == 0)
+      return true;
+  return false;
+}
+
+/** @brief Context for @c star_prov_selfref_walker. */
+typedef struct star_prov_ctx {
+  const char *ctename;  ///< The recursive CTE
+  int pos;              ///< Its provenance column, 1-based
+  List *stack;          ///< Queries from the arm down to the current one
+  bool reads;           ///< A term reads that column (or the whole row)
+} star_prov_ctx;
+
+/**
+ * @brief Walker: rename the provenance column of the self-references of a
+ *        recursive CTE, and tell whether a term reads it.
+ */
+static bool star_prov_selfref_walker(Node *node, void *cx) {
+  star_prov_ctx *ctx = (star_prov_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    bool res;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_CTE && r->self_reference &&
+          strcmp(r->ctename, ctx->ctename) == 0 && r->eref != NULL &&
+          list_length(r->eref->colnames) >= ctx->pos)
+        lfirst(list_nth_cell(r->eref->colnames, ctx->pos - 1)) =
+          makeString(pstrdup(PROVSQL_STAR_COLUMN_NAME));
+    }
+    ctx->stack = lcons(q, ctx->stack);
+    /* Join aliases list every column of a join, read or not. */
+    res = query_tree_walker(q, star_prov_selfref_walker, cx,
+                            QTW_IGNORE_JOINALIASES);
+    ctx->stack = list_delete_first(ctx->stack);
+    return res;
+  }
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    Query *q;
+    RangeTblEntry *r;
+    if ((int)v->varlevelsup >= list_length(ctx->stack))
+      return false;
+    q = (Query *)list_nth(ctx->stack, v->varlevelsup);
+    if (v->varno < 1 || v->varno > list_length(q->rtable))
+      return false;
+    r = rt_fetch(v->varno, q->rtable);
+    if (r->rtekind == RTE_CTE && r->self_reference &&
+        strcmp(r->ctename, ctx->ctename) == 0 &&
+        (v->varattno == ctx->pos || v->varattno == 0)) {
+      ctx->reads = true;
+      return true;
+    }
+    return false;
+  }
+  return expression_tree_walker(node, star_prov_selfref_walker, cx);
+}
+
+/** @brief Collect the leaf arms of a set-operation tree of @p cteq. */
+static bool star_prov_arms(Query *cteq, Node *n, List **arms) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef)) {
+    RangeTblEntry *r = rt_fetch(((RangeTblRef *)n)->rtindex, cteq->rtable);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      return false;
+    *arms = lappend(*arms, r->subquery);
+    return true;
+  }
+  if (IsA(n, SetOperationStmt))
+    return star_prov_arms(cteq, ((SetOperationStmt *)n)->larg, arms) &&
+           star_prov_arms(cteq, ((SetOperationStmt *)n)->rarg, arms);
+  return false;
+}
+
+/**
+ * @brief Take the provenance column that a @c "SELECT *" over a tracked
+ *        relation put in a recursive CTE out of what the rounds carry.
+ *
+ * The star expands to the relation's @c provsql column at parse analysis,
+ * before any hook of ours, so the terms ask for the token of each input row as
+ * data, and the working table of the rounds would hold two columns of that
+ * name, its own and this one.  What the user reads in that column of the CTE
+ * is its provenance, which is the rounds' own token: in every term the value
+ * becomes a NULL under another name, so the rounds carry nothing of it, and the
+ * scan that replaces the CTE reads that column from the working table's own
+ * provenance (see @c lower_recursive_cte).  Nothing is renumbered, the columns
+ * keeping their positions.
+ *
+ * @return  The position (1-based) of that column, or @c -1 when it cannot be
+ *          taken out: several such columns, a term whose column there is not
+ *          the star's, or a term reading that column of the CTE itself.
+ */
+static int neutralise_star_provenance(CommonTableExpr *cte) {
+  Query *cteq = (Query *)cte->ctequery;
+  List *arms = NIL;
+  ListCell *lc;
+  int pos = 0, i = 0;
+  star_prov_ctx ctx;
+
+  foreach (lc, cte->ctecolnames) {
+    ++i;
+    if (strcmp(strVal(lfirst(lc)), PROVSQL_STAR_COLUMN_NAME) == 0)
+      return -1;
+    if (strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) == 0) {
+      if (pos != 0)
+        return -1;
+      pos = i;
+    }
+  }
+  if (pos == 0 || cteq == NULL || cteq->setOperations == NULL ||
+      !star_prov_arms(cteq, cteq->setOperations, &arms))
+    return -1;
+
+  /* Nothing of the recursion reads that column of the CTE itself. */
+  ctx.ctename = cte->ctename;
+  ctx.pos = pos;
+  ctx.stack = NIL;
+  ctx.reads = false;
+  foreach (lc, arms)
+    if (star_prov_selfref_walker((Node *)lfirst(lc), &ctx) || ctx.reads)
+      return -1;
+
+  foreach (lc, arms) {
+    Query *arm = (Query *)lfirst(lc);
+    TargetEntry *te = NULL;
+    ListCell *lct;
+    foreach (lct, arm->targetList) {
+      TargetEntry *t = (TargetEntry *)lfirst(lct);
+      if (!t->resjunk && t->resno == pos) {
+        te = t;
+        break;
+      }
+    }
+    if (te == NULL || te->resname == NULL ||
+        strcmp(te->resname, PROVSQL_COLUMN_NAME) != 0)
+      return -1;
+    te->expr = (Expr *)makeNullConst(exprType((Node *)te->expr),
+                                     exprTypmod((Node *)te->expr),
+                                     exprCollation((Node *)te->expr));
+    te->resname = pstrdup(PROVSQL_STAR_COLUMN_NAME);
+  }
+  foreach (lc, cteq->targetList) {
+    TargetEntry *t = (TargetEntry *)lfirst(lc);
+    if (!t->resjunk && t->resno == pos)
+      t->resname = pstrdup(PROVSQL_STAR_COLUMN_NAME);
+  }
+  lfirst(list_nth_cell(cte->ctecolnames, pos - 1)) =
+    makeString(pstrdup(PROVSQL_STAR_COLUMN_NAME));
+  return pos;
+}
+
+/**
  * @brief Lower a recursive CTE to a provenance-aware fixpoint.
  *
  * ProvSQL cannot rewrite @c WITH @c RECURSIVE in place: the recursive term
@@ -1941,24 +2112,6 @@ static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
  *               scanning the populated table
  * @param entry  memo entry filled with the reachability details, or @c NULL
  */
-/**
- * @brief Whether the columns of @p cte include a provenance one.
- *
- * @c "SELECT *" over a provenance-tracked relation expands to the provenance
- * column at parse analysis, before any hook of ours runs, so a recursive term
- * written that way asks for a token as data.  Told apart from the shapes the
- * recursion lowering declines for their own reasons, since the cause is the
- * star and what the user can do about it is to write the columns out.
- */
-static bool cte_colnames_hold_provenance(CommonTableExpr *cte) {
-  ListCell *lc;
-
-  foreach (lc, cte->ctecolnames)
-    if (strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) == 0)
-      return true;
-  return false;
-}
-
 static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                                 LoweredCte *entry) {
   Query         *cteq = (Query *) cte->ctequery;
@@ -1969,10 +2122,11 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   char          *all_name = NULL;  /* where the rounds of a bag recursion go */
   char          *work_name = NULL; /* the table the body reads, named by us */
   Query         *deparse_q = NULL;  /* the copy whose self-references it names */
-  StringInfoData cols, coldef, call, scan;
+  StringInfoData cols, coldef, call, scan, scancols;
   ListCell      *lcn, *lct;
   bool           first = true;
   int            rc;
+  int            star_pos = 0;     /* the star's provenance column, if any */
 
   if (cteq == NULL || !IsA(cteq, Query))
     return false;
@@ -2013,11 +2167,14 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   /* A body whose columns include a provsql one -- "SELECT *" over a tracked
    * relation, expanded at parse analysis, before any hook of ours -- would give
    * the working table two columns of that name, its own and the driver's.  The
-   * value the user asked for is a token, which the rounds do not carry as data,
-   * so the shape is refused rather than half-answered; the caller says so by
-   * that cause rather than by the shape of the recursion, which is fine. */
-  if (cte_colnames_hold_provenance(cte))
-    return false;
+   * rounds carry a NULL there instead, and the scan below reads that column
+   * from the working table's own provenance; where that cannot be done, the
+   * caller refuses by that cause. */
+  if (cte_colnames_hold_provenance(cte)) {
+    star_pos = neutralise_star_provenance(cte);
+    if (star_pos <= 0)
+      return false;
+  }
 
   /* Deparse the body from a copy whose self-references name the working table:
    * "provsql_rec_<cte> <cte>", so that nothing of ours is called what the user
@@ -2226,9 +2383,23 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   if (rc < 0)
     provsql_error("Recursive CTE lowering: eval_recursive failed (%d)", rc);
 
-  /* Replace the CTE reference with a scan of the populated table. */
+  /* Replace the CTE reference with a scan of the populated table, the star's
+   * provenance column read from the table's own. */
+  initStringInfo(&scancols);
+  {
+    int i = 0;
+    foreach (lcn, cte->ctecolnames) {
+      ++i;
+      if (i > 1)
+        appendStringInfoString(&scancols, ", ");
+      appendStringInfoString(&scancols,
+                             quote_identifier(i == star_pos
+                                                ? PROVSQL_COLUMN_NAME
+                                                : strVal(lfirst(lcn))));
+    }
+  }
   initStringInfo(&scan);
-  appendStringInfo(&scan, "SELECT %s FROM %s", cols.data,
+  appendStringInfo(&scan, "SELECT %s FROM %s", scancols.data,
                    quote_identifier(bag ? all_name : work_name));
   {
     List *raw = pg_parse_query(scan.data);
@@ -2341,19 +2512,16 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
                 e->name = pstrdup(cte->ctename);
                 e->subquery = copyObject(r->subquery);
                 *lowered = lappend(*lowered, e);
-              } else if (cte_colnames_hold_provenance(cte))
-                /* The cause is the star, not the shape of the recursion: the
-                 * semantics gives such a query a reading, and the rewriting
-                 * does not reach it, so this is a gap and it names what the
-                 * user can do about it. */
-                provsql_unsupported(PROVSQL_GAP, "recursive-term-star-provenance", "a recursive term of \"%s\" holds a provenance column: "
-                                    "\"SELECT *\" over a provenance-tracked "
-                                    "relation expands to it at parse analysis, "
-                                    "before any hook of ProvSQL, so the working "
-                                    "table would hold two columns of that name "
-                                    "-- the rounds' own and this one -- and the "
-                                    "token the star asks for is not data the "
-                                    "rounds carry",
+              } else if (cte_colnames_hold_provenance(body))
+                /* The star's provenance column was left in: a term reads it
+                 * (neutralise_star_provenance), which is the cause, not the
+                 * shape of the recursion. */
+                provsql_unsupported(PROVSQL_GAP, "recursive-term-star-provenance", "a recursive term of \"%s\" reads its provenance column, "
+                                    "or the CTE has several: \"SELECT *\" over "
+                                    "a provenance-tracked relation puts one "
+                                    "there, which reads the provenance of the "
+                                    "rows derived; the rounds carry that as "
+                                    "their own, not as data a term can read",
                                     cte->ctename);
               else
                 /* A shape the lowering declines for a reason of its own: an

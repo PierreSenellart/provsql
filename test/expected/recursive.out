@@ -107,16 +107,35 @@ LINE 1: SELECT count(*) FROM leak_t;
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: a recursive term of "t" holds a provenance column: "SELECT *" over a provenance-tracked relation expands to it at parse analysis, before any hook of ProvSQL, so the working table would hold two columns of that name -- the rounds' own and this one -- and the token the star asks for is not data the rounds carry
-DETAIL:  provsql-reason: recursive-term-star-provenance; scope: gap
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_t_all; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
 (1 row)
-n
-3
+n|e
+3|0.875000
 (1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_t_all; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+n|e
+3|0.875000
+(1 row)
+remove_provenance
+
+(1 row)
+id|parent_id|depth|p
+1||0|0.500000
+2|1|1|0.250000
+3|2|2|0.125000
+(3 rows)
+same_tokens|provsql
+3 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+ERROR:  ProvSQL: a recursive term of "t" reads its provenance column, or the CTE has several: "SELECT *" over a provenance-tracked relation puts one there, which reads the provenance of the rows derived; the rounds carry that as their own, not as data a term can read
+DETAIL:  provsql-reason: recursive-term-star-provenance; scope: gap
 add_provenance
 
 (1 row)

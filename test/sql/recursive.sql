@@ -261,30 +261,68 @@ SELECT count(*) FROM leak_t;
 DROP TABLE leak_r, leak_e;
 
 -- A body whose columns include a provsql one -- SELECT * over a tracked
--- relation, expanded before any hook of ours can hide it -- would give the
--- working table two columns of that name, and the token the star asks for is
--- not data the rounds carry: refused, where the same recursion written with
--- explicit columns answers.  The refusal names the STAR as the cause and is
--- scoped a gap, not the shape of the recursion: the recursion is fine (the
--- reference may sit on either side of the join, and the semantics translates
--- such a query), so what the user can act on is writing the columns out.
+-- relation, expanded at parse analysis, before any hook of ours -- would give
+-- the working table of the rounds two columns of that name.  The rounds carry a
+-- NULL there instead, and that column of the CTE is read from the rounds' own
+-- provenance, which is what reading the provenance column of the CTE means: the
+-- same answer as the recursion written with explicit columns, down to the
+-- tokens.  Down the chain 1 <- 2 <- 3 at one half, the rows need 1, 2 and 3 of
+-- the chain: 0.5, 0.25, 0.125, so E[count] = 0.875; with a column after the
+-- star as well.  A term that READS that column of the CTE -- the token of a row
+-- derived so far, as data -- is still refused, by that cause.
 CREATE TABLE bag_star(id int, parent_id int);
 INSERT INTO bag_star VALUES (1, NULL), (2, 1), (3, 2);
 SELECT add_provenance('bag_star');
-WITH RECURSIVE t(id, parent_id) AS (
-    SELECT * FROM bag_star WHERE id = 1
-  UNION ALL
-    SELECT b.* FROM bag_star b JOIN t ON t.id = b.parent_id)
-SELECT count(*) FROM t;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM bag_star; END $$;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE t(id, parent_id) AS (
+      SELECT * FROM bag_star WHERE id = 1
+    UNION ALL
+      SELECT b.* FROM bag_star b JOIN t ON t.id = b.parent_id)
+  SELECT count(*)::text AS n, round(expected(count(*))::numeric, 6) AS e FROM t;
+SELECT remove_provenance('bag_r');
+SELECT n, e FROM bag_r;
+DROP TABLE bag_r;
 CREATE TABLE bag_r AS
   WITH RECURSIVE t(id) AS (
       SELECT id FROM bag_star WHERE id = 1
     UNION ALL
       SELECT b.id FROM bag_star b JOIN t ON t.id = b.parent_id)
-  SELECT count(*)::text AS n FROM t;
+  SELECT count(*)::text AS n, round(expected(count(*))::numeric, 6) AS e FROM t;
 SELECT remove_provenance('bag_r');
-SELECT n FROM bag_r;
-DROP TABLE bag_r, bag_star;
+SELECT n, e FROM bag_r;
+DROP TABLE bag_r;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE t AS (
+      SELECT *, 0 AS depth FROM bag_star WHERE id = 1
+    UNION ALL
+      SELECT b.*, t.depth + 1 FROM bag_star b JOIN t ON t.id = b.parent_id)
+  SELECT id, parent_id, depth,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM t;
+SELECT remove_provenance('bag_r');
+SELECT * FROM bag_r ORDER BY id;
+DROP TABLE bag_r;
+-- The star's column holds the same tokens as the explicit recursion's rows.
+SELECT count(*) AS same_tokens FROM
+  (WITH RECURSIVE t AS (
+       SELECT * FROM bag_star WHERE id = 1
+     UNION
+       SELECT b.* FROM bag_star b JOIN t ON t.id = b.parent_id)
+   SELECT id, provenance() AS tok FROM t) s
+  JOIN
+  (WITH RECURSIVE u(id) AS (
+       SELECT id FROM bag_star WHERE id = 1
+     UNION
+       SELECT b.id FROM bag_star b JOIN u ON u.id = b.parent_id)
+   SELECT id, provenance() AS tok FROM u) x USING (id, tok);
+WITH RECURSIVE t AS (
+    SELECT * FROM bag_star WHERE id = 1
+  UNION ALL
+    SELECT b.id, b.parent_id, t.provsql FROM bag_star b
+      JOIN t ON t.id = b.parent_id)
+SELECT id FROM t;
+DROP TABLE bag_star;
 
 -- The generators of the corpora: a counter, an array extended per round, a
 -- string built up.  Every row derives from the one row of the seed, so each

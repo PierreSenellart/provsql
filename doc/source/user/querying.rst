@@ -56,12 +56,14 @@ The following SQL constructs are supported with full provenance tracking:
   ``provsql.provenance = 'absorptive'`` or ``'boolean'`` -- (an absorptive
   setting, under which the value converges); the resulting circuit is then
   sound only for absorptive evaluation (probability / Boolean), not for
-  multiplicity-counting semirings.  Write the columns of a recursive term out
-  rather than ``SELECT *``: over a tracked relation the star expands to the
-  provenance column at parse analysis, before ProvSQL sees the query, so the
-  recursion is refused for holding a token as data (``SELECT * FROM t`` outside
-  the recursive term is fine).  The same expansion is what makes ``SELECT 'x',
-  *`` in a ``UNION`` arm fail in PostgreSQL itself, before any hook.
+  multiplicity-counting semirings.  A ``SELECT *`` over a tracked relation in
+  the terms expands to its provenance column at parse analysis, before ProvSQL
+  sees the query; that column of the CTE is read as the provenance of the rows
+  the recursion derives, as it is for any tracked relation, and the answer is
+  the one the columns written out give.  A term that reads that column of the
+  CTE itself -- the token of a row derived so far, as data -- is refused.  The
+  same expansion is what makes ``SELECT 'x', *`` in a ``UNION`` arm fail in
+  PostgreSQL itself, before any hook.
 
   ``UNION ALL`` is the *bag* recursion and is read as SQL reads it: its rounds
   apply the recursive term to the previous round rather than to everything
