@@ -173,28 +173,35 @@ CREATE TABLE anx_o AS
 SELECT remove_provenance('anx_o');
 SELECT string_agg(g::text, ',' ORDER BY ctid) AS sorted FROM anx_o;
 DROP TABLE anx_o;
--- The same test in a SCALAR aggregation, which has no grouping to explode the
--- truths over: it answers on the database as it is -- sum(b) is 2 there, so
--- false -- where the worlds holding neither the b of group 1 nor that of group
--- 2, a quarter of the eight, make the sum null and the truth true.  That is the
--- right answer for that one world and says nothing about the others, which is
--- what every plain reading of an aggregate is reported for, and this one was
--- reported by nothing: a comparison in the same position is caught through the
--- frozen value it reads, and a null test reads none -- it is answered by the
--- token itself, which provenance_aggregate returns as the null datum exactly
--- where the aggregate has no value in the data as it is.
-CREATE TABLE anx_s AS SELECT sum(b) IS NULL AS n FROM anx;
+-- The same test in a SCALAR aggregation, whose row exists in every world, the
+-- empty one included: its truths are exploded too, one copy of the block per
+-- truth (see explode_agg_value).  The sum is null in the worlds holding
+-- neither the b of group 1 nor that of group 2, a quarter of the eight, so
+-- IS NULL is true at 0.25 and false at 0.75, and IS NOT NULL the other way.
+-- It used to answer on the database as it is -- sum(b) is 2 there, so false --
+-- which is right for that one world only.
+CREATE TABLE anx_s AS
+  SELECT sum(b) IS NULL AS n, probability(provenance()) AS p FROM anx;
 SELECT remove_provenance('anx_s');
-SELECT n FROM anx_s;
+SELECT n, round(p::numeric, 6) AS p FROM anx_s ORDER BY n;
 DROP TABLE anx_s;
-CREATE TABLE anx_s AS SELECT sum(b) IS NOT NULL AS n FROM anx;
+CREATE TABLE anx_s AS
+  SELECT sum(b) IS NOT NULL AS n, probability(provenance()) AS p FROM anx;
 SELECT remove_provenance('anx_s');
-SELECT n FROM anx_s;
+SELECT n, round(p::numeric, 6) AS p FROM anx_s ORDER BY n;
 DROP TABLE anx_s;
--- plain() says so, and silences the report, as it does for every other reading.
+-- plain() says the value on the database as it is is the one meant: one row,
+-- read there, and nothing reported.
 CREATE TABLE anx_s AS SELECT plain(sum(b)) IS NULL AS n FROM anx;
 SELECT remove_provenance('anx_s');
 SELECT n FROM anx_s;
+DROP TABLE anx_s;
+-- A block the explosion declines, one with a window function, still reads the
+-- nullness on the database as it is, and reports it.
+CREATE TABLE anx_s AS
+  SELECT sum(b) IS NULL AS n, row_number() OVER () AS w FROM anx;
+SELECT remove_provenance('anx_s');
+SELECT n, w FROM anx_s;
 DROP TABLE anx_s;
 -- Two rows in one group at one half, whose b cancels when both are there:
 -- the empty world has no group at all (a quarter), {10/1} and {20/-1} divide

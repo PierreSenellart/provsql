@@ -372,21 +372,29 @@ SELECT g, lbl, round(p::numeric, 6) AS p FROM ect_case ORDER BY g, lbl;
 DROP TABLE ect_case;
 -- Declined, and the value read as plain SQL reads it (one row per group, no
 -- (*) marker): two aggregates compared with each other, an aggregate whose
--- NULL-ness is not the reading of "no value" (stddev over a single row), a
--- comparison against a column, and a scalar aggregation, whose single row
--- exists in every world -- including the one where no row of the table is.
+-- NULL-ness is not the reading of "no value" (stddev over a single row), and a
+-- comparison against a column.
 SET client_min_messages = error;
 CREATE TABLE ect_no AS
   SELECT g, count(v) > sum(v) AS f1, stddev(v) > 1 AS f2, count(v) > g AS f3
   FROM ect GROUP BY g;
-CREATE TABLE ect_sc AS SELECT count(v) > 1 AS f FROM ect;
 RESET client_min_messages;
 SELECT remove_provenance('ect_no');
 SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2,
        coalesce(f3::text,'NULL') AS f3 FROM ect_no ORDER BY g;
+DROP TABLE ect_no;
+-- A scalar aggregation, whose single row exists in every world -- including
+-- the one where no row of the table is -- cannot take the truth as a grouping
+-- key, which would lose that world's row: it is exploded into one copy of the
+-- block per truth instead, each requiring its truth in a HAVING.  count(v)
+-- counts the three non-null rows, each there at one half: at least two of them
+-- in 4 of the 8 worlds, so 0.5 each way, and no unknown row, a count never
+-- lacking a value.
+CREATE TABLE ect_sc AS
+  SELECT count(v) > 1 AS f, probability(provenance()) AS p FROM ect;
 SELECT remove_provenance('ect_sc');
-SELECT * FROM ect_sc;
-DROP TABLE ect_no, ect_sc, ect;
+SELECT f, round(p::numeric, 6) AS p FROM ect_sc ORDER BY f;
+DROP TABLE ect_sc, ect;
 
 -- Through a VIEW, which is where the explosion segfaulted (difftest's
 -- five-line reproduction, and four queries of the SQLShare corpus): the entry

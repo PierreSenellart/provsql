@@ -840,13 +840,15 @@ The comparison is the condition the annotation carries, so no value of the
 aggregate has to be enumerated: unlike grouping by the value, this works for
 a ``sum()`` over any column and for an ``avg()``.  It applies to ``count``,
 ``sum``, ``avg``, ``min``, ``max`` and :sqlfunc:`choose` compared against a
-constant, in a query that groups rows of its own.  A comparison between two
-aggregates, one against a column, one over an aggregate whose ``NULL`` says
-something else than "no value" (``stddev``, ``NULL`` over a single row), and a
-scalar aggregation -- whose one row is there even in the world where the table
-is empty, which no exploded row would be -- are read as plain values instead,
-with the warning that says so.  A comparison in ``HAVING`` needs none of this:
-it is already the provenance of the group.
+constant, with or without a ``GROUP BY``: an aggregation without one has its
+row even in the world where the table is empty, and that world keeps it, in the
+row of the truth the comparison has there (``count(*) > 1`` is false over no
+row, ``sum(x) > 1`` unknown).  A comparison between two aggregates, one against
+a column, one over an aggregate whose ``NULL`` says something else than "no
+value" (``stddev``, ``NULL`` over a single row), and one in a query that also
+computes a window function are read as plain values instead, with the warning
+that says so.  A comparison in ``HAVING`` needs none of this: it is already
+the provenance of the group.
 
 
 Joining and exploding aggregated provenance

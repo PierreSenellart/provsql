@@ -105,16 +105,21 @@ DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 unmarked_text|provsql
 60|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks if_a; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
-unmarked_comparison|provsql
-t|d265daa9-f206-561d-845c-2a85fa0fa72c
+remove_provenance
+
 (1 row)
-WARNING:  ProvSQL: whether an aggregate result is NULL is read on the database as it is, not tracked: its truth is exploded into the worlds only where the block groups, although the statement also tracks if_a; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-nullness-read-as-plain-value; scope: gap
-unmarked_nullness|provsql
-f|d265daa9-f206-561d-845c-2a85fa0fa72c
+unmarked_comparison|p
+f|0.000000
+t|0.875000
+|0.125000
+(3 rows)
+remove_provenance
+
 (1 row)
+unmarked_nullness|p
+f|0.875000
+t|0.125000
+(2 rows)
 remove_provenance
 
 (1 row)

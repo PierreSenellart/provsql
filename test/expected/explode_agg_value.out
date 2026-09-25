@@ -245,9 +245,10 @@ g|f1|f2|f3
 remove_provenance
 
 (1 row)
-f
-t
-(1 row)
+f|p
+f|0.500000
+t|0.500000
+(2 rows)
 add_provenance
 
 (1 row)

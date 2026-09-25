@@ -11702,112 +11702,24 @@ static Query *rewrite_intersect(const constants_t *constants, Query *q) {
   return n;
 }
 
-/** @brief Context for @c grouping_set_mutator. */
-typedef struct grouping_set_ctx {
-  List *absent;  ///< Grouping expressions not in the set: NULL in its rows
-  List *set;     ///< The sortgrouprefs of the set (integers)
-} grouping_set_ctx;
-
 /**
- * @brief Mutator: the value of an expression in the rows of one grouping set.
+ * @brief The @c UNION @c ALL of @p arms, each a variant of @p q exposing every
+ *        entry of its target list, under an outer query that keeps the entries
+ *        of @p q, its @c DISTINCT, @c ORDER @c BY and @c LIMIT.
  *
- * A grouping expression not in the set is NULL there, but for the aggregates,
- * which read the input rows; @c GROUPING(a, b, ...) is the constant whose bits,
- * from the left, say which of its arguments are not in the set.
+ * The arms are copies of @p q with the same target list, resno for resno, and
+ * no ordering or truncation of their own; a single arm is used as it is.
  */
-static Node *grouping_set_mutator(Node *node, void *cx) {
-  grouping_set_ctx *ctx = (grouping_set_ctx *)cx;
-  ListCell *lc;
-  if (node == NULL)
-    return NULL;
-  if (IsA(node, Aggref) || IsA(node, Query) || IsA(node, SubLink))
-    return node;
-  if (IsA(node, GroupingFunc) && ((GroupingFunc *)node)->agglevelsup == 0) {
-    int32 value = 0;
-    foreach (lc, ((GroupingFunc *)node)->refs)
-      value = (value << 1) | (list_member_int(ctx->set, lfirst_int(lc)) ? 0 : 1);
-    return (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
-                             Int32GetDatum(value), false, true);
-  }
-  foreach (lc, ctx->absent)
-    if (equal(node, lfirst(lc)))
-      return (Node *)makeNullConst(exprType(node), exprTypmod(node),
-                                   exprCollation(node));
-  return expression_tree_mutator(node, grouping_set_mutator, cx);
-}
-
-/**
- * @brief Rewrite a @c GROUP @c BY with @c GROUPING @c SETS, @c ROLLUP or
- *        @c CUBE into the @c UNION @c ALL of one @c GROUP @c BY per set.
- *
- * In the rows of a set, the grouping expressions not in it are NULL, outside
- * the aggregates, and @c GROUPING() is a constant; the empty set is an
- * aggregation without @c GROUP @c BY (one row, even over no input row).  Each
- * @c GROUP @c BY is then rewritten as usual.  The branches expose every entry
- * (a set operation has no junk ones); an enclosing query keeps those of the
- * statement, its @c DISTINCT, @c ORDER @c BY and @c LIMIT.
- */
-static Query *rewrite_grouping_sets(Query *q) {
-  List *sets, *arms = NIL, *colnames = NIL;
+static Query *union_all_of_arms(Query *q, List *arms) {
+  List *colnames = NIL;
   List *types = NIL, *typmods = NIL, *collations = NIL;
   Query *setop, *outer;
   Node *tree = NULL;
-  ListCell *lc, *lc2;
+  ListCell *lc;
   RangeTblEntry *rte;
   RangeTblRef *rtr;
   int k = 0;
 
-#if PG_VERSION_NUM >= 180000
-  strip_group_rte_pg18(q);
-#endif
-#if PG_VERSION_NUM >= 140000
-  sets = expand_grouping_sets(q->groupingSets, q->groupDistinct, -1);
-#else
-  sets = expand_grouping_sets(q->groupingSets, -1);
-#endif
-
-  foreach (lc, sets) {
-    List *set = (List *)lfirst(lc);
-    Query *arm = copyObject(q);
-    grouping_set_ctx ctx;
-    ListCell *lct;
-
-    ctx.set = set;
-    ctx.absent = NIL;
-    arm->groupingSets = NIL;
-#if PG_VERSION_NUM >= 140000
-    arm->groupDistinct = false;
-#endif
-    arm->groupClause = NIL;
-    foreach (lc2, q->groupClause) {
-      SortGroupClause *sgc = (SortGroupClause *)lfirst(lc2);
-      if (list_member_int(set, sgc->tleSortGroupRef))
-        arm->groupClause = lappend(arm->groupClause, copyObject(sgc));
-      else
-        ctx.absent = lappend(
-          ctx.absent,
-          copyObject(get_sortgroupclause_expr(sgc, q->targetList)));
-    }
-    arm->sortClause = NIL;
-    arm->distinctClause = NIL;
-    arm->limitCount = arm->limitOffset = NULL;
-    foreach (lct, arm->targetList) {
-      TargetEntry *te = (TargetEntry *)lfirst(lct);
-      bool grouped = te->ressortgroupref != 0 &&
-                     list_member_int(set, te->ressortgroupref);
-      te->expr = (Expr *)grouping_set_mutator((Node *)te->expr, &ctx);
-      te->resjunk = false;
-      if (te->resname == NULL)
-        te->resname = pstrdup("?column?");
-      if (!grouped)
-        te->ressortgroupref = 0;
-    }
-    arm->havingQual = grouping_set_mutator(arm->havingQual, &ctx);
-    arm->hasAggs = true;
-    arms = lappend(arms, arm);
-  }
-
-  /* The set operation over the branches */
   setop = makeNode(Query);
   setop->commandType = CMD_SELECT;
   setop->canSetTag = true;
@@ -11883,6 +11795,108 @@ static Query *rewrite_grouping_sets(Query *q) {
   outer->limitOption = q->limitOption;
 #endif
   return outer;
+}
+
+/** @brief Context for @c grouping_set_mutator. */
+typedef struct grouping_set_ctx {
+  List *absent;  ///< Grouping expressions not in the set: NULL in its rows
+  List *set;     ///< The sortgrouprefs of the set (integers)
+} grouping_set_ctx;
+
+/**
+ * @brief Mutator: the value of an expression in the rows of one grouping set.
+ *
+ * A grouping expression not in the set is NULL there, but for the aggregates,
+ * which read the input rows; @c GROUPING(a, b, ...) is the constant whose bits,
+ * from the left, say which of its arguments are not in the set.
+ */
+static Node *grouping_set_mutator(Node *node, void *cx) {
+  grouping_set_ctx *ctx = (grouping_set_ctx *)cx;
+  ListCell *lc;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref) || IsA(node, Query) || IsA(node, SubLink))
+    return node;
+  if (IsA(node, GroupingFunc) && ((GroupingFunc *)node)->agglevelsup == 0) {
+    int32 value = 0;
+    foreach (lc, ((GroupingFunc *)node)->refs)
+      value = (value << 1) | (list_member_int(ctx->set, lfirst_int(lc)) ? 0 : 1);
+    return (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                             Int32GetDatum(value), false, true);
+  }
+  foreach (lc, ctx->absent)
+    if (equal(node, lfirst(lc)))
+      return (Node *)makeNullConst(exprType(node), exprTypmod(node),
+                                   exprCollation(node));
+  return expression_tree_mutator(node, grouping_set_mutator, cx);
+}
+
+/**
+ * @brief Rewrite a @c GROUP @c BY with @c GROUPING @c SETS, @c ROLLUP or
+ *        @c CUBE into the @c UNION @c ALL of one @c GROUP @c BY per set.
+ *
+ * In the rows of a set, the grouping expressions not in it are NULL, outside
+ * the aggregates, and @c GROUPING() is a constant; the empty set is an
+ * aggregation without @c GROUP @c BY (one row, even over no input row).  Each
+ * @c GROUP @c BY is then rewritten as usual.  The branches expose every entry
+ * (a set operation has no junk ones); an enclosing query keeps those of the
+ * statement, its @c DISTINCT, @c ORDER @c BY and @c LIMIT.
+ */
+static Query *rewrite_grouping_sets(Query *q) {
+  List *sets, *arms = NIL;
+  ListCell *lc, *lc2;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+#if PG_VERSION_NUM >= 140000
+  sets = expand_grouping_sets(q->groupingSets, q->groupDistinct, -1);
+#else
+  sets = expand_grouping_sets(q->groupingSets, -1);
+#endif
+
+  foreach (lc, sets) {
+    List *set = (List *)lfirst(lc);
+    Query *arm = copyObject(q);
+    grouping_set_ctx ctx;
+    ListCell *lct;
+
+    ctx.set = set;
+    ctx.absent = NIL;
+    arm->groupingSets = NIL;
+#if PG_VERSION_NUM >= 140000
+    arm->groupDistinct = false;
+#endif
+    arm->groupClause = NIL;
+    foreach (lc2, q->groupClause) {
+      SortGroupClause *sgc = (SortGroupClause *)lfirst(lc2);
+      if (list_member_int(set, sgc->tleSortGroupRef))
+        arm->groupClause = lappend(arm->groupClause, copyObject(sgc));
+      else
+        ctx.absent = lappend(
+          ctx.absent,
+          copyObject(get_sortgroupclause_expr(sgc, q->targetList)));
+    }
+    arm->sortClause = NIL;
+    arm->distinctClause = NIL;
+    arm->limitCount = arm->limitOffset = NULL;
+    foreach (lct, arm->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lct);
+      bool grouped = te->ressortgroupref != 0 &&
+                     list_member_int(set, te->ressortgroupref);
+      te->expr = (Expr *)grouping_set_mutator((Node *)te->expr, &ctx);
+      te->resjunk = false;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+      if (!grouped)
+        te->ressortgroupref = 0;
+    }
+    arm->havingQual = grouping_set_mutator(arm->havingQual, &ctx);
+    arm->hasAggs = true;
+    arms = lappend(arms, arm);
+  }
+
+  return union_all_of_arms(q, arms);
 }
 
 /**
@@ -13529,11 +13543,11 @@ typedef struct agg_null_test_ctx {
  *        aggregate's nullness in the database as it is.
  *
  * The truth of @c IS @c NULL over a tracked aggregate is exploded into the
- * truths the worlds give it where the block groups (@c
- * rewrite_explode_agg_cmp_truth).  A scalar aggregation has no grouping to
- * explode over, so the test stays on the token -- and answers, since
- * @c provenance_aggregate returns SQL NULL exactly where the aggregate has no
- * value in the data as it is.  That is the right answer for that one world and
+ * truths the worlds give it (@c rewrite_explode_agg_cmp_truth where the block
+ * groups, @c rewrite_explode_scalar_agg_cmp_truth where it does not).  A block
+ * those decline -- one with a window function -- leaves the test on the token,
+ * and it answers, since @c provenance_aggregate returns SQL NULL exactly where
+ * the aggregate has no value in the data as it is.  That is the right answer for that one world and
  * says nothing about the others, which is what every other plain reading of an
  * aggregate is reported for; the comparison in the same position is reported
  * already, through the @c frozen_agg_value it goes through, and the null test
@@ -22557,6 +22571,7 @@ typedef struct agg_cmp_truth_ctx {
   Node *found;       /**< The comparison, once found. */
   Aggref *agg;       /**< The aggregate it compares. */
   bool nullable;     /**< Whether that aggregate can have no value. */
+  const constants_t *constants; /**< To recognise @c plain(). */
 } agg_cmp_truth_ctx;
 
 /**
@@ -22567,8 +22582,25 @@ typedef struct agg_cmp_truth_ctx {
  * is the better reading where it applies (a numeric @c CASE with an aggregate
  * in a branch).
  */
+/** @brief Walker: an aggregate of this level that no @c plain() wraps. */
+static bool unplain_agg_walker(Node *n, const constants_t *constants) {
+  if (n == NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, Aggref))
+    return ((Aggref *)n)->agglevelsup == 0;
+  if (IsA(n, FuncExpr) &&
+      ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PLAIN)
+    return false;
+  return expression_tree_walker(n, unplain_agg_walker, (void *)constants);
+}
+
 static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
   if (n == NULL || ctx->found != NULL)
+    return false;
+  /* plain() says that the value on the database as it is is the one meant:
+   * what it wraps is not a truth per world, and is left as written. */
+  if (IsA(n, FuncExpr) &&
+      ((FuncExpr *)n)->funcid == ctx->constants->OID_FUNCTION_PLAIN)
     return false;
   if (IsA(n, CaseExpr)) {
     CaseExpr *ce = (CaseExpr *)n;
@@ -22596,7 +22628,7 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
    * cannot build refuses there by name rather than answering wrongly here. */
   if (IsA(n, NullTest) && ((NullTest *)n)->arg != NULL &&
       !((NullTest *)n)->argisrow &&
-      contain_aggs_of_level((Node *)((NullTest *)n)->arg, 0)) {
+      unplain_agg_walker((Node *)((NullTest *)n)->arg, ctx->constants)) {
     ctx->found = n;
     ctx->agg = NULL;
     ctx->nullable = false;
@@ -22608,7 +22640,7 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
 /** @brief Replace every copy of @c ctx->found by the truth column's Var. */
 typedef struct agg_cmp_subst_ctx {
   Node *found;   /**< The comparison to replace. */
-  Var *truth;    /**< What replaces it. */
+  Node *truth;   /**< What replaces it: the truth column, or a truth. */
 } agg_cmp_subst_ctx;
 
 static Node *agg_cmp_subst_mutator(Node *n, void *context) {
@@ -22630,7 +22662,7 @@ static Node *agg_cmp_subst_mutator(Node *n, void *context) {
  */
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants};
   agg_cmp_subst_ctx subst;
   ListCell *lc;
   RangeTblEntry *rte;
@@ -22738,7 +22770,7 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
 
   /* --- The comparison becomes the truth column --- */
   subst.found = cmp;
-  subst.truth = b;
+  subst.truth = (Node *)b;
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te == bte)
@@ -22777,6 +22809,101 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
     ? pos
     : (Node *)makeBoolExpr(AND_EXPR, list_make2(q->havingQual, pos), -1);
   return q;
+}
+
+/**
+ * @brief Explode the truth of a comparison of an aggregate against a constant,
+ *        read in the select list of a SCALAR aggregation, into one row per
+ *        truth.
+ *
+ * @c rewrite_explode_agg_cmp_truth makes the truth another grouping key, which
+ * a scalar aggregation cannot take: its row exists in every world, the one
+ * with no input row included (@c count(*) is 0 there), and a group does not,
+ * so that world would lose its row -- the false one of @c "count(*) > 1" came
+ * out at 1/2 instead of 3/4 over two rows at one half.  The block is copied
+ * once per truth instead, the comparison replaced by that truth and required
+ * by a HAVING, and the copies are united:
+ *
+ *   SELECT count(*) > 1 AS c FROM t
+ *     -->
+ *   SELECT true AS c FROM t HAVING count(*) > 1
+ *   UNION ALL SELECT false FROM t HAVING NOT (count(*) > 1)
+ *
+ * with a third copy, @c NULL where the aggregate has no value, when it can
+ * have none.  Each copy is a scalar aggregation whose HAVING is the
+ * provenance of its row, the empty world included.
+ *
+ * @return  The rewritten query, or @c NULL when no comparison of that shape is
+ *          read as data here.
+ */
+static Query *rewrite_explode_scalar_agg_cmp_truth(
+  Query *q, const constants_t *constants) {
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants};
+  List *arms = NIL;
+  ListCell *lc;
+  Node *cmp;
+  int i;
+
+  if (q->commandType != CMD_SELECT || !q->hasAggs || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->setOperations != NULL ||
+      q->distinctClause != NIL || q->hasWindowFuncs || q->hasDistinctOn)
+    return NULL;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)   /* a sort key of its own, not an answer */
+      continue;
+    if (agg_cmp_truth_walker((Node *)te->expr, &found))
+      break;
+  }
+  if (found.found == NULL)
+    return NULL;
+  cmp = found.found;
+
+  for (i = 0; i < (found.nullable ? 3 : 2); ++i) {
+    Query *arm = copyObject(q);
+    agg_cmp_subst_ctx subst;
+    Node *cond;
+    ListCell *lct;
+
+    /* The truth this copy stands for, and the condition of its row: the
+     * comparison, its negation, or -- the only way it is neither -- the
+     * aggregate without a value, the constant never being NULL. */
+    if (i == 0) {
+      subst.truth = (Node *)makeBoolConst(true, false);
+      cond = (Node *)copyObject(cmp);
+    } else if (i == 1) {
+      subst.truth = (Node *)makeBoolConst(false, false);
+      cond = (Node *)makeBoolExpr(NOT_EXPR, list_make1(copyObject(cmp)), -1);
+    } else {
+      NullTest *anull = makeNode(NullTest);
+      anull->arg = (Expr *)copyObject(found.agg);
+      anull->nulltesttype = IS_NULL;
+      anull->argisrow = false;
+      anull->location = -1;
+      subst.truth = (Node *)makeBoolConst(false, true);
+      cond = (Node *)anull;
+    }
+    subst.found = cmp;
+
+    /* A branch of a set operation exposes every entry and neither orders nor
+     * truncates: the query around the union keeps those of the statement. */
+    foreach (lct, arm->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lct);
+      te->expr = (Expr *)agg_cmp_subst_mutator((Node *)te->expr, &subst);
+      te->resjunk = false;
+      te->ressortgroupref = 0;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+    }
+    arm->sortClause = NIL;
+    arm->limitCount = arm->limitOffset = NULL;
+    arm->havingQual = arm->havingQual == NULL
+      ? cond
+      : (Node *)makeBoolExpr(AND_EXPR, list_make2(arm->havingQual, cond), -1);
+    arms = lappend(arms, arm);
+  }
+  return union_all_of_arms(q, arms);
 }
 
 /**
@@ -27884,6 +28011,8 @@ static Query *process_query(const constants_t *constants, Query *q,
      * two truths rather than freeze the one the database as it is gives. */
     {
       Query *rewritten = rewrite_explode_agg_cmp_truth(q, constants);
+      if (rewritten == NULL)
+        rewritten = rewrite_explode_scalar_agg_cmp_truth(q, constants);
       if (rewritten)
         return process_query(constants, rewritten, removed, wrap_root,
                              top_level, in_boolean_rewrite, inv_ctx);
@@ -29208,7 +29337,7 @@ static PlannedStmt *provsql_planner(Query *q,
                       PROVSQL_GAP, "aggregate-nullness-read-as-plain-value",
                       "whether an aggregate result is NULL is read on the "
                       "database as it is, not tracked: its truth is exploded "
-                      "into the worlds only where the block groups",
+                      "into the worlds only in a block with no window function",
                       "mark it plain() to say "
                       "so");
 

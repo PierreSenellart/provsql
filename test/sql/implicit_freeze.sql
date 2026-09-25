@@ -124,11 +124,28 @@ RESET provsql.implicit_freeze;
 SELECT plain(sum(v)::text) AS asked_whole FROM if_a;
 SELECT plain(sum(v) > 0) AS asked_comparison FROM if_a;
 SELECT plain(sum(v) IS NULL) AS asked_nullness FROM if_a;
--- The unmarked spellings still report, each under its own reason, which is the
--- half that must not be lost in making the other silent.
+-- The unmarked text spelling still reports, which is the half that must not be
+-- lost in making the other silent.  An unmarked comparison or null test is no
+-- plain reading any more: its truth is exploded into the truths the worlds
+-- give it.  With the three rows at one half, the sum is positive as soon as a
+-- row is there (7/8), never not positive, and unknown -- null -- in the empty
+-- world (1/8), which is also where IS NULL is true.
 SELECT sum(v)::text AS unmarked_text FROM if_a;
-SELECT (sum(v) > 0) AS unmarked_comparison FROM if_a;
-SELECT (sum(v) IS NULL) AS unmarked_nullness FROM if_a;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM if_a; END $$;
+CREATE TABLE if_t AS
+  SELECT (sum(v) > 0) AS unmarked_comparison,
+         probability(provenance()) AS p FROM if_a;
+SELECT remove_provenance('if_t');
+SELECT unmarked_comparison, round(p::numeric, 6) AS p
+FROM if_t ORDER BY unmarked_comparison;
+DROP TABLE if_t;
+CREATE TABLE if_t AS
+  SELECT (sum(v) IS NULL) AS unmarked_nullness,
+         probability(provenance()) AS p FROM if_a;
+SELECT remove_provenance('if_t');
+SELECT unmarked_nullness, round(p::numeric, 6) AS p
+FROM if_t ORDER BY unmarked_nullness;
+DROP TABLE if_t;
 
 SELECT remove_provenance('if_a');
 SELECT remove_provenance('if_b');
