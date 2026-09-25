@@ -789,7 +789,9 @@ DROP TABLE agg_ca_d;
 -- power(v, e) and pow(v, e) of an aggregate result are carried as the power
 -- gate, as v ^ e already was: over the numeric signature in numeric, over the
 -- double precision one in that type, the digits being SQL's in both (the rows
--- after the first are the same query with the rewriting off).  The exponent
+-- after the first are the same query with the rewriting off).  The numeric one
+-- is rounded for display: the scale numeric's power gives varies with the
+-- version of PostgreSQL.  The exponent
 -- may read the row, as the digits of round(v, d) do.  Two rows at one half,
 -- (10, 2.0) and (20, 3.0): the sum takes 10, 20 and 30 in the three worlds
 -- where it is defined, so E[power(sum(v), 2)] = (100+400+900)/3, the square
@@ -801,7 +803,7 @@ SELECT add_provenance('agg_pw');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_pw; END $$;
 CREATE TABLE agg_pw_r AS
   SELECT power(sum(v), 2) AS p, pow(sum(v), 2) AS w,
-         power(sum(v)::numeric, 2) AS n, power(sum(f), 0.5) AS fl,
+         round(power(sum(v)::numeric, 2), 4) AS n, power(sum(f), 0.5) AS fl,
          round(expected(power(sum(v), 2))::numeric, 6) AS e_p,
          round(expected(sum(v) ^ 2)::numeric, 6) AS e_caret,
          round(expected(power(sum(f), 0.5))::numeric, 8) AS e_fl
@@ -811,7 +813,7 @@ SELECT p::text AS p, w::text AS w, n::text AS n, fl::text AS fl, e_p, e_caret, e
 FROM agg_pw_r;
 SET provsql.active = off;
 SELECT power(sum(v), 2) AS p, pow(sum(v), 2) AS w,
-       power(sum(v)::numeric, 2) AS n, power(sum(f), 0.5) AS fl,
+       round(power(sum(v)::numeric, 2), 4) AS n, power(sum(f), 0.5) AS fl,
        round(((100 + 400 + 900) / 3.0)::numeric, 6) AS e_hand,
        round(((sqrt(2::float8) + sqrt(3::float8) + sqrt(5::float8)) / 3)::numeric, 8)
          AS e_fl_hand

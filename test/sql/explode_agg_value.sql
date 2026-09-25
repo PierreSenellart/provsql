@@ -501,8 +501,9 @@ SET provsql.active = on;
 -- `power` over an aggregate that arrives as a column is carried by the same
 -- swap (the POW gate, as the `^` operator), while `trunc` is still frozen, for
 -- want of a counterpart rather than of the swap: it would need an arithmetic
--- op of its own.  The warning is trunc's.
-SELECT power(a, 2) AS p, trunc(a, 1) AS t
+-- op of its own.  The warning is trunc's.  (Rounded for display: the scale
+-- numeric's power gives varies with the version of PostgreSQL.)
+SELECT round(power(a, 2), 4) AS p, trunc(a, 1) AS t
   FROM (SELECT sum(v)::numeric AS a FROM eavs) z;
 SELECT remove_provenance('eavs');
 DROP TABLE eavs;

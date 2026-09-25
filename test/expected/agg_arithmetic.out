@@ -582,10 +582,10 @@ remove_provenance
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 p|w|n|fl|e_p|e_caret|e_fl
-900|900|900.00000000000000|2.23606797749979|466.666667|466.666667|1.79411078
+900|900|900.0000|2.23606797749979|466.666667|466.666667|1.79411078
 (1 row)
 p|w|n|fl|e_hand|e_fl_hand
-900|900|900.00000000000000|2.23606797749979|466.666667|1.79411078
+900|900|900.0000|2.23606797749979|466.666667|1.79411078
 (1 row)
 remove_provenance
 

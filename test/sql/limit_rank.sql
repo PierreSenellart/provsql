@@ -285,20 +285,25 @@ DROP TABLE lr_top;
 -- "GROUP BY b.badgecount ORDER BY b.badgecount DESC LIMIT 10" over a derived
 -- table that counts).  Two rows of the first key and one of the second, each
 -- present with probability one half, top-1 by the derived count: the first key
--- holds it in every world where it has a row, and the group-by on that count
--- explodes it into one row per value the count takes -- 1/4 for the two rows
--- and 1/2 for one of them, 3/4 together -- while the second holds it in the
--- worlds where its row is there and the first has at most one, 3/8.
+-- holds it in every world where it has a row, 3/4, while the second holds it
+-- in the worlds where its row is there and the first has at most one, 3/8.  On
+-- PostgreSQL 18 the group-by on that count explodes the first key into one row
+-- per value the count takes, 1/4 for the two rows and 1/2 for one of them;
+-- earlier versions read the key through the derived table and keep one row,
+-- with a warning of their own.  The two are the same rows in every world, which
+-- is what is summed per key here.
 CREATE TABLE lr_b(k int, v int);
 INSERT INTO lr_b VALUES (1,1),(1,2),(2,3);
 SELECT add_provenance('lr_b');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM lr_b; END $$;
+SET client_min_messages = error;
 CREATE TABLE lr_top AS
   SELECT b.k, round(probability_evaluate(provenance())::numeric, 6) AS p
   FROM (SELECT k, count(*) AS c FROM lr_b GROUP BY k) b
   GROUP BY b.k, b.c ORDER BY b.c DESC LIMIT 1;
+RESET client_min_messages;
 SELECT remove_provenance('lr_top');
-SELECT k, p FROM lr_top ORDER BY k, p;
+SELECT k, sum(p) AS p FROM lr_top GROUP BY k ORDER BY k;
 DROP TABLE lr_top;
 SELECT remove_provenance('lr_b');
 DROP TABLE lr_b;
