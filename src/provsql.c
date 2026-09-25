@@ -10405,6 +10405,22 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
  * @param ctx  Pointer to the @c constants_t OID cache.
  * @return     Possibly modified node.
  */
+/**
+ * @brief Walker: a conditional over an aggregate -- a @c CASE, @c COALESCE,
+ *        @c NULLIF, @c GREATEST or @c LEAST -- which @c rewrite_agg_cases
+ *        lowers to an @c agg_case after @c cast_agg_token_mutator has run.
+ */
+static bool pending_agg_case_walker(Node *n, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (n == NULL)
+    return false;
+  if ((IsA(n, CaseExpr) || IsA(n, CoalesceExpr) || IsA(n, NullIfExpr) ||
+       IsA(n, MinMaxExpr)) &&
+      expr_contains_agg(n, constants))
+    return true;
+  return expression_tree_walker(n, pending_agg_case_walker, cx);
+}
+
 static Node *cast_agg_token_mutator(Node *node, void *ctx) {
   const constants_t *constants = (const constants_t *)ctx;
   Node *result;
@@ -10417,7 +10433,15 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
 
   if (IsA(result, OpExpr)) {
     OpExpr *op = (OpExpr *)result;
-    Node *swapped = try_swap_agg_arith(op, constants);
+    /* Not yet where an operand holds a conditional over an aggregate: the
+     * agg_case lowering that runs next makes that operand a token too, and
+     * swapping now would take it as a number -- count(*) / NULLIF(sum(x), 0)
+     * became agg_token / numeric, and the lowered NULLIF was then cast back
+     * into the numeric slot, read on the data as it is.  The pass after the
+     * lowering (insert_agg_token_casts) swaps it with both operands tokens and
+     * the operator the query wrote, an integer division still one. */
+    Node *swapped = pending_agg_case_walker((Node *)op, (void *)constants)
+      ? NULL : try_swap_agg_arith(op, constants);
     if (swapped != NULL)
       return swapped;
     set_opfuncid(op);

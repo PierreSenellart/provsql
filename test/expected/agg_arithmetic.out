@@ -605,3 +605,20 @@ id|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+int_div|pct|plus_coalesce|by_case|rounded|e
+1|150.0000000000000000|5|1|150.00|77.777778
+(1 row)
+int_div|pct|plus_coalesce|by_case|rounded|e_hand
+1|150.0000000000000000|5|1|150.00|77.777778
+(1 row)
+remove_provenance
+
+(1 row)

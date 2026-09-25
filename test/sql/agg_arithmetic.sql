@@ -831,3 +831,42 @@ SELECT id, p::text AS p FROM agg_pw_r ORDER BY id;
 DROP TABLE agg_pw_r;
 SELECT remove_provenance('agg_pw');
 DROP TABLE agg_pw;
+
+-- Arithmetic between an aggregate and a conditional over one -- NULLIF,
+-- COALESCE, a CASE -- is carried with both as tokens: the conditional becomes
+-- an agg_case only after the arithmetic around it would have been swapped, and
+-- the swap waits for it rather than taking it as a number (which cast the
+-- lowered token back and read it on the data as it is).  An integer division
+-- stays one.  The values are plain SQL's (the row after); per world, over
+-- three rows 1, -1 and 2 at one half, 100 * count / NULLIF(sum, 0) is 100,
+-- -100, 50, 200/3, 200 and 150 in the six worlds where it has a value (the
+-- empty one and {1, -1}, whose sum is 0, have none): mean 700/9.
+CREATE TABLE agg_nz(id int, v int);
+INSERT INTO agg_nz VALUES (1, 1), (2, -1), (3, 2);
+SELECT add_provenance('agg_nz');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_nz; END $$;
+CREATE TABLE agg_nz_r AS
+  SELECT count(*) / NULLIF(sum(v), 0) AS int_div,
+         100.0 * count(*) / NULLIF(sum(v), 0) AS pct,
+         count(*) + coalesce(sum(v), 0) AS plus_coalesce,
+         count(*) / CASE WHEN sum(v) = 0 THEN NULL ELSE sum(v) END AS by_case,
+         round(100.0 * count(*) / NULLIF(sum(v), 0), 2) AS rounded,
+         round(expected(100.0 * count(*) / NULLIF(sum(v), 0))::numeric, 6) AS e
+  FROM agg_nz;
+SELECT remove_provenance('agg_nz_r');
+SELECT int_div::text AS int_div, pct::text AS pct,
+       plus_coalesce::text AS plus_coalesce, by_case::text AS by_case,
+       rounded::text AS rounded, e
+FROM agg_nz_r;
+SET provsql.active = off;
+SELECT count(*) / NULLIF(sum(v), 0) AS int_div,
+       100.0 * count(*) / NULLIF(sum(v), 0) AS pct,
+       count(*) + coalesce(sum(v), 0) AS plus_coalesce,
+       count(*) / CASE WHEN sum(v) = 0 THEN NULL ELSE sum(v) END AS by_case,
+       round(100.0 * count(*) / NULLIF(sum(v), 0), 2) AS rounded,
+       round(700 / 9.0, 6) AS e_hand
+FROM agg_nz;
+SET provsql.active = on;
+DROP TABLE agg_nz_r;
+SELECT remove_provenance('agg_nz');
+DROP TABLE agg_nz;
