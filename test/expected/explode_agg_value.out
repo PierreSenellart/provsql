@@ -190,15 +190,14 @@ k|n
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks eav; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
 (1 row)
+WARNING:  ProvSQL: ordering or grouping an aggregate result reads its value on the data as it is, the one this statement computed: another possible world need not order them the same way
 k
-3
-3
-4
+3 (*)
+3 (*)
+4 (*)
 (3 rows)
 add_provenance
 
@@ -297,6 +296,30 @@ total_mass
 (1 row)
 remove_provenance
 
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+r|ab|ce|fl|rd|sq|l|e
+40.00|40|40|40|20.00|4.4721359549995794|3.688879|7.389056
+(1 row)
+r|ab|ce|fl|rd|sq|l|e
+40.00|40|40|40|20.00|4.4721359549995794|3.688879|7.389056
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks eavs; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+p|t|provsql
+1600.0000000000000|40.0|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
 remove_provenance
 

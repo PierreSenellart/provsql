@@ -21062,6 +21062,34 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
       if (value != NULL)
         return value;
     }
+    /* A function ProvSQL carries -- round, abs, sqrt, floor, ceil, ln, exp,
+     * power, trunc -- over an aggregate that arrives as a COLUMN rather than as
+     * a direct call: swapped onto the counterpart here, exactly as the operator
+     * above is, instead of being left to the cast below, which would read the
+     * value and freeze it.  The children are mutated first, so by this point the
+     * argument IS the agg_token it has become.
+     *
+     * An operator needs no such step because `/` is declared over agg_token,
+     * while `round` is not.  The counterparts carry names of their own
+     * (provsql_round, provsql_abs) precisely so as NOT to shadow pg_catalog's:
+     * a function named abs beside it makes abs('0.20') ambiguous for anyone with
+     * provsql in their search_path, an untyped literal being resolved by type
+     * category.  That rename and this swap look like opposite decisions and are
+     * the same one -- what cannot be reached by writing `round` has to be
+     * reached by rewriting it.
+     *
+     * Found by diagnosing the eleven queries prevalence counted under `round`,
+     * where the function was only the neighbourhood: `a / b` over two subquery
+     * aggregate columns was carried and `round(a / b, 2)` was not.  It measured
+     * the reach at 231 queries across the corpora applying one of those
+     * functions to an aggregate arriving as a column, 109 of them in F5 with no
+     * other obstacle. */
+    {
+      Node *swapped = try_swap_agg_func(fe, ctx->constants);
+
+      if (swapped != NULL)
+        return swapped;
+    }
     if (fe->funcid != ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       cast_agg_token_func_args(fe->args, fe->funcid, ctx);
     return node;

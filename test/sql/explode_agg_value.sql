@@ -307,8 +307,15 @@ DROP TABLE eav_rk;
 SELECT remove_provenance('eav_rank');
 DROP TABLE eav_rank;
 
--- Reading such an expression WITHOUT grouping by it is untouched: its value is
--- the one the data gives, frozen and warned as before.
+-- Reading such an expression WITHOUT grouping by it is CARRIED, one row per
+-- group: `floor` and `ln` are functions ProvSQL carries, and an aggregate that
+-- arrives as a subquery COLUMN now has them swapped onto their counterparts like
+-- any other reader.  It was frozen until then -- the arithmetic operators over
+-- such a column were swapped and the functions were not.  What is refused is
+-- GROUPING by it (just above), which is a different question: the values the
+-- expression takes are not among the aggregate's contributions, so there is
+-- nothing to explode.  The ORDER BY below reads the stored token's value on the
+-- data as it is and says so, which is the ordering policy.
 CREATE TABLE eav_expr AS
   SELECT floor(ln(total)) AS k
     FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s;
@@ -450,3 +457,43 @@ DROP TABLE eua_r;
 SELECT remove_provenance('eua');
 SELECT remove_provenance('eub');
 DROP TABLE eua, eub;
+
+-- The swap itself, over an aggregate that arrives as a subquery column: the
+-- readers ProvSQL carries keep the token, where until now only the arithmetic
+-- operators did.  `a / b` was carried and `round(a / b, 2)` was not -- found by
+-- diagnosing the eleven queries prevalence had counted under `round`, where the
+-- function was only the neighbourhood and the argument was what froze.  An
+-- operator needs no swap because `/` is declared over agg_token; `round` is not,
+-- the counterparts being named provsql_round and provsql_abs so as not to shadow
+-- pg_catalog (abs('0.20') would be ambiguous otherwise).  The rename and the
+-- swap look like opposite decisions and are the same one.
+-- Two rows in one group at one half: sum(v) is 40 and count(*) is 2 on the data
+-- as it is, so the values below are those of 40 and of 40/2 = 20, each carrying
+-- the token.  What must NOT change is the value: every one is the number plain
+-- SQL gives.
+CREATE TABLE eavs(g int, v int);
+INSERT INTO eavs VALUES (1, 10), (1, 30);
+SELECT add_provenance('eavs');
+CREATE TABLE eavs_r AS
+  SELECT round(a, 2) AS r, abs(a) AS ab, ceil(a) AS ce, floor(a) AS fl,
+         round(a / b, 2) AS rd, sqrt(a / b) AS sq, ln(a) AS l, exp(b) AS e
+    FROM (SELECT sum(v)::numeric AS a, count(*)::numeric AS b FROM eavs) z;
+SELECT remove_provenance('eavs_r');
+SELECT r::text AS r, ab::text AS ab, ce::text AS ce, fl::text AS fl,
+       rd::text AS rd, sq::text AS sq, round(l::numeric,6)::text AS l,
+       round(e::numeric,6)::text AS e FROM eavs_r;
+DROP TABLE eavs_r;
+-- The same read with the rewriting off: the values have to be identical.
+SET provsql.active = off;
+SELECT round(a, 2)::text AS r, abs(a)::text AS ab, ceil(a)::text AS ce,
+       floor(a)::text AS fl, round(a / b, 2)::text AS rd, sqrt(a / b)::text AS sq,
+       round(ln(a)::numeric,6)::text AS l, round(exp(b)::numeric,6)::text AS e
+  FROM (SELECT sum(v)::numeric AS a, count(*)::numeric AS b FROM eavs) z;
+SET provsql.active = on;
+-- Still frozen, for want of a counterpart rather than for want of the swap:
+-- `power` (though the `^` operator over it IS carried, the same POW gate) and
+-- `trunc` (which would need an arithmetic op of its own).
+SELECT power(a, 2) AS p, trunc(a, 1) AS t
+  FROM (SELECT sum(v)::numeric AS a FROM eavs) z;
+SELECT remove_provenance('eavs');
+DROP TABLE eavs;
