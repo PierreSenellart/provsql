@@ -817,7 +817,7 @@ create_provenance_mapping
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks ssx; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
 remove_provenance
 
 (1 row)

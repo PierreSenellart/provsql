@@ -22,7 +22,7 @@ s_value
 42
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 remove_provenance
@@ -32,7 +32,7 @@ m|m1|m2
 98|42|3
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: function
 remove_provenance
 
 (1 row)
@@ -40,7 +40,7 @@ j|c|f
 {"n" : 2, "vs" : [10,32]}|2!|42
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: function
 remove_provenance
 
 (1 row)
@@ -123,7 +123,7 @@ to_numeric|to_bigint|to_float
 7|2|7
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_cast; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
 t|provsql
 7|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
@@ -140,12 +140,12 @@ m|a|e_a|b|e_b
 2|1|1.000000|0|0.000000
 (2 rows)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
 n|provsql
 |d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
 shout|provsql
 B!|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
@@ -176,7 +176,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_arr; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: constructor, in-list, comparison
 elem|arr|pct|in_list|any_arr|distinct_from|row_json|xml|provsql
 3|{3,6}|66|t|t|f|{"f1":3,"f2":6}|<a>3</a>|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
@@ -184,7 +184,7 @@ elem|arr|pct|in_list|any_arr|distinct_from|row_json|xml
 3|{3,6}|66|t|t|f|{"f1":3,"f2":6}|<a>3</a>
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_arr; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: constructor, in-list, comparison
 arr|in_list|distinct_from|provsql
 {3,6}|t|f|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)

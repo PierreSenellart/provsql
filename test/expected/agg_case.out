@@ -60,7 +60,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cf; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 g|p|p_type
 1|110|numeric
 (1 row)
@@ -71,7 +71,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cn_p; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional, comparison-of-aggregates
 remove_provenance
 
 (1 row)
@@ -95,7 +95,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cc; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 g|s0|e_s0|var_s0|mx|e_mx|cnt|dflt_var|three|p
@@ -125,7 +125,7 @@ g|n3|e_n3|n1|p
 2|5|5.000000||0.500000
 (2 rows)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cn; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 n|provsql
 3|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)

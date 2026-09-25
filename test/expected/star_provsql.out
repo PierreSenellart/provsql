@@ -50,7 +50,7 @@ format_type
 star_t
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks star_t; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
 remove_provenance
 
 (1 row)
@@ -73,7 +73,7 @@ jx|jw
 {"a":2,"b":20}|{"a":2,"b":20}
 (2 rows)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks star_t; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: constructor
 remove_provenance
 
 (1 row)

@@ -13803,6 +13803,164 @@ static bool frozen_agg_value_walker(Node *node, void *cx) {
   return expression_tree_walker(node, frozen_agg_value_walker, cx);
 }
 
+/** @brief Context for @c frozen_reader_walker. */
+typedef struct frozen_reader_ctx {
+  const constants_t *constants;
+  List *readers;            ///< Names of the kinds of reader found, distinct
+} frozen_reader_ctx;
+
+/** @brief Whether @p n is a frozen value: an @c agg_token_frozen_value call,
+ *  under the conversions @c frozen_agg_value puts around it. */
+static bool is_frozen_value(Node *n, const constants_t *constants) {
+  while (n != NULL) {
+    if (IsA(n, CoerceViaIO))
+      n = (Node *)((CoerceViaIO *)n)->arg;
+    else if (IsA(n, RelabelType))
+      n = (Node *)((RelabelType *)n)->arg;
+    else
+      break;
+  }
+  return n != NULL && IsA(n, FuncExpr) &&
+         ((FuncExpr *)n)->funcid ==
+           constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE;
+}
+
+/** @brief Context for @c count_frozen_child. */
+typedef struct frozen_child_ctx {
+  const constants_t *constants;
+  int n;
+} frozen_child_ctx;
+
+/** @brief Walker callback, not recursing: count the direct children of a node
+ *  that are frozen values. */
+static bool count_frozen_child(Node *child, void *cx) {
+  frozen_child_ctx *c = (frozen_child_ctx *)cx;
+  ListCell *lc;
+  if (child == NULL)
+    return false;
+  /* The walker hands an argument list over as one node: its elements are the
+   * children. */
+  if (IsA(child, List)) {
+    foreach (lc, (List *)child)
+      count_frozen_child((Node *)lfirst(lc), cx);
+    return false;
+  }
+  if (is_frozen_value(child, c->constants))
+    ++c->n;
+  return false;
+}
+
+/**
+ * @brief What kind of reader @p parent is, for a frozen value among its
+ *        direct children (@p nfrozen of them).
+ *
+ * The names go on the @c DETAIL line of @c aggregate-read-as-plain-value, so
+ * that a survey can tell the mechanisms apart without guessing from what
+ * appears near the value -- a function without a counterpart, a comparison of
+ * two aggregates and a cast are different work.
+ */
+static const char *frozen_reader_kind(Node *parent, int nfrozen) {
+  switch (nodeTag(parent)) {
+  case T_ScalarArrayOpExpr:
+    return "in-list";
+  case T_OpExpr:
+  case T_DistinctExpr:
+    if (((OpExpr *)parent)->opresulttype == BOOLOID)
+      return nfrozen > 1 ? "comparison-of-aggregates" : "comparison";
+    return "operator";
+  case T_FuncExpr:
+    return ((FuncExpr *)parent)->funcformat == COERCE_EXPLICIT_CAST ||
+               ((FuncExpr *)parent)->funcformat == COERCE_IMPLICIT_CAST
+             ? "cast" : "function";
+  case T_CoerceViaIO:
+  case T_ArrayCoerceExpr:
+  case T_TargetEntry:
+    return "cast";
+  case T_WindowFunc:
+    return "window";
+  case T_Aggref:
+    return "aggregate";
+  case T_ArrayExpr:
+  case T_RowExpr:
+  case T_XmlExpr:
+    return "constructor";
+  case T_CaseExpr:
+  case T_CaseWhen:
+  case T_CoalesceExpr:
+  case T_MinMaxExpr:
+  case T_NullIfExpr:
+    return "conditional";
+  case T_BoolExpr:
+    return "boolean";
+  default:
+    return "other";
+  }
+}
+
+/**
+ * @brief Walker: the kinds of reader of the statement's frozen values, as
+ *        @c frozen_agg_value_walker finds those values (nothing under a
+ *        @c plain() the query wrote).
+ *
+ * A frozen value that is a column of the output was converted there -- a
+ * token left alone stays one -- so its reader is a cast.
+ */
+static bool frozen_reader_walker(Node *node, void *cx) {
+  frozen_reader_ctx *ctx = (frozen_reader_ctx *)cx;
+  const constants_t *constants = ctx->constants;
+  frozen_child_ctx fc;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) && OidIsValid(constants->OID_FUNCTION_PLAIN) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PLAIN)
+    return false;
+  if (is_frozen_value(node, constants))
+    return false;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, frozen_reader_walker, cx, 0);
+  /* A list is no reader: the node holding it is (count_frozen_child). */
+  if (IsA(node, List))
+    return expression_tree_walker(node, frozen_reader_walker, cx);
+
+  fc.constants = constants;
+  fc.n = 0;
+  if (IsA(node, TargetEntry))
+    fc.n = is_frozen_value((Node *)((TargetEntry *)node)->expr, constants);
+  else
+    expression_tree_walker(node, count_frozen_child, &fc);
+  if (fc.n > 0) {
+    const char *kind = frozen_reader_kind(node, fc.n);
+    ListCell *lc;
+    bool seen = false;
+    foreach (lc, ctx->readers)
+      if (strcmp((const char *)lfirst(lc), kind) == 0)
+        seen = true;
+    if (!seen)
+      ctx->readers = lappend(ctx->readers, (void *)kind);
+  }
+  return expression_tree_walker(node, frozen_reader_walker, cx);
+}
+
+/** @brief The scope of a report followed by the kinds of reader found, as the
+ *  further field @c "reader: a, b" of its @c DETAIL line. */
+static const char *scope_with_readers(const char *scope, List *readers) {
+  StringInfoData buf;
+  ListCell *lc;
+  bool first = true;
+
+  if (readers == NIL)
+    return scope;
+  initStringInfo(&buf);
+  appendStringInfo(&buf, "%s; reader: ", scope);
+  foreach (lc, readers) {
+    appendStringInfo(&buf, "%s%s", first ? "" : ", ",
+                     (const char *)lfirst(lc));
+    first = false;
+  }
+  return buf.data;
+}
+
 /** @brief Whether @p ref is ordered by, or by a window of, @p q. */
 static bool sortgroupref_is_sort_key(Query *q, Index ref) {
   ListCell *lc;
@@ -29634,14 +29792,22 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_active && provsql_executor_depth == 0 &&
           !agg_over_agg_frozen &&
           OidIsValid(constants.OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE) &&
-          frozen_agg_value_walker((Node *)q, (void *)&constants))
+          frozen_agg_value_walker((Node *)q, (void *)&constants)) {
+        /* The tag stays the one tooling groups by; what read the value
+         * follows the scope, one name per mechanism. */
+        frozen_reader_ctx rctx;
+        rctx.constants = &constants;
+        rctx.readers = NIL;
+        frozen_reader_walker((Node *)q, &rctx);
         report_freeze(&constants, NULL,
-                      PROVSQL_GAP, "aggregate-read-as-plain-value",
+                      scope_with_readers(PROVSQL_GAP, rctx.readers),
+                      "aggregate-read-as-plain-value",
                       "aggregate result read as a plain value (by a "
                       "function, an operator, a comparison) is evaluated as "
                       "plain SQL, not tracked",
                       "mark it plain() to say "
                       "so");
+      }
 
       /* The nullness of an aggregate read on the data as it is, which no
        * frozen_agg_value carries and which the report above therefore misses. */

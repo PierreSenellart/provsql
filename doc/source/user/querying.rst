@@ -158,7 +158,13 @@ reader and once for a program:
 
 The ``provsql-reason`` tag is stable where the sentence is free to be
 reworded, so a tool that surveys what ProvSQL covers can group refusals by
-it. The ``scope`` says what kind of limit it is:
+it. The report of an aggregate result read as a plain value
+(``aggregate-read-as-plain-value``) adds what read it, one name per mechanism,
+since each is different work: ``reader:`` followed by one or more of
+``function``, ``cast``, ``operator``, ``comparison``,
+``comparison-of-aggregates``, ``in-list``, ``conditional``, ``boolean``,
+``constructor`` (an array, a row, an XML element), ``window`` and
+``aggregate``. The ``scope`` says what kind of limit it is:
 
 ``deliberate``
     the shape has no provenance to give, so the refusal -- or the warning that
