@@ -13723,9 +13723,11 @@ static void report_freeze(const constants_t *constants, Node *frozen,
         break;
       }
   }
+#if PG_VERSION_NUM >= 150000
   /* A lowered recursion is read from a table of ours: name the CTE. */
   if (shared != NULL && rec_work_table_cte(shared) != NULL)
     shared = rec_work_table_cte(shared);
+#endif
   if (shared == NULL)
     provsql_warning_tagged(scope, tag, "%s; %s", msg, hint);
   else if (provsql_implicit_freeze == PROVSQL_FREEZE_ERROR)

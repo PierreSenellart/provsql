@@ -185,5 +185,11 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_DENSE_RANK_ 3102
 #endif
 
+#ifndef F_CUME_DIST_
+/** @brief OID of the @c cume_dist() window function (pre-PG 14, where
+ *  @c fmgroids.h names it @c F_WINDOW_CUME_DIST). */
+#define F_CUME_DIST_ 3104
+#endif
+
 
 #endif /* COMPATIBILITY_H */
