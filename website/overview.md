@@ -201,6 +201,7 @@ developer guide for details):
 - [C/C++ API reference](/doxygen-c/html/) – internal implementation
 - [Source code](https://github.com/PierreSenellart/provsql) on GitHub
 - [Video demonstrations](/demos/) of ProvSQL in action
+- [Talks and tutorials](/talks/) about ProvSQL and provenance
 - [Contributors](/contributors/) and funding
 
 [Get Started](/docs/user/getting-provsql.html){: .btn .btn--primary}

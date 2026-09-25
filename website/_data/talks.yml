@@ -1,0 +1,127 @@
+# Talks and tutorials about ProvSQL, or that present it. Entries are
+# shown in the order below within each kind, so keep them newest first.
+#
+# Fields: title, date (YYYY-MM-DD), kind (outreach | tutorial | research),
+# venue, slides (URL), description; optional: language (ISO code, when not
+# English), paper_pdf, paper_doi, video, and also (a list of {venue, date,
+# slides} for later or earlier deliveries of the same talk).
+
+- title: "D'où viennent les données ? La science de la provenance"
+  date: 2026-09-25
+  kind: outreach
+  language: fr
+  venue: "La Nuit des données, École normale supérieure, Paris"
+  slides: "https://pierre.senellart.com/talks/nuit-20260925.pdf"
+  description: "A general-audience talk, in French, on why the numbers we read come with no trace of how they were produced, and what data provenance can do about it. From crowd-count estimates and spreadsheet errors to the semiring view of provenance, probabilities, and the Shapley value, with ProvSQL and ProvSQL Studio shown at work."
+
+- title: "Provenance of HAVING Queries in Semirings with Monus"
+  date: 2026-08-12
+  kind: research
+  venue: "Nanyang Technological University, Singapore"
+  slides: "https://pierre.senellart.com/talks/ntu-20260812.pdf"
+  description: "A possible-world semantics for the provenance of HAVING queries in semirings with monus, its properties, the algorithms behind it, and its implementation and experimental evaluation in ProvSQL."
+
+- title: "Optimizing Probabilistic Query Evaluation in ProvSQL"
+  date: 2026-06-30
+  kind: research
+  venue: "SinFra Symposium 2026, A*STAR, Singapore"
+  slides: "https://pierre.senellart.com/talks/sinfra-20260630.pdf"
+  description: "How ProvSQL computes answer probabilities efficiently although the problem is #P-hard in general: from Boolean provenance to tractable cases, knowledge compilation, and the choice of an evaluation method."
+
+- title: "Efficiency and Effectiveness of a Practical Provenance and Probabilistic DBMS"
+  date: 2025-01-23
+  kind: research
+  venue: "Logic and Algorithms in DB Theory and AI Reunion, Simons Institute, Berkeley"
+  slides: "https://pierre.senellart.com/talks/simons-20250123.pdf"
+  description: "Can a DBMS support several forms of provenance, a large and useful query language, and efficient computation of provenance and probabilities? ProvSQL's design and its benchmarks against other provenance and probabilistic systems."
+
+- title: "On the Impact of Val on Pierre & ProvSQL"
+  date: 2024-05-25
+  kind: research
+  venue: "ValFest 2024, University of Pennsylvania, Philadelphia"
+  slides: "https://pierre.senellart.com/talks/valfest-20240525.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/senellart2024impact.pdf"
+  paper_doi: "10.4230/OASICS.TANNEN.9"
+  description: "How the provenance semiring framework of Green, Karvounarakis, and Tannen shaped the design of ProvSQL, from its origins in 2016 to its state in 2024."
+
+- title: "Expected Shapley-Like Scores of Boolean Functions: Complexity and Applications to Probabilistic Databases"
+  date: 2024-01-18
+  kind: research
+  venue: "Representation, Provenance, and Explanations in Database Theory and Logic seminar, Dagstuhl"
+  slides: "https://pierre.senellart.com/talks/dagstuhl-20240118.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/karmakar2024expected.pdf"
+  paper_doi: "10.1145/3651593"
+  description: "Complexity of expected Shapley-like scores over probabilistic databases, and their computation in ProvSQL through knowledge compilation."
+  also:
+    - venue: "Bases de Données Avancées (BDA), Orléans"
+      date: 2024-10-24
+      slides: "https://pierre.senellart.com/talks/bda-20241024.pdf"
+
+- title: "Challenges in Building a Provenance-Aware Database Management System"
+  date: 2023-09-07
+  kind: research
+  venue: "Simons Institute, Berkeley"
+  slides: "https://pierre.senellart.com/talks/simons-20230907.pdf"
+  description: "Provenance, probabilistic databases, and the questions raised by their implementation inside a full-featured DBMS such as PostgreSQL."
+
+- title: "Building a Provenance-Aware Database Management System"
+  date: 2023-07-04
+  kind: research
+  venue: "Laboratoire de Méthodes Formelles, Gif-sur-Yvette"
+  slides: "https://pierre.senellart.com/talks/lmf-20230703.pdf"
+  description: "Provenance in databases, its applications, and how ProvSQL implements it."
+  also:
+    - venue: "Polaris Colloquium, Inria Lille"
+      date: 2022-11-17
+      slides: "https://pierre.senellart.com/talks/polaris-20221117.pdf"
+
+- title: "ProvSQL Tutorial: Introduction to Semiring Provenance"
+  date: 2022-10-10
+  kind: tutorial
+  venue: "DesCartes school, Singapore"
+  slides: "https://pierre.senellart.com/talks/descartes-20221010.pdf"
+  description: "A short introduction to semiring provenance, as a preamble to a hands-on ProvSQL session."
+
+- title: "Introduction to Fine-Grained Management of Data Provenance"
+  date: 2021-06-17
+  kind: tutorial
+  venue: "Institut Pasteur, Paris"
+  slides: "https://pierre.senellart.com/talks/pasteur-20210616.pdf"
+  description: "An introduction to database provenance and its applications, for an audience of scientists outside computer science."
+
+- title: "Provenance in Databases: Principles and Applications"
+  date: 2019-09-20
+  kind: tutorial
+  venue: "Reasoning Web Summer School, Bolzano"
+  slides: "https://pierre.senellart.com/talks/rw-20190920.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/senellart2019provenance.pdf"
+  paper_doi: "10.1007/978-3-030-31423-1_3"
+  description: "A tutorial on Boolean and semiring provenance, their applications (probabilistic databases, view maintenance, explanations), and their implementation in ProvSQL."
+
+- title: "Provenance and Probabilities in Relational Databases: From Theory to Practice"
+  date: 2018-07-11
+  kind: research
+  venue: "Theory and Practice of Provenance (TaPP), King's College London"
+  slides: "https://pierre.senellart.com/talks/tapp-20180711.pdf"
+  description: "Provenance, its representation systems, and the implementation of provenance support in ProvSQL; a talk that accompanies the SIGMOD Record 2017 survey of the same title."
+  also:
+    - venue: "National University of Singapore"
+      date: 2019-01-18
+      slides: "https://pierre.senellart.com/talks/nus-20190118.pdf"
+    - venue: "TU Dresden"
+      date: 2018-06-22
+      slides: "https://pierre.senellart.com/talks/dresden-20180622.pdf"
+    - venue: "Colloquium LORIA, Nancy"
+      date: 2018-02-20
+      slides: "https://pierre.senellart.com/talks/loria-20180220.pdf"
+
+- title: "Semiring Provenance in Relational Databases: Foundations, Representation Systems, Implementation"
+  date: 2017-02-21
+  kind: research
+  venue: "Information Systems seminar, University of Oxford"
+  slides: "https://pierre.senellart.com/talks/oxford-20170221.pdf"
+  description: "The first talks presenting ProvSQL, a few months after its inception: semiring provenance, provenance circuits, and the early implementation."
+  also:
+    - venue: "Valda seminar, École normale supérieure, Paris"
+      date: 2017-02-10
+      slides: "https://pierre.senellart.com/talks/valda-20170210.pdf"

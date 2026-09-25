@@ -14,6 +14,8 @@ main:
     url: /contributors/
   - title: "Demos"
     url: /demos/
+  - title: "Talks"
+    url: /talks/
   - title: "Lean"
     url: /lean/
   - title: "Releases"
