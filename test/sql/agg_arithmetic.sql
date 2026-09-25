@@ -411,38 +411,51 @@ CREATE TABLE agg_ty_r AS
          sqrt(sum(x)) AS f8_sqrt
   FROM agg_ty;
 SELECT remove_provenance('agg_ty_r');
-SELECT f8_div::text AS f8_div, f8_div7::text AS f8_div7, f8_times::text AS f8_times,
-       num_div::text AS num_div, int_div::text AS int_div, f4_div::text AS f4_div,
-       num_round::text AS num_round, float_then_numeric::text AS ftn,
-       peeled_cast::text AS peeled, float_operand::text AS f_operand,
-       cast_over_token::text AS cast_tok, f8_sqrt::text AS f8_sqrt
-FROM agg_ty_r;
+-- Each value against the text plain SQL gives for the same expression, digit
+-- for digit, printed as a truth: how many digits a double prints depends on
+-- the version of PostgreSQL (fifteen before 12, the shortest exact form since).
 SET provsql.active = off;
-SELECT sum(x) / 3 AS f8_div, sum(x) / 7 AS f8_div7, sum(x) * 2 AS f8_times,
-       sum(n) / 3 AS num_div, sum(i) / 3 AS int_div,
-       sum(x::float4) / 3 AS f4_div, round(sum(n), 2) AS num_round,
-       (count(*) * max(x))::numeric AS ftn,
-       100 / CAST(count(*) AS REAL) AS peeled, sum(i) * 1.5::float8 AS f_operand,
-       sum(i)::float8 / sum(i) AS cast_tok, sqrt(sum(x)) AS f8_sqrt
-FROM agg_ty;
+SELECT r.f8_div::text = p.f8_div::text AS f8_div,
+       r.f8_div7::text = p.f8_div7::text AS f8_div7,
+       r.f8_times::text = p.f8_times::text AS f8_times,
+       r.num_div::text = p.num_div::text AS num_div,
+       r.int_div::text = p.int_div::text AS int_div,
+       r.f4_div::text = p.f4_div::text AS f4_div,
+       r.num_round::text = p.num_round::text AS num_round,
+       r.float_then_numeric::text = p.ftn::text AS ftn,
+       r.peeled_cast::text = p.peeled::text AS peeled,
+       r.float_operand::text = p.f_operand::text AS f_operand,
+       r.cast_over_token::text = p.cast_tok::text AS cast_tok,
+       r.f8_sqrt::text = p.f8_sqrt::text AS f8_sqrt
+FROM agg_ty_r r,
+  (SELECT sum(x) / 3 AS f8_div, sum(x) / 7 AS f8_div7, sum(x) * 2 AS f8_times,
+          sum(n) / 3 AS num_div, sum(i) / 3 AS int_div,
+          sum(x::float4) / 3 AS f4_div, round(sum(n), 2) AS num_round,
+          (count(*) * max(x))::numeric AS ftn,
+          100 / CAST(count(*) AS REAL) AS peeled,
+          sum(i) * 1.5::float8 AS f_operand,
+          sum(i)::float8 / sum(i) AS cast_tok, sqrt(sum(x)) AS f8_sqrt
+   FROM agg_ty) p;
 SET provsql.active = on;
 -- sqrt, ln and exp of a float aggregate are computed in that type, not in
 -- numeric: numeric computes them to a fixed scale, which lost the last digit of
 -- a double (sqrt of 3 came out to fifteen decimals).  Over a numeric column
--- they are still numeric's own answer, which is the one SQL gives there.  Both
--- rows below are the same query with the rewriting off.
+-- they are still numeric's own answer, which is the one SQL gives there.  Each
+-- is compared with the same expression with the rewriting off, as above.
 CREATE TABLE agg_ty_t AS
   SELECT sqrt(sum(x)) AS f8_sqrt, ln(sum(x)) AS f8_ln, exp(sum(x)) AS f8_exp,
          sqrt(sum(n)) AS num_sqrt
   FROM agg_ty;
 SELECT remove_provenance('agg_ty_t');
-SELECT f8_sqrt::text AS f8_sqrt, f8_ln::text AS f8_ln, f8_exp::text AS f8_exp,
-       num_sqrt::text AS num_sqrt
-FROM agg_ty_t;
 SET provsql.active = off;
-SELECT sqrt(sum(x)) AS f8_sqrt, ln(sum(x)) AS f8_ln, exp(sum(x)) AS f8_exp,
-       sqrt(sum(n)) AS num_sqrt
-FROM agg_ty;
+SELECT t.f8_sqrt::text = p.f8_sqrt::text AS f8_sqrt,
+       t.f8_ln::text = p.f8_ln::text AS f8_ln,
+       t.f8_exp::text = p.f8_exp::text AS f8_exp,
+       t.num_sqrt::text = p.num_sqrt::text AS num_sqrt
+FROM agg_ty_t t,
+  (SELECT sqrt(sum(x)) AS f8_sqrt, ln(sum(x)) AS f8_ln, exp(sum(x)) AS f8_exp,
+          sqrt(sum(n)) AS num_sqrt
+   FROM agg_ty) p;
 SET provsql.active = on;
 DROP TABLE agg_ty_t;
 

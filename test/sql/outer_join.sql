@@ -213,7 +213,7 @@ CREATE TABLE oj_t AS
          sum(l.v) IS NULL AS no_token
   FROM oj_l4 l LEFT JOIN oj_r4 r ON r.id = l.id GROUP BY r.id, l.id;
 SELECT remove_provenance('oj_t');
-SELECT 'PADDED GROUP' AS q, rid, lid, e, no_token FROM oj_t ORDER BY rid;
+SELECT 'PADDED GROUP' AS q, rid, lid, e, no_token FROM oj_t ORDER BY rid, no_token;
 DROP TABLE oj_t, oj_l4, oj_r4;
 -- A correlated EXISTS in WHERE above the lowered join reads the joined
 -- columns through the subquery that replaces them.

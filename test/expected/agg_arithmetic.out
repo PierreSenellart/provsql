@@ -349,10 +349,7 @@ remove_provenance
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 f8_div|f8_div7|f8_times|num_div|int_div|f4_div|num_round|ftn|peeled|f_operand|cast_tok|f8_sqrt
-2|0.8571428571428571|12|2.0000000000000000|2|2|6.00|9|33.333333333333336|9|1|2.449489742783178
-(1 row)
-f8_div|f8_div7|f8_times|num_div|int_div|f4_div|num_round|ftn|peeled|f_operand|cast_tok|f8_sqrt
-2|0.8571428571428571|12|2.0000000000000000|2|2|6.00|9|33.333333333333336|9|1|2.449489742783178
+t|t|t|t|t|t|t|t|t|t|t|t
 (1 row)
 remove_provenance
 
@@ -360,10 +357,7 @@ remove_provenance
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 f8_sqrt|f8_ln|f8_exp|num_sqrt
-2.449489742783178|1.791759469228055|403.4287934927351|2.449489742783178
-(1 row)
-f8_sqrt|f8_ln|f8_exp|num_sqrt
-2.449489742783178|1.791759469228055|403.4287934927351|2.449489742783178
+t|t|t|t
 (1 row)
 e_f8_div|provsql
 1.142857|d265daa9-f206-561d-845c-2a85fa0fa72c
