@@ -669,7 +669,8 @@ Functions of an aggregate result
 --------------------------------
 
 ``round``, ``floor``, ``ceil`` (and its synonym ``ceiling``), ``abs``,
-``ln``, ``exp`` and ``sqrt`` of an
+``ln``, ``exp``, ``sqrt`` and ``power`` (and its synonym ``pow``, with an
+exponent that is not itself an aggregate result) of an
 aggregate result are carried as operations of its gate, so the value stays
 tracked and is read in every possible world:
 

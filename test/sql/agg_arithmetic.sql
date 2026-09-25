@@ -785,3 +785,49 @@ SELECT round(greatest(sqrt(sum(x)), 0)::numeric, 6) AS plain_v FROM agg_ca_d;
 SET provsql.active = on;
 SELECT remove_provenance('agg_ca_d');
 DROP TABLE agg_ca_d;
+
+-- power(v, e) and pow(v, e) of an aggregate result are carried as the power
+-- gate, as v ^ e already was: over the numeric signature in numeric, over the
+-- double precision one in that type, the digits being SQL's in both (the rows
+-- after the first are the same query with the rewriting off).  The exponent
+-- may read the row, as the digits of round(v, d) do.  Two rows at one half,
+-- (10, 2.0) and (20, 3.0): the sum takes 10, 20 and 30 in the three worlds
+-- where it is defined, so E[power(sum(v), 2)] = (100+400+900)/3, the square
+-- exceeds 150 in the two worlds with the second row, 1/2, and
+-- E[power(sum(f), 0.5)] = (sqrt 2 + sqrt 3 + sqrt 5)/3.
+CREATE TABLE agg_pw(id int, v int, f float8);
+INSERT INTO agg_pw VALUES (1, 10, 2.0), (2, 20, 3.0);
+SELECT add_provenance('agg_pw');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_pw; END $$;
+CREATE TABLE agg_pw_r AS
+  SELECT power(sum(v), 2) AS p, pow(sum(v), 2) AS w,
+         power(sum(v)::numeric, 2) AS n, power(sum(f), 0.5) AS fl,
+         round(expected(power(sum(v), 2))::numeric, 6) AS e_p,
+         round(expected(sum(v) ^ 2)::numeric, 6) AS e_caret,
+         round(expected(power(sum(f), 0.5))::numeric, 8) AS e_fl
+  FROM agg_pw;
+SELECT remove_provenance('agg_pw_r');
+SELECT p::text AS p, w::text AS w, n::text AS n, fl::text AS fl, e_p, e_caret, e_fl
+FROM agg_pw_r;
+SET provsql.active = off;
+SELECT power(sum(v), 2) AS p, pow(sum(v), 2) AS w,
+       power(sum(v)::numeric, 2) AS n, power(sum(f), 0.5) AS fl,
+       round(((100 + 400 + 900) / 3.0)::numeric, 6) AS e_hand,
+       round(((sqrt(2::float8) + sqrt(3::float8) + sqrt(5::float8)) / 3)::numeric, 8)
+         AS e_fl_hand
+FROM agg_pw;
+SET provsql.active = on;
+DROP TABLE agg_pw_r;
+CREATE TABLE agg_pw_r AS
+  SELECT 1 AS k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM agg_pw HAVING power(sum(v), 2) > 150;
+SELECT remove_provenance('agg_pw_r');
+SELECT * FROM agg_pw_r;
+DROP TABLE agg_pw_r;
+CREATE TABLE agg_pw_r AS
+  SELECT id, power(sum(v), id) AS p FROM agg_pw GROUP BY id;
+SELECT remove_provenance('agg_pw_r');
+SELECT id, p::text AS p FROM agg_pw_r ORDER BY id;
+DROP TABLE agg_pw_r;
+SELECT remove_provenance('agg_pw');
+DROP TABLE agg_pw;

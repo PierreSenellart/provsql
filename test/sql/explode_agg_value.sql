@@ -490,9 +490,10 @@ SELECT round(a, 2)::text AS r, abs(a)::text AS ab, ceil(a)::text AS ce,
        round(ln(a)::numeric,6)::text AS l, round(exp(b)::numeric,6)::text AS e
   FROM (SELECT sum(v)::numeric AS a, count(*)::numeric AS b FROM eavs) z;
 SET provsql.active = on;
--- Still frozen, for want of a counterpart rather than for want of the swap:
--- `power` (though the `^` operator over it IS carried, the same POW gate) and
--- `trunc` (which would need an arithmetic op of its own).
+-- `power` over an aggregate that arrives as a column is carried by the same
+-- swap (the POW gate, as the `^` operator), while `trunc` is still frozen, for
+-- want of a counterpart rather than of the swap: it would need an arithmetic
+-- op of its own.  The warning is trunc's.
 SELECT power(a, 2) AS p, trunc(a, 1) AS t
   FROM (SELECT sum(v)::numeric AS a FROM eavs) z;
 SELECT remove_provenance('eavs');

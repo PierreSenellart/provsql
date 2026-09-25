@@ -5229,4 +5229,36 @@ END
 $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
+/** @brief power(agg_token, numeric) (gate_arith POW, the exponent lifted to
+ *  a value gate): what @c power(sum(x), 2) is carried as, the way
+ *  @c sum(x) ^ 2 already is. */
+CREATE OR REPLACE FUNCTION provsql_power(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(7,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     power(provsql.agg_token_value(a), b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief power(agg_token, double precision): computed in double precision,
+ *  as SQL computes it, and the exponent stored through its own text, which
+ *  keeps every digit the float has (see @c agg_transcendental). */
+CREATE OR REPLACE FUNCTION provsql_power(a agg_token, b double precision)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(7,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(b::text::numeric)],
+     power(provsql.agg_token_value(a)::float8, b)::text::numeric); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief pow(agg_token, numeric): @c pow is @c power's other name. */
+CREATE OR REPLACE FUNCTION provsql_pow(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.provsql_power(a, b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief pow(agg_token, double precision). */
+CREATE OR REPLACE FUNCTION provsql_pow(a agg_token, b double precision)
+  RETURNS agg_token AS
+$$ SELECT provsql.provsql_power(a, b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
 SELECT reset_constants_cache();

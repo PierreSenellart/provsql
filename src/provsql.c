@@ -10282,10 +10282,15 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   }
   if (nargs == 2) {
     /* A second argument that says how to apply the function rather than what
-     * to apply it to: the digits of round(v, d).  It is no aggregate result,
-     * and the counterpart takes it as it is. */
+     * to apply it to: the digits of round(v, d), the exponent of power(v, e).
+     * It is no aggregate result, and the counterpart takes it as it is, in the
+     * type SQL resolved it to -- which is how power's two signatures find
+     * theirs. */
+    Oid second_type;
     second = (Node *)lsecond(f->args);
-    if (exprType(second) != INT4OID ||
+    second_type = exprType(second);
+    if ((second_type != INT4OID && second_type != NUMERICOID &&
+         second_type != FLOAT8OID) ||
         expr_contains_agg(second, constants))
       return NULL;
   }
@@ -10363,7 +10368,7 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
                      makeString(psprintf("provsql_%s", name)));
   argtypes[0] = constants->OID_TYPE_AGG_TOKEN;
   if (nargs == 2)
-    argtypes[1] = INT4OID;
+    argtypes[1] = exprType(second);
   counterpart = LookupFuncName(names, nargs, argtypes, true);
   list_free(names);
   pfree(name);

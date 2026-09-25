@@ -126,6 +126,7 @@ INTERNAL_FUNCTIONS = {
     # gate records so the answer matches plain SQL digit for digit.
     'provsql_round', 'provsql_floor', 'provsql_ceil', 'provsql_ceiling',
     'provsql_abs', 'provsql_sqrt', 'provsql_ln', 'provsql_exp',
+    'provsql_power', 'provsql_pow',
     'provsql_numeric', 'provsql_float8', 'provsql_float4',
     'provsql_int8', 'provsql_int4', 'provsql_int2',
     'agg_transcendental',
