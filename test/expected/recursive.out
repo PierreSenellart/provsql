@@ -90,7 +90,7 @@ n|p
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_leak_t_all; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks leak_t; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -107,7 +107,7 @@ LINE 1: SELECT count(*) FROM leak_t;
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_t_all; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks t; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -115,7 +115,7 @@ remove_provenance
 n|e
 3|0.875000
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_t_all; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks t; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -136,6 +136,14 @@ same_tokens|provsql
 (1 row)
 ERROR:  ProvSQL: a recursive term of "t" reads its provenance column, or the CTE has several: "SELECT *" over a provenance-tracked relation puts one there, which reads the provenance of the rows derived; the rounds carry that as their own, not as data a term can read
 DETAIL:  provsql-reason: recursive-term-star-provenance; scope: gap
+remove_provenance
+
+(1 row)
+id|p
+1|0.125000
+2|0.125000
+3|0.125000
+(3 rows)
 add_provenance
 
 (1 row)

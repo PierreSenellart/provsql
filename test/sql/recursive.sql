@@ -322,6 +322,27 @@ WITH RECURSIVE t AS (
     SELECT b.id, b.parent_id, t.provsql FROM bag_star b
       JOIN t ON t.id = b.parent_id)
 SELECT id FROM t;
+-- Two recursive CTEs of the SAME name in one statement, in two subqueries of
+-- a join: each is lowered on its own, and they shared the name of the table
+-- the rounds fill, so the second dropped the first's -- "could not open
+-- relation with OID", where plain SQL answers.  Up the chain from 3 and down
+-- it from 1, each id needs all three rows between them: 0.125 each.
+CREATE TABLE same_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p FROM
+    (WITH RECURSIVE t(id, parent_id) AS (
+         SELECT id, parent_id FROM bag_star WHERE id = 3
+       UNION
+         SELECT b.id, b.parent_id FROM bag_star b JOIN t ON b.id = t.parent_id)
+     SELECT id FROM t) s
+    JOIN
+    (WITH RECURSIVE t(id, parent_id) AS (
+         SELECT id, parent_id FROM bag_star WHERE id = 1
+       UNION
+         SELECT b.id, b.parent_id FROM bag_star b JOIN t ON b.parent_id = t.id)
+     SELECT id FROM t) x USING (id);
+SELECT remove_provenance('same_r');
+SELECT * FROM same_r ORDER BY id;
+DROP TABLE same_r;
 DROP TABLE bag_star;
 
 -- The generators of the corpora: a counter, an array extended per round, a

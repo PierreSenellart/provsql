@@ -64,6 +64,7 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_type.h"
+#include "mb/pg_wchar.h"                 /* pg_mbcliplen */
 #include "utils/builtins.h"
 #if PG_VERSION_NUM >= 120000
 #include "utils/float.h"                /* get_float8_infinity (moved out of builtins.h in PG12) */
@@ -191,6 +192,9 @@ extern void _PG_fini(void);
 /** Name the recursion lowering gives, in the rounds, to the provenance column
  *  a @c "SELECT *" put in a recursive CTE (@c neutralise_star_provenance). */
 #define PROVSQL_STAR_COLUMN_NAME "provsql_star"
+/** Prefix of the temporary tables the recursion lowering fills
+ *  (@c rec_work_table_name). */
+#define PROVSQL_REC_PREFIX "provsql_rec_"
 /** Column of the companion count that gates the NULL value of an exploded
  *  aggregate (@c rewrite_explode_agg_value). */
 #define PROVSQL_AGG_COUNT_COLNAME "provsql_agg_count"
@@ -1089,8 +1093,8 @@ typedef struct LoweredCte {
   const char *edge_quals;
   const char *edge_sql;
   /* The table the driver filled, which the planting reads: named for us
-   * (provsql_rec_<cte>) rather than after the CTE, so that nothing of ours
-   * shadows a relation the user may name. */
+   * (provsql_rec_<n>_<cte>, rec_work_table_name) rather than after the CTE, so
+   * that nothing of ours shadows a relation the user may name. */
   const char *work_name;
 #endif
 } LoweredCte;
@@ -1805,8 +1809,8 @@ typedef struct cte_rename_ctx {
  * temporary schema -- which PostgreSQL searches BEFORE the search path, so a
  * later statement of the same session naming @c t would read it instead of the
  * user's own relation, and answer from data of a statement that has ended.  The
- * table is therefore named @c provsql_rec_t, and the body reads
- * @c "provsql_rec_t t", so its column references are unchanged.
+ * table is therefore named @c provsql_rec_1_t (@c rec_work_table_name), and the
+ * body reads @c "provsql_rec_1_t t", so its column references are unchanged.
  */
 static bool rename_cte_self_ref_walker(Node *node, void *cx) {
   cte_rename_ctx *ctx = (cte_rename_ctx *)cx;
@@ -2078,6 +2082,59 @@ static int neutralise_star_provenance(CommonTableExpr *cte) {
 }
 
 /**
+ * @brief The name of a temporary table the recursion lowering fills.
+ *
+ * Unique per lowering: two recursive CTEs of one name in a statement -- in two
+ * subqueries of a join -- are lowered separately, and a shared name made the
+ * second drop the table the first's scan was bound to ("could not open
+ * relation with OID").  The number comes before the CTE's name, which is
+ * clipped so that the identifier fits in NAMEDATALEN: a truncation would
+ * otherwise cut the number off, and the two names of one lowering apart.
+ *
+ * @param ctename  The CTE.
+ * @param all      The table of a bag recursion's rounds (@c "<n>a_"), rather
+ *                 than its working table (@c "<n>_").
+ */
+static char *rec_work_table_name(const char *ctename, bool all) {
+  static uint32 seq = 0;
+  static uint32 last = 0;
+  char *prefix;
+  int room;
+
+  /* The two names of one lowering share its number: the working table's is
+   * asked first. */
+  if (!all)
+    last = ++seq;
+  prefix = psprintf("%s%u%s_", PROVSQL_REC_PREFIX, last, all ? "a" : "");
+  room = NAMEDATALEN - 1 - (int)strlen(prefix);
+  return psprintf("%s%.*s", prefix,
+                  pg_mbcliplen(ctename, (int)strlen(ctename), room), ctename);
+}
+
+/**
+ * @brief The CTE a table of @c rec_work_table_name was filled for, or
+ *        @c NULL when @p relname is not one: what a message names, the table
+ *        being ours and its name meaningless to the user.
+ */
+static const char *rec_work_table_cte(const char *relname) {
+  const char *p;
+  size_t plen = strlen(PROVSQL_REC_PREFIX);
+
+  if (relname == NULL || strncmp(relname, PROVSQL_REC_PREFIX, plen) != 0)
+    return NULL;
+  p = relname + plen;
+  if (!isdigit((unsigned char)*p))
+    return NULL;
+  while (isdigit((unsigned char)*p))
+    ++p;
+  if (*p == 'a')
+    ++p;
+  if (*p != '_' || p[1] == '\0')
+    return NULL;
+  return p + 1;
+}
+
+/**
  * @brief Lower a recursive CTE to a provenance-aware fixpoint.
  *
  * ProvSQL cannot rewrite @c WITH @c RECURSIVE in place: the recursive term
@@ -2177,11 +2234,11 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   }
 
   /* Deparse the body from a copy whose self-references name the working table:
-   * "provsql_rec_<cte> <cte>", so that nothing of ours is called what the user
-   * called the CTE (the temporary schema is searched before the search path,
-   * and a leftover of that name would answer a later statement of the session
-   * in place of the user's own relation). */
-  work_name = psprintf("provsql_rec_%s", cte->ctename);
+   * "provsql_rec_<n>_<cte> <cte>", so that nothing of ours is called what the
+   * user called the CTE (the temporary schema is searched before the search
+   * path, and a leftover of that name would answer a later statement of the
+   * session in place of the user's own relation). */
+  work_name = rec_work_table_name(cte->ctename, false);
   {
     cte_rename_ctx rctx;
     rctx.from = cte->ctename;
@@ -2238,7 +2295,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
       q1_text = pg_get_querydef(l->subquery, false);
     } else
       return false;   /* neither term recurses: not this shape */
-    all_name = psprintf("%s_all", work_name);
+    all_name = rec_work_table_name(cte->ctename, true);
   }
 
   /* User column names (comma list) and column definitions (name type). */
@@ -13666,6 +13723,9 @@ static void report_freeze(const constants_t *constants, Node *frozen,
         break;
       }
   }
+  /* A lowered recursion is read from a table of ours: name the CTE. */
+  if (shared != NULL && rec_work_table_cte(shared) != NULL)
+    shared = rec_work_table_cte(shared);
   if (shared == NULL)
     provsql_warning_tagged(scope, tag, "%s; %s", msg, hint);
   else if (provsql_implicit_freeze == PROVSQL_FREEZE_ERROR)

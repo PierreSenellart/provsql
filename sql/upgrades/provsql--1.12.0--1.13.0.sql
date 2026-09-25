@@ -1504,7 +1504,9 @@ BEGIN
     IF to_regclass(work_name) IS NOT NULL THEN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
-    EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+    /* Dropped with the statement, as the other drivers' tables are. */
+    EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid) ON COMMIT DROP',
+                   work_name, coldef);
     PERFORM provsql.planted_scope(work_name);
     IF hop_bound IS NULL THEN
       EXECUTE format(
@@ -1529,14 +1531,15 @@ BEGIN
     END IF;
     IF verbosity >= 20 THEN
       RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
-        work_name, coalesce(edge_rel::text, 'the join-defined edge query');
+        regexp_replace(work_name, '^provsql_rec_[0-9]+a?_', ''),
+        coalesce(edge_rel::text, 'the join-defined edge query');
     END IF;
   EXCEPTION WHEN OTHERS THEN
     IF verbosity >= 10 THEN
       /* Named as the user named the CTE: the working table carries a name of
-         ours (provsql_rec_<cte>), which is no business of a message. */
+         ours (provsql_rec_<n>_<cte>), which is no business of a message. */
       RAISE NOTICE 'ProvSQL: reachability route for "%" fell back to the generic fixpoint (%)',
-        regexp_replace(work_name, '^provsql_rec_', ''), SQLERRM;
+        regexp_replace(work_name, '^provsql_rec_[0-9]+a?_', ''), SQLERRM;
     END IF;
     PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
   END;
