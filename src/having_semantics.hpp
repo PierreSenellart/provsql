@@ -791,6 +791,22 @@ void provsql_having(
           ai.is_int = aggtype_is_integer(c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK);
           ai.is_scalar =
             (c.getInfos(gx).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+          // Only the kinds eval reads a value of: any other declines the
+          // route here, rather than reading there as "no value" in every
+          // world -- which is a comparison that never holds, a probability of
+          // zero with nothing to say so.  bool_and / bool_or / array_agg were
+          // kept out only by their values failing to parse as numbers.
+          switch (ai.kind) {
+          case AggregationOperator::SUM:
+          case AggregationOperator::COUNT:
+          case AggregationOperator::AVG:
+          case AggregationOperator::MIN:
+          case AggregationOperator::MAX:
+          case AggregationOperator::CHOOSE:
+            break;
+          default:
+            return false;
+          }
           for (gate_t ch : c.getWires(gx)) {
             if (c.getGateType(ch) != gate_semimod)
               return false;
@@ -859,14 +875,14 @@ void provsql_having(
         }
         if (gt == gate_agg) {
           const AggInfo &ai = aggs.at(gx);
-          double acc = 0, mn = 0, mx = 0;
+          double acc = 0, mn = 0, mx = 0, fst = 0;
           long cnt = 0;
           bool first = true;
           for (const auto &pr : ai.contribs)
             if (world & (uint64_t(1) << pr.first)) {
               double m = pr.second;
               acc += m; ++cnt;
-              if (first) { mn = mx = m; first = false; }
+              if (first) { mn = mx = fst = m; first = false; }
               else { mn = std::min(mn, m); mx = std::max(mx, m); }
             }
           is_int = ai.is_int;
@@ -894,7 +910,14 @@ void provsql_having(
           case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
           case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;
           case AggregationOperator::MAX:   if (cnt == 0) return false; out = mx; return true;
-          default: return false;
+          // choose() is PICKFIRST: the value of the first present contributor,
+          // in the order of the gate's wires (see ChooseAgg).
+          case AggregationOperator::CHOOSE: if (cnt == 0) return false; out = fst; return true;
+          default:
+            // collect admits no other kind: one reaching here would read as
+            // "no value" in every world, so it raises instead.
+            throw CircuitException(
+              "having_semantics: aggregate kind not read per world");
           }
         }
         if (gt == gate_arith) {

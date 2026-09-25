@@ -16,3 +16,20 @@ q|g|p
 choose date|A|0.5000
 choose date|B|0.5000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+choose = max|A|0.5000
+choose = max|B|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+choose < max|A|0.2500
+choose < max|B|0.0000
+(2 rows)
