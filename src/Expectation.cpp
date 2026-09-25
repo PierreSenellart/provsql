@@ -1511,7 +1511,8 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
            * evaluators already carry: the moment is its child's, exactly. */
           if (wires.size() == 1)
             return rec_expectation(gc, wires[0], fp);
-          /* fall through to the sampled group otherwise */
+          /* otherwise, the sampled group below */
+          [[fallthrough]];
         case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
@@ -1673,7 +1674,8 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
            * evaluators already carry: the moment is its child's, exactly. */
           if (wires.size() == 1)
             return rec_variance(gc, wires[0], fp);
-          /* fall through to the sampled group otherwise */
+          /* otherwise, the sampled group below */
+          [[fallthrough]];
         case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
@@ -1851,7 +1853,8 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
            * evaluators already carry: the moment is its child's, exactly. */
           if (wires.size() == 1)
             return rec_raw_moment(gc, wires[0], k, fp);
-          /* fall through to the sampled group otherwise */
+          /* otherwise, the sampled group below */
+          [[fallthrough]];
         case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
