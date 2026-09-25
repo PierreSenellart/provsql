@@ -10747,25 +10747,63 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
       if (exprType((Node *)lfirst(lc)) == constants->OID_TYPE_AGG_TOKEN)
         lfirst(lc) = cast_agg_token_to_type((Node *)lfirst(lc), BOOLOID,
                                             constants);
-  } else if (IsA(result, CoalesceExpr) || IsA(result, MinMaxExpr)) {
-    /* COALESCE(sum(x), 0), GREATEST(count(*), 3): as for CASE, an
-     * agg_token argument under another result type is cast back, or the
-     * executor would read the agg_token datum as a value of that type. */
+  } else if (IsA(result, CoalesceExpr) || IsA(result, MinMaxExpr) ||
+             IsA(result, ArrayExpr)) {
+    /* COALESCE(sum(x), 0), GREATEST(count(*), 3), ARRAY[count(*)]: as for
+     * CASE, an agg_token argument under another result type is cast back, or
+     * the executor would read the agg_token datum as a value of that type --
+     * for an array of a type passed by value, the address of the token, which
+     * ARRAY[count(*)] printed as a number of fourteen digits. */
     List *args;
     Oid type;
     ListCell *lc;
     if (IsA(result, CoalesceExpr)) {
       args = ((CoalesceExpr *)result)->args;
       type = ((CoalesceExpr *)result)->coalescetype;
-    } else {
+    } else if (IsA(result, MinMaxExpr)) {
       args = ((MinMaxExpr *)result)->args;
       type = ((MinMaxExpr *)result)->minmaxtype;
+    } else {
+      args = ((ArrayExpr *)result)->elements;
+      type = ((ArrayExpr *)result)->element_typeid;
     }
     if (type != constants->OID_TYPE_AGG_TOKEN)
       foreach (lc, args)
         if (exprType((Node *)lfirst(lc)) == constants->OID_TYPE_AGG_TOKEN)
           lfirst(lc) = cast_agg_token_to_type((Node *)lfirst(lc), type,
                                               constants);
+  } else if (IsA(result, ScalarArrayOpExpr) || IsA(result, DistinctExpr)) {
+    /* count(*) IN (1, 3), count(*) = ANY(...), count(*) IS DISTINCT FROM 3:
+     * operators, whose operands are read as for any operator -- left out, the
+     * operator of the expression's own type compared the token's address, and
+     * the IN answered false where SQL answers true, with nothing to say so. */
+    if (IsA(result, ScalarArrayOpExpr)) {
+      ScalarArrayOpExpr *sa = (ScalarArrayOpExpr *)result;
+      set_sa_opfuncid(sa);
+      maybe_cast_agg_token_args(sa->args, sa->opfuncid, constants);
+    } else {
+      OpExpr *op = (OpExpr *)result;
+      set_opfuncid(op);
+      maybe_cast_agg_token_args(op->args, op->opfuncid, constants);
+    }
+  } else if (IsA(result, RowExpr) || IsA(result, XmlExpr)) {
+    /* ROW(count(*)), xmlelement(name a, count(*)): fields that take any
+     * value, read in the aggregate's own type, as an "any" parameter reads
+     * one; left alone, the token was printed as its display text,
+     * {"f1":"3 (*)"} where SQL gives {"f1":3}. */
+    List *lists[2];
+    int k;
+    ListCell *lc;
+    lists[0] = IsA(result, RowExpr) ? ((RowExpr *)result)->args
+                                    : ((XmlExpr *)result)->args;
+    lists[1] = IsA(result, XmlExpr) ? ((XmlExpr *)result)->named_args : NIL;
+    for (k = 0; k < 2; ++k)
+      foreach (lc, lists[k])
+        if (IsA(lfirst(lc), FuncExpr) &&
+            ((FuncExpr *)lfirst(lc))->funcid ==
+              constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+          lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)lfirst(lc),
+                                                constants);
   } else if (IsA(result, NullIfExpr)) {
     /* NULLIF(sum(x), 0): the equality it applies decides the casts. */
     NullIfExpr *ni = (NullIfExpr *)result;
@@ -21530,6 +21568,30 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     /* ROW(...) of a subquery's columns (a whole row read as a record): its
      * fields are the values. */
     cast_agg_token_args(((RowExpr *)node)->args, ctx, InvalidOid);
+    return node;
+  }
+  if (IsA(node, ArrayExpr)) {
+    /* ARRAY[c] of a subquery's aggregate column: its elements are values. */
+    cast_agg_token_args(((ArrayExpr *)node)->elements, ctx,
+                        ((ArrayExpr *)node)->element_typeid);
+    return node;
+  }
+  if (IsA(node, ScalarArrayOpExpr)) {
+    /* c IN (1, 3) of a subquery's aggregate column: an operator. */
+    ScalarArrayOpExpr *sa = (ScalarArrayOpExpr *)node;
+    set_sa_opfuncid(sa);
+    cast_agg_token_func_args(sa->args, sa->opfuncid, ctx);
+    return node;
+  }
+  if (IsA(node, DistinctExpr)) {
+    OpExpr *op = (OpExpr *)node;
+    set_opfuncid(op);
+    cast_agg_token_func_args(op->args, op->opfuncid, ctx);
+    return node;
+  }
+  if (IsA(node, XmlExpr)) {
+    cast_agg_token_args(((XmlExpr *)node)->args, ctx, InvalidOid);
+    cast_agg_token_args(((XmlExpr *)node)->named_args, ctx, InvalidOid);
     return node;
   }
   if (IsA(node, CoalesceExpr)) {

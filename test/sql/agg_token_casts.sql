@@ -179,3 +179,39 @@ SELECT remove_provenance('atc_ord');
 DROP TABLE atc_ord;
 SELECT remove_provenance('atc_cast');
 DROP TABLE atc_cast;
+
+-- An aggregate read by an ARRAY constructor, an IN / = ANY, an IS DISTINCT
+-- FROM, a ROW or an XML element is read as the value on the data as it is,
+-- with the report.  Those nodes were left out of the casts, and the token's
+-- datum was read as a value of the node's type: ARRAY[count(*)] held the
+-- token's ADDRESS, a number of fourteen digits (difftest's dba/337610 divided
+-- by one), count(*) IN (1, 3) compared that address and answered false, and a
+-- ROW printed the token's display text.  Each row below is plain SQL's, the
+-- second the same expressions with the rewriting off; the same through a
+-- subquery's aggregate column.
+CREATE TABLE atc_arr(a int);
+INSERT INTO atc_arr VALUES (1), (2), (3);
+SELECT add_provenance('atc_arr');
+SELECT (ARRAY[count(*)])[1] AS elem, ARRAY[count(*), sum(a)] AS arr,
+       (ARRAY[count(*), count(*) FILTER (WHERE a > 1)])[2] * 100
+         / (ARRAY[count(*), count(*) FILTER (WHERE a > 1)])[1] AS pct,
+       count(*) IN (1, 3) AS in_list, count(*) = ANY(ARRAY[1, 3]) AS any_arr,
+       count(*) IS DISTINCT FROM 3 AS distinct_from,
+       row_to_json(ROW(count(*), sum(a))) AS row_json,
+       xmlelement(name a, count(*))::text AS xml
+FROM atc_arr;
+SET provsql.active = off;
+SELECT (ARRAY[count(*)])[1] AS elem, ARRAY[count(*), sum(a)] AS arr,
+       (ARRAY[count(*), count(*) FILTER (WHERE a > 1)])[2] * 100
+         / (ARRAY[count(*), count(*) FILTER (WHERE a > 1)])[1] AS pct,
+       count(*) IN (1, 3) AS in_list, count(*) = ANY(ARRAY[1, 3]) AS any_arr,
+       count(*) IS DISTINCT FROM 3 AS distinct_from,
+       row_to_json(ROW(count(*), sum(a))) AS row_json,
+       xmlelement(name a, count(*))::text AS xml
+FROM atc_arr;
+SET provsql.active = on;
+SELECT ARRAY[c, s] AS arr, c IN (1, 3) AS in_list,
+       c IS DISTINCT FROM 3 AS distinct_from
+FROM (SELECT count(*) AS c, sum(a) AS s FROM atc_arr) z;
+SELECT remove_provenance('atc_arr');
+DROP TABLE atc_arr;
