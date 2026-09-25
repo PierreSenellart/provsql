@@ -8,8 +8,9 @@ toc_sticky: true
 ---
 
 Slides of talks and tutorials about ProvSQL and the provenance theory
-it builds on. Slides of talks that present a specific paper are also
-linked from the [publications](/publications/) page.
+it builds on, by Pierre Senellart unless another speaker is named.
+Slides of talks that present a specific paper are also linked from the
+[publications](/publications/) page.
 
 {% assign kinds = "outreach|tutorial|research" | split: "|" %}
 {% for kind in kinds %}
@@ -32,7 +33,7 @@ Talks on the design of ProvSQL and on the research it embodies.
 {% for talk in talks %}
 ### {{ talk.title }}
 
-*{{ talk.venue }}, {{ talk.date | date: "%-d %B %Y" }}*{% if talk.language == "fr" %} – in French{% endif %}
+*{% if talk.speaker %}Presented by {{ talk.speaker }}. {% endif %}{{ talk.venue }}, {% if talk.month_only %}{{ talk.date | date: "%B %Y" }}{% else %}{{ talk.date | date: "%-d %B %Y" }}{% endif %}*{% if talk.language == "fr" %} – in French{% endif %}
 
 {{ talk.description }}
 

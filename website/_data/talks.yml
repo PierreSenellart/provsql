@@ -4,7 +4,9 @@
 # Fields: title, date (YYYY-MM-DD), kind (outreach | tutorial | research),
 # venue, slides (URL), description; optional: language (ISO code, when not
 # English), paper_pdf, paper_doi, video, and also (a list of {venue, date,
-# slides} for later or earlier deliveries of the same talk).
+# slides} for later or earlier deliveries of the same talk), speaker (when
+# not Pierre Senellart), and month_only (true when only the month of the
+# talk is known; the date then carries the first day of that month).
 
 - title: "D'où viennent les données ? La science de la provenance"
   date: 2026-09-25
@@ -13,6 +15,16 @@
   venue: "La Nuit des données, École normale supérieure, Paris"
   slides: "https://pierre.senellart.com/talks/nuit-20260925.pdf"
   description: "A general-audience talk, in French, on why the numbers we read come with no trace of how they were produced, and what data provenance can do about it. From crowd-count estimates and spreadsheet errors to the semiring view of provenance, probabilities, and the Shapley value, with ProvSQL and ProvSQL Studio shown at work."
+
+- title: "ProvSQL: A General System for Keeping Track of the Provenance and Probability of Data"
+  date: 2026-05-01
+  month_only: true
+  kind: research
+  speaker: "Aryak Sen"
+  venue: "IEEE International Conference on Data Engineering (ICDE), Montréal"
+  slides: "https://pierre.senellart.com/publications/sen2026provsql_slides.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/sen2026provsql.pdf"
+  description: "The ICDE 2026 system paper: semiring provenance, its implementation in ProvSQL, and benchmarks of provenance tracking and probability computation."
 
 - title: "Provenance of HAVING Queries in Semirings with Monus"
   date: 2026-08-12
@@ -43,6 +55,17 @@
   paper_pdf: "https://pierre.senellart.com/publications/senellart2024impact.pdf"
   paper_doi: "10.4230/OASICS.TANNEN.9"
   description: "How the provenance semiring framework of Green, Karvounarakis, and Tannen shaped the design of ProvSQL, from its origins in 2016 to its state in 2024."
+
+- title: "Expected Shapley-Like Scores of Boolean Functions: Complexity and Applications to Probabilistic Databases"
+  date: 2024-06-01
+  month_only: true
+  kind: research
+  speaker: "Pratik Karmakar"
+  venue: "ACM Symposium on Principles of Database Systems (PODS), Santiago, Chile"
+  slides: "https://pierre.senellart.com/publications/karmakar2024expected_slides.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/karmakar2024expected.pdf"
+  paper_doi: "10.1145/3651593"
+  description: "The conference presentation of the paper: complexity of expected Shapley-like scores over probabilistic databases, and experiments with their computation in ProvSQL."
 
 - title: "Expected Shapley-Like Scores of Boolean Functions: Complexity and Applications to Probabilistic Databases"
   date: 2024-01-18
@@ -125,3 +148,13 @@
     - venue: "Valda seminar, École normale supérieure, Paris"
       date: 2017-02-10
       slides: "https://pierre.senellart.com/talks/valda-20170210.pdf"
+
+- title: "Provenance Circuits for Trees and Treelike Instances"
+  date: 2015-07-10
+  kind: research
+  speaker: "Antoine Amarilli"
+  venue: "International Colloquium on Automata, Languages, and Programming (ICALP), Kyoto"
+  slides: "https://pierre.senellart.com/publications/amarilli2015provenance_slides.pdf"
+  paper_pdf: "https://pierre.senellart.com/publications/amarilli2015provenance.pdf"
+  paper_doi: "10.1007/978-3-662-47666-6_5"
+  description: "Provenance circuits for queries over trees and treelike instances, a foundation of ProvSQL's circuit representation of provenance and of its tree-decomposition route to probability computation."
