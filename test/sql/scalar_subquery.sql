@@ -1567,3 +1567,23 @@ DROP TABLE dsr_r;
 SELECT remove_provenance('dsr');
 SELECT remove_provenance('dss');
 DROP TABLE dsr, dss;
+
+-- A body whose value is an expression over its aggregate (TPC-H Q17 and Q20:
+-- l_quantity < (SELECT 0.2 * avg(l_quantity) ... WHERE l_partkey = p_partkey))
+-- is one row in every world, as a bare aggregate is, and is read the same way.
+-- Key 1 holds x = 2, 5, 9 at one half each: row 1 is below 0.8 times the mean
+-- of its key where 5 or 9 is there beside it (0.375), row 2 where 9 is and 2
+-- is not (0.125); row 3, and the rows of key 2, never are (row 4 shows with
+-- probability 0, which is the same).
+CREATE TABLE qe(id int, k int, x int);
+INSERT INTO qe VALUES (1, 1, 2), (2, 1, 5), (3, 1, 9), (4, 2, 4), (5, 2, 6);
+SELECT add_provenance('qe');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM qe; END $$;
+CREATE TABLE qe_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM qe a WHERE a.x < (SELECT 0.8 * avg(x) FROM qe b WHERE b.k = a.k);
+SELECT remove_provenance('qe_r');
+SELECT id, p FROM qe_r ORDER BY id;
+DROP TABLE qe_r;
+SELECT remove_provenance('qe');
+DROP TABLE qe;

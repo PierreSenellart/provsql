@@ -20015,7 +20015,9 @@ static Query *oj_lateral_body(const constants_t *constants, Query *sub) {
     return NULL;
 
   if (sub->hasAggs) {
-    if (!IsA(vte->expr, Aggref) || sub->distinctClause || sub->limitCount)
+    /* A scalar aggregation, whose value is its aggregate or an expression
+     * over its aggregates: one row in every world, as the subquery gives. */
+    if (sub->distinctClause || sub->limitCount)
       return NULL;
     return (Query *)copyObject(sub);
   }
@@ -20178,6 +20180,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
   bool coalesce = false; /* >1 target-list sublinks sharing one (Q, corr) */
   bool nested_in_tl = false; /* the lone sublink is nested in target-list arithmetic */
+  bool agg_expr_body = false; /* the body's value is an expression over its aggregates */
   List *co_sls = NIL, *co_tes = NIL; /* parallel: each sublink + its target entry */
   Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
@@ -20324,9 +20327,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     if (nreal != 1 || ((TargetEntry *)linitial(sub->targetList))->resjunk)
       return false;
   }
-  if (sub->hasAggs &&
-      !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref))
-    return false; /* aggregate body must be a single bare aggregate */
+  /* An expression over the body's aggregates (0.2 * avg(x)) is one row too,
+   * which the LATERAL subquery below takes as it is; the join further down
+   * needs a bare aggregate. */
+  agg_expr_body = sub->hasAggs &&
+    !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref);
   is_agg_body = sub->hasAggs;
   if (!sub->jointree || sub->jointree->fromlist == NIL)
     return false;
@@ -20345,8 +20350,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     rc.constants = constants;
     rc.outer = q;
     rc.depth = 0;
-    if (query_tree_walker(sub, reads_outer_aggregate_walker, &rc, 0))
+    if (query_tree_walker(sub, reads_outer_aggregate_walker, &rc, 0)) {
+      if (agg_expr_body)
+        return false;
       goto join;
+    }
   }
   if (coalesce) {
     List *bodies = NIL;
