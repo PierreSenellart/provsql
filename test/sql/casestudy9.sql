@@ -70,7 +70,8 @@ SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
 -- Step 6: on target, compared with the region's target, a grouping column
--- (North true 0.5490, false 0.4440; the unknown rows hold in no world).
+-- (North true 0.5490, false 0.4440).  The target and the amounts are NOT
+-- NULL, so the comparison is never unknown, and there is no unknown row.
 CREATE TABLE cs9_r AS
   SELECT d.region, sum(d.amount) >= r.target AS on_target,
          round(probability_evaluate(provenance())::numeric, 4) AS p

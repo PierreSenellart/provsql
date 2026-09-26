@@ -271,6 +271,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
+static bool has_outer_join_walker(Node *node, void *data);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
 static bool is_inert_subselect(Query *q);
@@ -23055,10 +23056,6 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
     }
     if (!ok)
       return false;
-    /* A column of the group can be NULL, which makes the comparison unknown
-     * whatever the aggregate: the unknown row is needed then too. */
-    if (contain_vars_of_level(other, 0))
-      can_be_null = true;
     if (agg_out != NULL)
       *agg_out = ar;
     if (nullable != NULL)
@@ -23076,7 +23073,40 @@ typedef struct agg_cmp_truth_ctx {
   bool nullable;     /**< Whether the comparison can be unknown. */
   const constants_t *constants; /**< To recognise @c plain(). */
   Node *other;       /**< What the aggregate is compared with. */
+  bool other_nullable; /**< Whether that can be NULL (a column of the group). */
 } agg_cmp_truth_ctx;
+
+/**
+ * @brief Settle whether the comparison found can be unknown, now that the
+ *        query is known.
+ *
+ * It is unknown where the aggregate has no value or what it is compared with
+ * is NULL, and each can be ruled out: a column declared NOT NULL is never
+ * NULL, and in a grouped block, whose group has a row, a sum, an average, a
+ * minimum or a maximum without FILTER has a value whenever its argument is
+ * such a column.  Neither holds under an outer join, which pads columns with
+ * NULLs, nor, for the aggregate, without GROUP BY, where the world without
+ * rows still has the row of the aggregation.  Where the unknown row is ruled
+ * out it is not built at all: it would hold in no world.
+ */
+static void agg_cmp_settle_nullability(agg_cmp_truth_ctx *found, Query *q,
+                                       bool grouped) {
+  bool outer = q->jointree != NULL &&
+               has_outer_join_walker((Node *)q->jointree->fromlist, NULL);
+  bool agg_nullable = found->nullable;
+
+  if (found->agg == NULL)
+    return;                     /* a null test: two truths only */
+  if (agg_nullable && grouped && !outer && found->agg->aggfilter == NULL &&
+      list_length(found->agg->args) == 1 &&
+      expr_provably_not_null(
+        (Node *)((TargetEntry *)linitial(found->agg->args))->expr, q, 0))
+    agg_nullable = false;
+  found->other_nullable =
+    found->other != NULL && contain_vars_of_level(found->other, 0) &&
+    (outer || !expr_provably_not_null(found->other, q, 0));
+  found->nullable = agg_nullable || found->other_nullable;
+}
 
 /**
  * @brief The condition of the unknown row of a comparison's truth: the
@@ -23089,7 +23119,7 @@ static Node *agg_cmp_unknown_condition(const agg_cmp_truth_ctx *found) {
   anull->nulltesttype = IS_NULL;
   anull->argisrow = false;
   anull->location = -1;
-  if (found->other != NULL && contain_vars_of_level(found->other, 0)) {
+  if (found->other_nullable) {
     NullTest *onull = makeNode(NullTest);
     onull->arg = (Expr *)copyObject(found->other);
     onull->nulltesttype = IS_NULL;
@@ -23189,7 +23219,7 @@ static Node *agg_cmp_subst_mutator(Node *n, void *context) {
  */
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false};
   agg_cmp_subst_ctx subst;
   ListCell *lc;
   RangeTblEntry *rte;
@@ -23222,6 +23252,7 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
   if (found.found == NULL)
     return NULL;
   cmp = found.found;
+  agg_cmp_settle_nullability(&found, q, true);
 
   /* --- unnest(ARRAY[true, false]) AS b --- */
   two = makeNode(ArrayExpr);
@@ -23361,7 +23392,7 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
  */
 static Query *rewrite_explode_scalar_agg_cmp_truth(
   Query *q, const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false};
   List *arms = NIL;
   ListCell *lc;
   Node *cmp;
@@ -23382,6 +23413,7 @@ static Query *rewrite_explode_scalar_agg_cmp_truth(
   if (found.found == NULL)
     return NULL;
   cmp = found.found;
+  agg_cmp_settle_nullability(&found, q, false);
 
   for (i = 0; i < (found.nullable ? 3 : 2); ++i) {
     Query *arm = copyObject(q);

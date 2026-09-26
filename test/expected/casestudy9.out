@@ -55,14 +55,11 @@ remove_provenance
 region|on_target|p
 North|false|0.4440
 North|true|0.5490
-North|unknown|0.0000
 South|false|0.4140
 South|true|0.5788
-South|unknown|0.0000
 West|false|0.4000
 West|true|0.5680
-West|unknown|0.0000
-(9 rows)
+(6 rows)
 remove_provenance
 
 (1 row)

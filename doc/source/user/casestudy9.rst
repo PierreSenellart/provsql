@@ -212,9 +212,8 @@ The comparison has one truth value per world, so each region comes out
 once per truth value, with its probability: North meets its target of 150
 with probability 0.5490 and misses it with probability 0.4440. The two do
 not add up to 1: in the remaining worlds, North closes nothing and has no
-row. The rows with an empty ``on_target`` are the case where the
-comparison is unknown (a ``NULL`` target), at probability 0 here: no world
-holds them.
+row. A ``NULL`` target would make the comparison unknown, in a row of its
+own; the targets are declared ``NOT NULL``, so there is none.
 
 
 Step 7: The Share of Big Deals
