@@ -180,5 +180,21 @@ SET provsql.active = on;
 SELECT p.id FROM nsp AS p
  WHERE p.answers IN (SELECT count(*) FROM nsp AS p3 WHERE p3.id IN
                       (SELECT count(*) FROM nsp WHERE p.kind = 99));
+-- An inner body with nothing to lift, its WHERE a conjunction of conditions on
+-- its own relation: left as it is.  The list of that conjunction is the body's
+-- own, and freeing it after finding nothing to move corrupted the query,
+-- "stack depth limit exceeded" (difftest's sede/61fe6a7cda).  Only row 2 is
+-- accepted, of kind 1: each row of kind 1 is there with its own row and row 2,
+-- 0.25, and row 2 alone, 0.5.
+CREATE TABLE nsp_r AS
+  SELECT p.id, round(probability_evaluate(provenance())::numeric, 6) AS pr
+  FROM nsp AS p
+  WHERE p.kind IN (SELECT kind FROM nsp AS p2
+                    WHERE p2.id IN (SELECT p3.id FROM nsp AS p3
+                                     WHERE p3.kind = 1
+                                       AND p3.accepted IS NOT NULL));
+SELECT remove_provenance('nsp_r');
+SELECT id, pr FROM nsp_r ORDER BY id;
+DROP TABLE nsp_r;
 SELECT remove_provenance('nsp');
 DROP TABLE nsp;

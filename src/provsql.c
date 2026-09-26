@@ -16775,10 +16775,10 @@ static bool lift_body_outer_only_conjuncts(Query *sub) {
       lifted = lappend(lifted, bc);
       moved_here = true;
     }
-    if (!moved_here) {
-      list_free(bconjs);
+    /* bconjs is the body's own AND argument list (make_ands_implicit does
+     * not copy it): it stays in the tree, and is not freed. */
+    if (!moved_here)
       continue;
-    }
     body->jointree->quals =
       bkeep == NIL ? NULL : (Node *)make_ands_explicit(bkeep);
     any = true;
