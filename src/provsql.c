@@ -10614,6 +10614,22 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
 }
 
 /**
+ * @brief Walker: a conditional over an aggregate -- a @c CASE, @c COALESCE,
+ *        @c NULLIF, @c GREATEST or @c LEAST -- which @c rewrite_agg_cases
+ *        lowers to an @c agg_case after @c cast_agg_token_mutator has run.
+ */
+static bool pending_agg_case_walker(Node *n, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (n == NULL)
+    return false;
+  if ((IsA(n, CaseExpr) || IsA(n, CoalesceExpr) || IsA(n, NullIfExpr) ||
+       IsA(n, MinMaxExpr)) &&
+      expr_contains_agg(n, constants))
+    return true;
+  return expression_tree_walker(n, pending_agg_case_walker, cx);
+}
+
+/**
  * @brief Tree-mutator that casts @c provenance_aggregate results back
  *        to the original aggregate return type where needed.
  *
@@ -10630,22 +10646,6 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
  * @param ctx  Pointer to the @c constants_t OID cache.
  * @return     Possibly modified node.
  */
-/**
- * @brief Walker: a conditional over an aggregate -- a @c CASE, @c COALESCE,
- *        @c NULLIF, @c GREATEST or @c LEAST -- which @c rewrite_agg_cases
- *        lowers to an @c agg_case after @c cast_agg_token_mutator has run.
- */
-static bool pending_agg_case_walker(Node *n, void *cx) {
-  const constants_t *constants = (const constants_t *)cx;
-  if (n == NULL)
-    return false;
-  if ((IsA(n, CaseExpr) || IsA(n, CoalesceExpr) || IsA(n, NullIfExpr) ||
-       IsA(n, MinMaxExpr)) &&
-      expr_contains_agg(n, constants))
-    return true;
-  return expression_tree_walker(n, pending_agg_case_walker, cx);
-}
-
 static Node *cast_agg_token_mutator(Node *node, void *ctx) {
   const constants_t *constants = (const constants_t *)ctx;
   Node *result;
