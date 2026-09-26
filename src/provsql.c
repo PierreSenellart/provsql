@@ -5708,6 +5708,16 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
     if (peeled != NULL)
       node = peeled;
   }
+  /* An aggregate column of a subquery, whose call is not at hand: its gate
+   * holds the rows with a value, which says when it is NULL
+   * (agg_token_null_event). */
+  if (IsA(node, Var) && exprType(node) == constants->OID_TYPE_AGG_TOKEN &&
+      OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_NULL_EVENT))
+    return makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_NULL_EVENT,
+                        constants->OID_TYPE_UUID,
+                        list_make2(copyObject(node),
+                                   makeBoolConst(want_null, false)),
+                        InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
   /* A CASE the query wrote, in HAVING, where nothing has lowered it yet: it is
    * the same expression once lowered, and then an agg_case like any other. */
   {
@@ -21435,6 +21445,15 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
  * @param constants  Extension OID cache.
  * @return  True if all leaves are supported, false if any is not.
  */
+/** @brief Whether @p nt is an IS [NOT] NULL on an aggregate column of a
+ *  subquery, which agg_token_null_event reads. */
+static bool nulltest_on_agg_column(NullTest *nt, const constants_t *constants) {
+  Node *arg = strip_agg_cast((Node *)nt->arg);
+  return OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_NULL_EVENT) &&
+         arg != NULL && IsA(arg, Var) &&
+         exprType(arg) == constants->OID_TYPE_AGG_TOKEN;
+}
+
 static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constants)
 {
   ListCell *lc;
@@ -21452,6 +21471,9 @@ static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constan
         return false;
     } else if(IsA(n, BoolExpr)) {
       if(!check_boolexpr_on_aggregate((BoolExpr*) n, constants))
+        return false;
+    } else if(IsA(n, NullTest)) {
+      if(!nulltest_on_agg_column((NullTest *)n, constants))
         return false;
     } else
       return false;
@@ -21476,10 +21498,10 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
   case T_NullTest:
     /* A pushable IS [NOT] NULL never reaches here: it was moved into the
      * subquery that owns the aggregate before provenance discovery (see
-     * push_agg_nulltest_into_subquery).  One that arrives is a shape the
-     * pushdown declined -- under an OR or a NOT, say -- so it is reported as
-     * unsupported rather than as an unrecognised node. */
-    return false;
+     * push_agg_nulltest_into_subquery).  One that arrives -- under an OR or a
+     * NOT, or in the rank of a row compared with another -- is read on the
+     * aggregate column by agg_token_null_event. */
+    return nulltest_on_agg_column((NullTest *)expr, constants);
   default:
     /* Another form of condition (3 = ANY(array_agg(x)), ...): unsupported */
     return false;
@@ -24062,6 +24084,61 @@ static bool explode_setop_arms(Query *q, const constants_t *constants, Node *n,
  * @param cols        The columns to explode, at least one.
  * @return  @p q, or @c NULL where the shape is not one this can rewrite.
  */
+/** @brief Whether @p arg, the argument of an aggregate of @p sub, is never
+ *  NULL: a constant, a column of a base relation declared NOT NULL, a CASE
+ *  or a COALESCE whose results are such.  A group of rows then always has a
+ *  value, and its aggregate is never NULL. */
+static bool agg_arg_not_null(Query *sub, Node *arg) {
+  Var *v;
+  RangeTblEntry *r;
+  HeapTuple tp;
+  bool notnull = false;
+
+  arg = strip_implicit_coercions(arg);
+  if (arg == NULL)
+    return false;
+  if (IsA(arg, Const))
+    return !((Const *)arg)->constisnull;
+  if (IsA(arg, CaseExpr)) {
+    /* Every branch, and the default, which a CASE without ELSE lacks */
+    CaseExpr *ce = (CaseExpr *)arg;
+    ListCell *lc;
+    if (ce->defresult == NULL || !agg_arg_not_null(sub, (Node *)ce->defresult))
+      return false;
+    foreach (lc, ce->args)
+      if (!agg_arg_not_null(sub, (Node *)((CaseWhen *)lfirst(lc))->result))
+        return false;
+    return true;
+  }
+  if (IsA(arg, CoalesceExpr))
+    return agg_arg_not_null(sub,
+                            (Node *)llast(((CoalesceExpr *)arg)->args));
+  if (!IsA(arg, Var) || ((Var *)arg)->varlevelsup != 0)
+    return false;
+  v = (Var *)arg;
+  if (v->varno < 1 || v->varno > (Index)list_length(sub->rtable) ||
+      v->varattno <= 0)
+    return false;
+  r = rt_fetch(v->varno, sub->rtable);
+  if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
+    /* A column of a subquery: a count is never NULL */
+    TargetEntry *te = get_tle_by_resno(r->subquery->targetList, v->varattno);
+    Node *e = te != NULL ? strip_agg_cast((Node *)te->expr) : NULL;
+    return e != NULL && IsA(e, Aggref) &&
+           (((Aggref *)e)->aggfnoid == F_COUNT_ ||
+            ((Aggref *)e)->aggfnoid == F_COUNT_ANY);
+  }
+  if (r->rtekind != RTE_RELATION)
+    return false;
+  tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(r->relid),
+                       Int16GetDatum(v->varattno));
+  if (HeapTupleIsValid(tp)) {
+    notnull = ((Form_pg_attribute)GETSTRUCT(tp))->attnotnull;
+    ReleaseSysCache(tp);
+  }
+  return notnull;
+}
+
 static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
                                          Index rteid, List *cols) {
   RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
@@ -24112,8 +24189,10 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
      * aggregation over the whole table gives its row in every world, including
      * the one holding none of its rows, and there its sum (minimum, maximum,
      * choice) is NULL -- a value of the aggregate like any other, which the rows
-     * of the explosion have to hold.  A count is 0 rather than NULL there, and a
-     * grouped aggregation has no row at all, so neither needs it.
+     * of the explosion have to hold.  So is a group whose rows are there with
+     * a NULL argument, all of them: its sum is NULL too, and a dense_rank()
+     * counting the values of a key missed that one.  A count is 0 rather than
+     * NULL, and needs none.
      *
      * The row of that value is annotated by "no row contributes", which is the
      * comparison count(arg) = 0 over the same argument: a companion count is
@@ -24122,7 +24201,6 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
       Node *aggnode = strip_agg_cast((Node *)c->agg_te->expr);
 
       if (aggnode != NULL && IsA(aggnode, Aggref) &&
-          src_rte->subquery->groupClause == NIL &&
           src_rte->subquery->groupingSets == NIL) {
         Aggref *ar = (Aggref *)aggnode;
         char *name = get_func_name(ar->aggfnoid);
@@ -24130,7 +24208,10 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
         if (name != NULL &&
             (strcmp(name, "sum") == 0 || strcmp(name, "min") == 0 ||
              strcmp(name, "max") == 0 || strcmp(name, "choose") == 0) &&
-            list_length(ar->args) == 1 && !ar->aggstar) {
+            list_length(ar->args) == 1 && !ar->aggstar &&
+            !(src_rte->subquery->groupClause != NIL &&
+              agg_arg_not_null(src_rte->subquery,
+                               (Node *)((TargetEntry *)linitial(ar->args))->expr))) {
           TargetEntry *arg = (TargetEntry *)linitial(ar->args);
           Aggref *cnt = makeNode(Aggref);
 
@@ -24177,12 +24258,25 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
     char *alias_name = psprintf("%s%d", PROVSQL_EXPLODE_ALIAS,
                                 (int)c->varno - 1);
 
-    possible = makeFuncExpr(
-      constants->OID_FUNCTION_AGG_POSSIBLE_VALUES, TEXTARRAYOID,
-      list_make2(makeVar(1, c->agg_te->resno, c->value_type, c->typmod,
-                         c->coll, 0),
-                 makeBoolConst(c->nullable_count != NULL, false)),
-      InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    {
+      /* NULL is a value where no row contributes: always so over the whole
+       * table (the world holding none of its rows), and for a group only if
+       * one of its rows has no value, which its companion count says. */
+      Node *with_null = (Node *)makeBoolConst(c->nullable_count != NULL, false);
+      if (c->nullable_count != NULL &&
+          src_rte->subquery->groupClause != NIL &&
+          OidIsValid(constants->OID_FUNCTION_AGG_COUNT_CAN_BE_ZERO))
+        with_null = (Node *)makeFuncExpr(
+          constants->OID_FUNCTION_AGG_COUNT_CAN_BE_ZERO, BOOLOID,
+          list_make1(makeVar(1, c->cnt_resno, INT8OID, -1, InvalidOid, 0)),
+          InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+      possible = makeFuncExpr(
+        constants->OID_FUNCTION_AGG_POSSIBLE_VALUES, TEXTARRAYOID,
+        list_make2(makeVar(1, c->agg_te->resno, c->value_type, c->typmod,
+                           c->coll, 0),
+                   with_null),
+        InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    }
     /* An aggregate with no contribution at all -- one whose WHERE keeps no row
      * -- has no value in any world: SQL gives the row with NULL, and its token
      * is NULL, on which agg_possible_values (strict) gives NULL.  Unnesting
@@ -28284,8 +28378,9 @@ static Node *rank_key_before(rank_window_ctx *ctx, SortGroupClause *k) {
   rank_key_vars(ctx, k, &inner, &outer);
   lt = (Node *)make_opclause(k->sortop, BOOLOID, false, (Expr *)inner,
                              (Expr *)outer, InvalidOid, inner->varcollid);
-  if (rank_key_is_aggregate(ctx, k))
-    return lt;
+  /* An aggregate NULL in a world -- a sum over values that are all NULL --
+   * sorts where the ORDER BY puts NULLs, as a NULL of the data does: the
+   * IS NULL of an aggregate column has a reading, the one a WHERE on it has. */
   {
     NullTest *in_null = makeNode(NullTest), *out_null = makeNode(NullTest);
 
@@ -28309,10 +28404,23 @@ static Node *rank_key_same(rank_window_ctx *ctx, SortGroupClause *k) {
 
   rank_key_vars(ctx, k, &inner, &outer);
   if (rank_key_is_aggregate(ctx, k)) {
+    /* Equal, or both NULL: two NULL aggregates are peers, as two NULLs of the
+     * data are. */
+    NullTest *in_null = makeNode(NullTest), *out_null = makeNode(NullTest);
+    Node *eq;
     if (!OidIsValid(k->eqop))
       return NULL;
-    return (Node *)make_opclause(k->eqop, BOOLOID, false, (Expr *)inner,
-                                 (Expr *)outer, InvalidOid, inner->varcollid);
+    eq = (Node *)make_opclause(k->eqop, BOOLOID, false, (Expr *)inner,
+                               (Expr *)outer, InvalidOid, inner->varcollid);
+    in_null->arg = (Expr *)copyObject(inner);
+    out_null->arg = (Expr *)copyObject(outer);
+    in_null->nulltesttype = out_null->nulltesttype = IS_NULL;
+    in_null->argisrow = out_null->argisrow = false;
+    in_null->location = out_null->location = -1;
+    return (Node *)makeBoolExpr(
+      OR_EXPR,
+      list_make2(eq, makeBoolExpr(AND_EXPR, list_make2(in_null, out_null), -1)),
+      -1);
   }
   return (Node *)make_null_safe_equality((Expr *)inner, (Expr *)outer,
                                          inner->vartype, inner->varcollid,
@@ -28682,15 +28790,40 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
                              exprTypmod((Node *)key_te->expr),
                              exprCollation((Node *)key_te->expr), 0);
     Var *key_outer = (Var *)copyObject(key_te->expr);
+    NullTest *in_null = makeNode(NullTest), *out_null = makeNode(NullTest);
+    NullTest *in_isnull = makeNode(NullTest), *out_isnull = makeNode(NullTest);
     key_outer->varlevelsup = 1;
     before = (Node *)make_opclause(sgc->sortop, BOOLOID, false,
                                    (Expr *)key_inner, (Expr *)key_outer,
                                    InvalidOid,
                                    exprCollation((Node *)key_inner));
+    /* A NULL key -- an aggregate NULL in a world -- is a key of its own, and
+     * sorts where the ORDER BY puts NULLs */
+    in_null->arg = (Expr *)copyObject(key_inner);
+    in_null->nulltesttype = sgc->nulls_first ? IS_NULL : IS_NOT_NULL;
+    out_null->arg = (Expr *)copyObject(key_outer);
+    out_null->nulltesttype = sgc->nulls_first ? IS_NOT_NULL : IS_NULL;
+    in_null->argisrow = out_null->argisrow = false;
+    in_null->location = out_null->location = -1;
+    before = (Node *)makeBoolExpr(
+      OR_EXPR,
+      list_make2(before, makeBoolExpr(AND_EXPR, list_make2(in_null, out_null),
+                                      -1)),
+      -1);
     same = (Node *)make_opclause(eqop, BOOLOID, false,
                                  (Expr *)copyObject(key_inner),
                                  (Expr *)copyObject(key_outer), InvalidOid,
                                  exprCollation((Node *)key_inner));
+    in_isnull->arg = (Expr *)copyObject(key_inner);
+    out_isnull->arg = (Expr *)copyObject(key_outer);
+    in_isnull->nulltesttype = out_isnull->nulltesttype = IS_NULL;
+    in_isnull->argisrow = out_isnull->argisrow = false;
+    in_isnull->location = out_isnull->location = -1;
+    same = (Node *)makeBoolExpr(
+      OR_EXPR,
+      list_make2(same, makeBoolExpr(AND_EXPR,
+                                    list_make2(in_isnull, out_isnull), -1)),
+      -1);
     quals = lappend(quals, makeBoolExpr(OR_EXPR, list_make2(before, same), -1));
   }
   sub->jointree = makeFromExpr(list_make1(rtr),

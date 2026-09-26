@@ -114,3 +114,20 @@ pid|r
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+dense_rank ASC NULLS FIRST|1|0.375000
+dense_rank ASC NULLS FIRST|2|0.625000
+dense_rank ASC NULLS FIRST|3|0.031250
+rank DESC|1|0.437500
+rank DESC|2|0.312500
+rank DESC|3|0.281250
+(6 rows)
+remove_provenance
+
+(1 row)

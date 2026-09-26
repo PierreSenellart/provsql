@@ -148,7 +148,7 @@ INTERNAL_FUNCTIONS = {
     'true_nonzero',
     # Window ranks: built by the rewriter for rank() / dense_rank() /
     # row_number() over tracked relations, never called by users.
-    'row_number_as_rank', 'ntile_as_rank', 'window_distinct_tokens', 'plain_truth', 'agg_token_plain_text',
+    'row_number_as_rank', 'ntile_as_rank', 'agg_token_null_event', 'agg_gate_null_event', 'agg_count_can_be_zero', 'window_distinct_tokens', 'plain_truth', 'agg_token_plain_text',
     'agg_token_frozen_value', 'agg_token_explode_children',
     'agg_possible_values',
     'agg_gate_value_missing',

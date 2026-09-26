@@ -183,4 +183,33 @@ DROP TABLE ro_cr;
 SELECT remove_provenance('ro_c');
 DROP TABLE ro_c;
 
+-- A rank by an aggregate that is NULL in some world (a sum over values that
+-- are all NULL): the NULL sorts where the ORDER BY puts NULLs, first under
+-- DESC and last under ASC, and two NULLs tie, as SQL has it.  The comparison
+-- alone left the NULL out, silently (difftest's W21: under DESC, 3 came first
+-- beside a NULL).  Rows at one half; the probabilities of rank 1 are those of
+-- the enumeration of the 32 worlds.
+CREATE TABLE ro_n(id int, k int, x int);
+INSERT INTO ro_n VALUES (1, 1, NULL), (2, 1, 4), (3, 2, 3), (4, 2, NULL),
+                        (5, 3, 5);
+SELECT add_provenance('ro_n');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ro_n; END $$;
+CREATE TABLE ro_nr AS
+  SELECT 'rank DESC' AS q, k,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT k, rank() OVER (ORDER BY s DESC) AS r
+        FROM (SELECT k, sum(x) AS s FROM ro_n GROUP BY k) d) z
+  WHERE r = 1
+  UNION ALL
+  SELECT 'dense_rank ASC NULLS FIRST', k,
+         round(probability_evaluate(provenance())::numeric, 6)
+  FROM (SELECT k, dense_rank() OVER (ORDER BY s ASC NULLS FIRST) AS r
+        FROM (SELECT k, sum(x) AS s FROM ro_n GROUP BY k) d) z
+  WHERE r = 1;
+SELECT remove_provenance('ro_nr');
+SELECT q, k, p FROM ro_nr ORDER BY q, k;
+DROP TABLE ro_nr;
+SELECT remove_provenance('ro_n');
+DROP TABLE ro_n;
+
 DROP TABLE ro;

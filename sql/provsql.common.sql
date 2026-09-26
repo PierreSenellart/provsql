@@ -7976,6 +7976,105 @@ CREATE OR REPLACE FUNCTION ntile_as_rank(bucket agg_token, sql_bucket bigint)
   AS 'provsql','ntile_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
+ * @brief The event that an aggregate result is NULL, or is not (internal)
+ *
+ * Called by the query rewriter for an <tt>IS [NOT] NULL</tt> on an aggregate
+ * column of a subquery, where the aggregate's own call is not at hand.  A
+ * row whose value is NULL contributes nothing to the aggregate's gate, so,
+ * the row of the aggregate being there, its value is NULL exactly when none
+ * of the rows its gate holds is: <tt>1 ⊖ ⊕K</tt> over their tokens, and
+ * <tt>⊕K</tt> for IS NOT NULL.  A NULL @p aggtok (a padded row) is NULL.
+ *
+ * @param aggtok the aggregate result
+ * @param want_null true for IS NULL, false for IS NOT NULL
+ */
+CREATE OR REPLACE FUNCTION agg_token_null_event(aggtok agg_token, want_null boolean)
+  RETURNS uuid AS
+$$
+DECLARE
+  g uuid;
+  p uuid;
+BEGIN
+  IF aggtok IS NULL THEN
+    RETURN CASE WHEN want_null THEN provsql.gate_one() ELSE provsql.gate_zero() END;
+  END IF;
+  RETURN provsql.agg_gate_null_event(provsql.agg_token_uuid(aggtok), want_null);
+END
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Whether a count may be 0 where its group is there (internal)
+ *
+ * The companion count(arg) the explosion of an aggregate value gives a
+ * grouped aggregate has one contribution per row of the group, 1 where arg
+ * has a value and 0 where it is NULL: the aggregate can be NULL only if one
+ * row contributes 0.  Its rows are all there, those the query keeps only for
+ * their provenance included, which a count of the data would miss.
+ *
+ * @param cnt the count
+ */
+CREATE OR REPLACE FUNCTION agg_count_can_be_zero(cnt agg_token)
+  RETURNS boolean AS
+$$
+  SELECT cnt IS NULL OR provsql.get_gate_type(provsql.agg_token_uuid(cnt)) <> 'agg'
+      OR NOT EXISTS (SELECT 1 FROM unnest(provsql.get_children(provsql.agg_token_uuid(cnt))) c
+                      WHERE provsql.get_gate_type(c) = 'semimod')
+      OR EXISTS (SELECT 1
+                   FROM unnest(provsql.get_children(provsql.agg_token_uuid(cnt))) c
+                  WHERE provsql.get_gate_type(c) = 'semimod'
+                    AND provsql.get_extra((provsql.get_children(c))[2]) = '0')
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief The event that the value of gate @p g is NULL, or is not (internal)
+ *
+ * An aggregate is NULL where none of the rows its gate holds is there (a row
+ * whose value is NULL contributes nothing); arithmetic is NULL where one of
+ * its operands is; a value, where it is NULL.  See @c agg_token_null_event.
+ *
+ * @param g the gate
+ * @param want_null true for IS NULL, false for IS NOT NULL
+ */
+CREATE OR REPLACE FUNCTION agg_gate_null_event(g uuid, want_null boolean)
+  RETURNS uuid AS
+$$
+DECLARE
+  t provsql.provenance_gate;
+  p uuid;
+  parts uuid[];
+BEGIN
+  t := provsql.get_gate_type(g);
+  IF t = 'agg' THEN
+    SELECT provsql.provenance_plus(coalesce(array_agg((provsql.get_children(c))[1]),
+                                            ARRAY[]::uuid[]))
+      INTO p
+      FROM unnest(provsql.get_children(g)) AS c
+     WHERE provsql.get_gate_type(c) = 'semimod';
+    RETURN CASE WHEN want_null THEN provsql.provenance_monus(provsql.gate_one(), p)
+                ELSE p END;
+  ELSIF t = 'arith' THEN
+    SELECT array_agg(provsql.agg_gate_null_event(c, want_null))
+      INTO parts
+      FROM unnest(provsql.get_children(g)) AS c;
+    IF parts IS NULL THEN
+      RETURN CASE WHEN want_null THEN provsql.gate_zero() ELSE provsql.gate_one() END;
+    END IF;
+    /* NULL where one operand is; not NULL where every one is not */
+    RETURN CASE WHEN want_null THEN provsql.provenance_plus(parts)
+                ELSE provsql.provenance_times(VARIADIC parts) END;
+  ELSIF t = 'value' THEN
+    RETURN CASE WHEN (coalesce(provsql.get_extra(g), '') IN ('', 'NULL')) = want_null
+                THEN provsql.gate_one() ELSE provsql.gate_zero() END;
+  END IF;
+  RAISE EXCEPTION USING
+    MESSAGE = 'ProvSQL: IS [NOT] NULL on this expression over aggregates, read '
+              'from a subquery, is not supported',
+    DETAIL = 'provsql-reason: nulltest-not-aggregate; scope: gap',
+    ERRCODE = 'feature_not_supported';
+END
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief The contributions of the distinct values of a window frame
  *        (internal)
  *

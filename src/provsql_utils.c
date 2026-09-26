@@ -434,6 +434,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   /* Optional: absent from schemas older than 1.13.0. */
   constants.OID_FUNCTION_NTILE_AS_RANK =
     get_provsql_func_oid("ntile_as_rank");
+  /* Optional: absent from schemas older than 1.13.0. */
+  constants.OID_FUNCTION_AGG_TOKEN_NULL_EVENT =
+    get_provsql_func_oid("agg_token_null_event");
+  constants.OID_FUNCTION_AGG_COUNT_CAN_BE_ZERO =
+    get_provsql_func_oid("agg_count_can_be_zero");
   constants.OID_FUNCTION_WINDOW_DISTINCT_TOKENS =
     get_provsql_func_oid("window_distinct_tokens");
   constants.OID_FUNCTION_PLAIN = get_provsql_func_oid("plain");

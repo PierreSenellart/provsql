@@ -245,6 +245,12 @@ typedef struct constants_t {
   /** @brief OID of @c ntile_as_rank, the tie check of a tracked
    *  @c ntile(); @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_NTILE_AS_RANK;
+  /** @brief OID of @c agg_token_null_event, the IS [NOT] NULL of an
+   *  aggregate column; @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_AGG_TOKEN_NULL_EVENT;
+  /** @brief OID of @c agg_count_can_be_zero; @c InvalidOid on a schema that
+   *  predates it. */
+  Oid OID_FUNCTION_AGG_COUNT_CAN_BE_ZERO;
   /** @brief OID of @c window_distinct_tokens, used for @c dense_rank();
    *  @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_WINDOW_DISTINCT_TOKENS;
