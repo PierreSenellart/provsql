@@ -40,6 +40,19 @@ FROM ro_a a JOIN ro_b b USING (g);
 SET provsql.active = on;
 DROP TABLE ro_a; DROP TABLE ro_b;
 
+-- (b2) The same, with the output ordered: an ORDER BY of the query (here on a
+-- grouping column) stays with it, and the window is still tracked.  It used
+-- to make the window untracked, read as plain SQL with a warning.
+CREATE TABLE ro_b2 AS
+  SELECT g, count(*) AS c, rank() OVER (ORDER BY count(*) DESC) AS rk
+  FROM ro GROUP BY g ORDER BY g;
+SET provsql.active = off;
+SELECT 'window over its own aggregates, ordered' AS q, g, c::text AS c,
+       rk::text AS rk, round(expected(rk, provsql)::numeric, 6) AS e_rank
+FROM ro_b2 ORDER BY g;
+SET provsql.active = on;
+DROP TABLE ro_b2;
+
 -- (c) The top two groups: the LIMIT is the filter of that rank, so a group
 -- is kept in the worlds where it is among the first two.
 CREATE TABLE ro_c AS

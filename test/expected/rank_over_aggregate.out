@@ -19,6 +19,13 @@ window over its own aggregates|3|2|1|1.166667
 q|same
 same tokens as (a)|t
 (1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+q|g|c|rk|e_rank
+window over its own aggregates, ordered|1|2|1|1.166667
+window over its own aggregates, ordered|2|1|3|1.500000
+window over its own aggregates, ordered|3|2|1|1.166667
+(3 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
 WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost

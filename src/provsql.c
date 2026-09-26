@@ -27121,7 +27121,7 @@ static Query *split_window_over_aggregates(const constants_t *constants,
   if (!q->hasWindowFuncs || q->commandType != CMD_SELECT ||
       !(q->hasAggs || q->groupClause != NIL) || q->groupingSets != NIL ||
       q->setOperations != NULL || q->cteList != NIL ||
-      q->distinctClause != NIL || q->sortClause != NIL ||
+      q->distinctClause != NIL ||
       q->limitCount != NULL || q->limitOffset != NULL ||
       q->rowMarks != NIL || q->jointree == NULL ||
       !window_reads_aggregate(q))
