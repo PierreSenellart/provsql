@@ -149,15 +149,14 @@ SET provsql.active = on;
 DROP TABLE pickd2; DROP TABLE cd2;
 RESET provsql.rv_mc_samples;
 
--- A simple-form CASE (CASE <arg> WHEN ...) over aggregates is not a
--- searched guarded selection, so the agg_case lowering leaves it alone.
--- The branches must then degrade through the agg_token cast back to the
--- CASE's numeric type (their actual-world values, provenance dropped
--- with the usual warning) -- never bare agg_token datums under a numeric
--- CASE type, which would be reinterpreted as a garbage varlena and
--- corrupt (or crash on) the materialised tuple.  The same degradation
--- protects searched CASEs on a schema whose upgrade path predates
--- agg_case.
+-- A simple-form CASE (CASE <arg> WHEN ...) over aggregates is read as the
+-- searched CASE it means (CASE WHEN <arg> = ... THEN ...), and lowered like
+-- one: the value is an agg_token, tracked.  It used to be left alone, its
+-- branches degraded through the agg_token cast back to the CASE's type, with
+-- the usual warning -- never bare agg_token datums under a numeric CASE type,
+-- which would be reinterpreted as a garbage varlena and corrupt (or crash on)
+-- the materialised tuple.  That degradation still protects searched CASEs on
+-- a schema whose upgrade path predates agg_case.
 CREATE TABLE cf(g int, x numeric);
 INSERT INTO cf VALUES (1, 10), (1, 100);
 SELECT add_provenance('cf');
@@ -400,5 +399,24 @@ SELECT * FROM cu_r ORDER BY 1;
 DROP TABLE cu_r;
 SELECT remove_provenance('cu');
 DROP TABLE cu;
+
+-- A simple-form CASE over the aggregate columns of a subquery, in a WHERE
+-- (TPC-DS 39: CASE mean WHEN 0 THEN 0 ELSE stdev / mean END > 1): read as the
+-- searched CASE, the condition moves to the aggregation's HAVING like any
+-- other; it was refused as a complex HAVING.  Five rows at one half; the
+-- probabilities are those of the enumeration of the 32 worlds.
+CREATE TABLE csc(id int, k int, x int);
+INSERT INTO csc VALUES (1, 1, 1), (2, 1, 5), (3, 1, 9), (4, 2, 0), (5, 2, 4);
+SELECT add_provenance('csc');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM csc; END $$;
+CREATE TABLE csc_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT k, stddev_samp(x) AS sd, avg(x) AS mean FROM csc GROUP BY k) f
+  WHERE CASE mean WHEN 0 THEN 0 ELSE sd / mean END > 0.5;
+SELECT remove_provenance('csc_r');
+SELECT k, p FROM csc_r ORDER BY k;
+DROP TABLE csc_r;
+SELECT remove_provenance('csc');
+DROP TABLE csc;
 
 SELECT 'ok'::text AS agg_case_done;

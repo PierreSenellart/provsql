@@ -155,10 +155,13 @@ remove_provenance
 
 (1 row)
 city|has_dir|eq_true|not_every|simple_case
+Berlin|no|f|t|other
 Berlin|no|f|t|two
+New York|yes|t|t|other
 New York|yes|t|t|two
 Paris|no|f|t|other
-(3 rows)
+Paris|no|f|t|two
+(6 rows)
 remove_provenance
 
 (1 row)

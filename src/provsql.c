@@ -25884,6 +25884,60 @@ static bool is_actual_marker(const constants_t *constants, Node *n) {
          ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PLAIN;
 }
 
+/** @brief Mutator: the placeholder of a simple CASE's tested value replaced by
+ *  the value itself. */
+static Node *case_test_to_arg_mutator(Node *node, void *cx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, CaseTestExpr))
+    return copyObject((Node *)cx);
+  /* A CASE nested in a WHEN has placeholders of its own */
+  if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg != NULL)
+    return node;
+  return expression_tree_mutator(node, case_test_to_arg_mutator, cx);
+}
+
+/** @brief Mutator: a simple CASE, CASE x WHEN v THEN ..., as the searched
+ *  CASE WHEN x = v THEN ... it means, where x is not volatile. */
+static Node *simple_case_to_searched_mutator(Node *node, void *cx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Query))
+    return node;              /* its own level, rewritten there */
+  node = expression_tree_mutator(node, simple_case_to_searched_mutator, cx);
+  if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg != NULL &&
+      !contain_volatile_functions((Node *)((CaseExpr *)node)->arg)) {
+    CaseExpr *ce = (CaseExpr *)node;
+    ListCell *lc;
+    foreach (lc, ce->args) {
+      CaseWhen *cw = (CaseWhen *)lfirst(lc);
+      cw->expr = (Expr *)case_test_to_arg_mutator((Node *)cw->expr,
+                                                  (void *)ce->arg);
+    }
+    ce->arg = NULL;
+  }
+  return node;
+}
+
+/**
+ * @brief Write the simple CASEs of @p q's own clauses as searched ones.
+ *
+ * @c "CASE mean WHEN 0 THEN 0 ELSE stdev / mean END > 1" over aggregates
+ * (TPC-DS 39) is @c "CASE WHEN mean = 0 THEN ...": the same in SQL, and the
+ * form whose conditions the lowering of a CASE over aggregates reads.
+ */
+static void simple_cases_to_searched(Query *q) {
+  ListCell *lc;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)simple_case_to_searched_mutator((Node *)te->expr, NULL);
+  }
+  if (q->jointree != NULL)
+    q->jointree->quals =
+      simple_case_to_searched_mutator(q->jointree->quals, NULL);
+  q->havingQual = simple_case_to_searched_mutator(q->havingQual, NULL);
+}
+
 /**
  * @brief Whether @p q gives at most one row in every world: a scalar
  *        aggregation, or a product of such, filtered or not.
@@ -29302,8 +29356,10 @@ static Query *process_query(const constants_t *constants, Query *q,
     return process_query(constants, rewrite_intersect(constants, q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   }
-  if (provsql_active)
+  if (provsql_active) {
     drop_trivial_limit(q);
+    simple_cases_to_searched(q);
+  }
   if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
       q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
       q->setOperations == NULL && q->distinctClause == NIL) {
