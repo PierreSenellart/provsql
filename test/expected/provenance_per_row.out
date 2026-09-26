@@ -1,0 +1,46 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+kind|n
+input|2 (*)
+(1 row)
+remove_provenance
+
+(1 row)
+kind|p
+input|0.7500
+(1 row)
+kind|p
+input|0.7500
+(1 row)
+groups|own_token
+2|t
+(1 row)
+groups|p_half
+2|t
+(1 row)
+rows|tokens
+2|1
+(1 row)
+remove_provenance
+
+(1 row)
+id|n
+1|1 (*)
+2|1 (*)
+(2 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+rows_tokens|inputs
+t|2
+(1 row)
+remove_provenance
+
+(1 row)

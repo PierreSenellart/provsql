@@ -27,14 +27,13 @@ DO $$ BEGIN
 END $$;
 
 -- Case A: outer sum() of probability_evaluate(provenance()) over an inner
--- GROUP BY.  The OUTER is a *scalar* aggregation (no GROUP BY), so its row always
--- exists and its provenance() is gate_one (the scalar-existence fix) -- a
--- constant, not an aggregate expression.  So provenance() substitutes to
--- gate_one, no nested Aggref is produced, and the query is well-defined:
--- sum(probability_evaluate(gate_one)) = sum(1.0) over the inner rows = their
--- count.  (Previously this raised the nested-aggregate error.)
+-- GROUP BY.  Inside an aggregate, provenance() is read once per input row, as
+-- SQL evaluates an aggregate's argument: each inner row's own provenance, not
+-- the outer row's.  So the sum is that of the inner rows' probabilities, the
+-- same as Case B's, which reads them from a column (1.632000).  It used to be
+-- the outer scalar row's provenance, certain, and the sum counted the rows.
 SELECT count(*) AS rows,
-       sum(probability_evaluate(provenance())) AS sum_prob
+       round(sum(probability_evaluate(provenance()))::numeric, 6) AS sum_prob
   FROM (SELECT a.id, probability_evaluate(provenance()) AS p
           FROM l_nested a, r_nested b WHERE a.id = b.id GROUP BY a.id) t;
 

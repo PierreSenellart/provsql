@@ -6,7 +6,7 @@ add_provenance
 
 (1 row)
 rows|sum_prob|provsql
-2 (*)|2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+2 (*)|1.632000 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
 remove_provenance
 

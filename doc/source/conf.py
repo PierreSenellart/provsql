@@ -333,7 +333,7 @@ _C_FUNC_MAP = {
     'aggregate_keeps_nulls': '/doxygen-c/html/provsql_8c.html#aafc5b86c5150968b06f2b541a5697de0',
     'try_push_into_aggref': '/doxygen-c/html/provsql_8c.html#a9bbb05180c15e0233e8613d103e9141f',
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
-    'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a3d5fee9c96595db519504978edba8683',
+    'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a86688dd4394298a3a74a1ef2bd3d69ae',
     'process_insert_select':     '/doxygen-c/html/provsql_8c.html#ac3ee0aa66fe553ba28a2bb2959a440ad',
     'rewrite_dml_rv_surface':    '/doxygen-c/html/provsql_8c.html#a6cb9e0a80453bee2265b6651b85f14f3',
     'restore_insert_source_types': '/doxygen-c/html/provsql_8c.html#a78c7e4d776bb5800e907f4f8fe0e46bf',

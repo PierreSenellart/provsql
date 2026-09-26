@@ -294,6 +294,9 @@ test: boolean_fold
 # Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
 test: nested_agg_refuse reaggregation possible_worlds_aggregates rank_over_aggregate explode_agg_value sublink_no_relation sublink_boolean sublink_body_groups sublink_body_setop
 
+# provenance() read per input row where SQL evaluates it so
+test: provenance_per_row
+
 # Joint-width UCQ compiler (data-graph regime): exact probability of an
 # arbitrary UCQ -- including #P-hard ones -- over bounded joint treewidth
 test: ucq_joint

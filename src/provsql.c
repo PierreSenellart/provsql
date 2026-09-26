@@ -8368,6 +8368,43 @@ static Expr *combine_safe_routes(const constants_t *constants,
 }
 
 /**
+ * @brief The provenance of one row of the @c FROM: the product (or, for a
+ *        difference, the monus) of the provenance attributes @p prov_atts.
+ *
+ * What @c make_provenance_expression aggregates over a group, and what a
+ * @c provenance() call evaluated once per input row reads (see
+ * @c replace_provenance_function_by_expression).  @p prov_atts is used, not
+ * copied.
+ */
+static Expr *per_row_provenance(const constants_t *constants, List *prov_atts,
+                                semiring_operation op) {
+  FuncExpr *expr;
+
+  if (op == SR_PLUS || my_lnext(prov_atts, list_head(prov_atts)) == NULL)
+    return (Expr *)linitial(prov_atts);
+  expr = makeNode(FuncExpr);
+  if (op == SR_TIMES) {
+    ArrayExpr *array = makeNode(ArrayExpr);
+
+    expr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+    expr->funcvariadic = true;
+
+    array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid = constants->OID_TYPE_UUID;
+    array->elements = prov_atts;
+    array->location = -1;
+
+    expr->args = list_make1(array);
+  } else { // SR_MONUS
+    expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+    expr->args = prov_atts;
+  }
+  expr->funcresulttype = constants->OID_TYPE_UUID;
+  expr->location = -1;
+  return (Expr *)expr;
+}
+
+/**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
  * Combines the tokens in @p prov_atts according to @p op:
@@ -8469,31 +8506,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   if (op == SR_PLUS) {
     result = linitial(prov_atts);
   } else {
-    if (my_lnext(prov_atts, list_head(prov_atts)) == NULL) {
-      result = linitial(prov_atts);
-    } else {
-      FuncExpr *expr = makeNode(FuncExpr);
-      if (op == SR_TIMES) {
-        ArrayExpr *array = makeNode(ArrayExpr);
-
-        expr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-        expr->funcvariadic = true;
-
-        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-        array->element_typeid = constants->OID_TYPE_UUID;
-        array->elements = prov_atts;
-        array->location = -1;
-
-        expr->args = list_make1(array);
-      } else { // SR_MONUS
-        expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
-        expr->args = prov_atts;
-      }
-      expr->funcresulttype = constants->OID_TYPE_UUID;
-      expr->location = -1;
-
-      result = (Expr *)expr;
-    }
+    result = per_row_provenance(constants, prov_atts, op);
 
     if (group_by_rewrite || aggregation) {
       Aggref *agg = makeNode(Aggref);
@@ -11499,6 +11512,7 @@ typedef struct provenance_mutator_context {
   const constants_t *constants; ///< Extension OID cache
   bool provsql_has_aggref;      ///< @c true when @c provsql contains an @c Aggref (set once by @c replace_provenance_function_by_expression).  When @c true, a @c provenance() substitution that lands inside another @c Aggref's argument tree would produce a nested same-level aggregate -- @c parse_agg.c forbids that shape, the planner's @c preprocess_aggrefs_walker does not recurse through @c Aggref boundaries, and the inner @c Aggref's @c aggno stays at the @c -1 sentinel and crashes @c ExecInterpExpr on @c ecxt_aggvalues[-1].
   bool inside_aggref;           ///< @c true while descending the argument tree of an @c Aggref node.
+  Expr *per_row;                ///< Provenance of one input row, where the query aggregates; @c NULL otherwise
 } provenance_mutator_context;
 
 /**
@@ -11547,6 +11561,10 @@ static Node *provenance_mutator(Node *node, void *ctx) {
     FuncExpr *f = (FuncExpr *)node;
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
+      /* Inside an aggregate, provenance() is read once per input row, as
+       * everything there is: the row's own provenance. */
+      if (context->inside_aggref && context->per_row != NULL)
+        return (Node *)copyObject(context->per_row);
       if (context->inside_aggref && context->provsql_has_aggref) {
         provsql_unsupported(PROVSQL_GAP, "aggregate-over-provenance-aggregate", 
           "applying an SQL aggregate on top of a ProvSQL-introduced "
@@ -11575,20 +11593,60 @@ static Node *provenance_mutator(Node *node, void *ctx) {
  * provenance token of the current tuple.  This mutator substitutes those calls
  * with the actual computed provenance expression.
  *
+ * Where the query aggregates, a call is read where SQL evaluates it: in the
+ * @c WHERE and @c JOIN conditions, a @c GROUP @c BY key and the arguments of
+ * an aggregate (its @c FILTER included), once per input row, as the row's own
+ * provenance @p per_row; everywhere else, once per group, as @p provsql.  The
+ * group's provenance in a per-row position was an aggregate where none may be
+ * -- PostgreSQL's "Aggref found in non-Agg plan node" -- or, without a GROUP
+ * BY, the constant of the one row, so that array_agg(provenance()) gave that
+ * constant for every row and a FILTER on it counted nothing.
+ *
  * @param constants  Extension OID cache.
  * @param q          Query to mutate in place.
  * @param provsql    Provenance expression to substitute.
+ * @param per_row    Provenance of one input row where the query aggregates,
+ *                   @c NULL otherwise.
  */
 static void
 replace_provenance_function_by_expression(const constants_t *constants,
-                                          Query *q, Expr *provsql) {
+                                          Query *q, Expr *provsql,
+                                          Expr *per_row) {
   provenance_mutator_context context;
 
-  context.provsql = provsql;
   context.constants = constants;
+  context.inside_aggref = false;
+  context.per_row = per_row;
+
+  if (per_row != NULL) {
+    ListCell *lc;
+    context.provsql = per_row;
+    context.provsql_has_aggref = false;
+    if (q->jointree != NULL)
+      q->jointree = (FromExpr *)provenance_mutator((Node *)q->jointree,
+                                                   &context);
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->ressortgroupref != 0 &&
+          get_sortgroupref_clause_noerr(te->ressortgroupref,
+                                        q->groupClause) != NULL)
+        te->expr = (Expr *)provenance_mutator((Node *)te->expr, &context);
+    }
+#if PG_VERSION_NUM >= 180000
+    /* From PostgreSQL 18, the grouping expressions themselves live in the
+     * RTE_GROUP entry, the target list reading them through Vars. */
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_GROUP)
+        r->groupexprs = (List *)provenance_mutator((Node *)r->groupexprs,
+                                                   &context);
+    }
+#endif
+  }
+
+  context.provsql = provsql;
   context.provsql_has_aggref =
     expr_contains_aggref_walker((Node *) provsql, NULL);
-  context.inside_aggref = false;
 
   query_tree_mutator(q, provenance_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
@@ -12442,56 +12500,6 @@ static bool provenance_function_walker(Node *node, void *data) {
   }
 
   return expression_tree_walker(node, provenance_function_walker, data);
-}
-
-/**
- * @brief Check whether a @c provenance() call appears in the GROUP BY list.
- *
- * When the user writes @c GROUP BY provenance(), ProvSQL must not add its own
- * group-by wrapper (the query is already grouping on the token).
- *
- * @param constants  Extension OID cache.
- * @param q          Query to inspect.
- * @return  True if any GROUP BY key contains a @c provenance() call.
- */
-static bool provenance_function_in_group_by(const constants_t *constants,
-                                            Query *q) {
-  ListCell *lc;
-
-  /* Build the set of ressortgrouprefs that are actually in GROUP BY
-   * (not ORDER BY or DISTINCT, which also set ressortgroupref). */
-  Bitmapset *group_refs = NULL;
-  foreach (lc, q->groupClause) {
-    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
-    group_refs = bms_add_member(group_refs, sgc->tleSortGroupRef);
-  }
-
-  foreach (lc, q->targetList) {
-    TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (te->ressortgroupref > 0 &&
-        bms_is_member(te->ressortgroupref, group_refs)) {
-      if(expression_tree_walker((Node *)te, provenance_function_walker,
-                                (void *)constants)) {
-        return true;
-      }
-
-#if PG_VERSION_NUM >= 180000
-      // Starting from PostgreSQL 18, the content of the GROUP BY is not
-      // in the groupClause but in an associated RTE_GROUP RangeTblEntry
-      if(IsA(te->expr, Var)) {
-        Var *v = (Var *) te->expr;
-        RangeTblEntry *r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
-        if(r->rtekind == RTE_GROUP)
-          if(expression_tree_walker((Node *) r->groupexprs, provenance_function_walker,
-                                    (void *)constants)) {
-            return true;
-          }
-      }
-#endif
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -28221,7 +28229,7 @@ static Query *process_query(const constants_t *constants, Query *q,
 
       /* Substitute any provenance() FuncExpr in the targetList with
        * a reference to the bound expression. */
-      replace_provenance_function_by_expression(constants, q, (Expr *)v);
+      replace_provenance_function_by_expression(constants, q, (Expr *)v, NULL);
 
       /* Append a provsql column reading the same Var so callers that
        * expect the auto-added column find it. */
@@ -28738,8 +28746,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (supported && q->groupClause &&
-        !provenance_function_in_group_by(constants, q)) {
+    if (supported && q->groupClause) {
       group_by_rewrite = true;
     }
 
@@ -28768,6 +28775,7 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (supported) {
       Expr *provenance;
+      Expr *per_row;
       List *rv_cmps;
 
       /* Single unified pass over WHERE: each top-level conjunct is
@@ -28854,6 +28862,14 @@ static Query *process_query(const constants_t *constants, Query *q,
        * functions, now that WHERE-to-HAVING migration is done */
       insert_agg_token_casts(constants, q);
 
+      /* The provenance of one row, which a provenance() read per input row
+       * of an aggregating query means (replace_provenance_function_by_expression);
+       * built before make_provenance_expression takes prov_atts over. */
+      per_row = (q->hasAggs || group_by_rewrite) && prov_atts != NIL && !has_union
+        ? per_row_provenance(constants, copyObject(prov_atts),
+                             has_difference ? SR_MONUS : SR_TIMES)
+        : NULL;
+
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
@@ -28891,7 +28907,8 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
 
       add_to_select(q, provenance);
-      replace_provenance_function_by_expression(constants, q, provenance);
+      replace_provenance_function_by_expression(constants, q, provenance,
+                                                per_row);
 
       if (has_difference)
         add_select_non_zero(constants, q, provenance);

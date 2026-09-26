@@ -432,3 +432,14 @@ current output tuple:
 
 The token can be passed to semiring evaluation functions
 (see :doc:`semirings`) or to probability/Shapley functions.
+
+In a query that aggregates, ``provenance()`` is read where SQL evaluates
+it. In the ``SELECT`` list or ``HAVING``, outside an aggregate, it is the
+provenance of the group. In ``WHERE``, in a ``GROUP BY`` key and inside an
+aggregate (its ``FILTER`` included), it is the provenance of each input row:
+
+.. code-block:: sql
+
+    -- the tokens of the rows of each group, and the group's own
+    SELECT dept, array_agg(provenance()) AS rows, provenance() AS grp
+    FROM employees GROUP BY dept;
