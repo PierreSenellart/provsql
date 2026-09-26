@@ -74,12 +74,10 @@ Prerequisites
 
    All of these are optional: ProvSQL ships with an in-process
    tree-decomposition compiler that needs no external binary. One of
-   the compilers is, however, the **final-fallback compiler** for
+   them is, however, the **final-fallback compiler** of
    :sqlfunc:`probability_evaluate` (default ``d4``, configurable via
    ``provsql.fallback_compiler``; see :doc:`configuration`): if you
-   install only one knowledge compiler, install that one so the
-   fallback step in the default-strategy chain has something to
-   invoke.
+   install only one knowledge compiler, install that one.
 
    Each tool must be installed as an executable reachable in the PATH of
    the PostgreSQL server process (e.g., ``/usr/local/bin/``). If the tools
@@ -169,13 +167,12 @@ your checkout). To upgrade an existing installation:
        make
        make install
 
-2. **If you are upgrading across 1.3.0** (i.e. from any pre-1.3.0
+2. **If you are upgrading across 1.3.0** (i.e., from any pre-1.3.0
    release), migrate the on-disk provenance store before restarting
-   PostgreSQL. 1.3.0 changed the memory-mapped layout from a flat
-   ``$PGDATA/provsql_*.mmap`` set to per-database files under
-   ``$PGDATA/base/<db_oid>/`` with a versioned header. Build and run
-   the bundled migration tool as the ``postgres`` system user with
-   the server stopped (adjust the connection string for your
+   PostgreSQL: from 1.3.0, the flat ``$PGDATA/provsql_*.mmap`` files
+   are replaced by per-database files under ``$PGDATA/base/<db_oid>/``.
+   Build and run the bundled migration tool as the ``postgres`` system
+   user with the server stopped (adjust the connection string for your
    socket directory if different):
 
    .. code-block:: bash
@@ -198,20 +195,16 @@ your checkout). To upgrade an existing installation:
 
        ALTER EXTENSION provsql UPDATE;
 
-   PostgreSQL will find the chain of upgrade scripts between your
-   current version and the newly installed one and apply them in
-   order, inside a single transaction. The persistent provenance
-   circuit (stored in memory-mapped files) is preserved across the
-   upgrade: the files stay where they are and the new version reads
-   them.
+   PostgreSQL finds the chain of upgrade scripts between your
+   current version and the newly installed one and applies them in
+   order, inside a single transaction. The provenance circuit, stored
+   in memory-mapped files, is kept: the new version reads the same
+   files.
 
-   This is true of an *extension* upgrade only. A **major-version
-   PostgreSQL upgrade** is a different matter: ``pg_upgrade`` transfers
-   relation files by their ``pg_class`` entry and ignores everything
-   else in the database directories, so the circuit does not come
-   along. See :doc:`persistence` for what has to be copied by hand,
-   and for what ``pg_dump``, replication and ``CREATE DATABASE ...
-   TEMPLATE`` do and do not carry.
+   A **major-version PostgreSQL upgrade** with ``pg_upgrade``, on the
+   other hand, does not carry the circuit. See :doc:`persistence` for
+   what has to be copied by hand, and for what ``pg_dump``, replication
+   and ``CREATE DATABASE ... TEMPLATE`` carry.
 
 .. note::
 
@@ -227,16 +220,15 @@ your checkout). To upgrade an existing installation:
    In-place ``ALTER EXTENSION provsql UPDATE`` is not supported on
    **PostgreSQL < 12** across any version boundary whose upgrade
    script appends gate-type enum values (1.5.0 and several later
-   releases do): such scripts run ``ALTER TYPE ... ADD VALUE``
-   statements, which PostgreSQL 11 rejects inside the single
-   transaction PostgreSQL wraps the upgrade chain in. Fresh installs
-   (``CREATE EXTENSION provsql``) work on every supported PostgreSQL
-   version; the restriction only affects the in-place upgrade path.
-   To move an existing database forward under PostgreSQL 11,
-   upgrade to PostgreSQL 12+ first -- copying the store by hand, since
-   ``pg_upgrade`` leaves it behind (see :doc:`persistence`) -- and then
-   run ``ALTER EXTENSION provsql UPDATE``, or drop and recreate the
-   extension (losing stored provenance).
+   releases do): PostgreSQL 11 rejects the ``ALTER TYPE ... ADD VALUE``
+   statements of such scripts inside the upgrade transaction. Fresh
+   installs (``CREATE EXTENSION provsql``) work on every supported
+   PostgreSQL version. To move an existing database forward under
+   PostgreSQL 11, upgrade to PostgreSQL 12+ first -- copying the store
+   by hand, since ``pg_upgrade`` leaves it behind (see
+   :doc:`persistence`) -- and then run ``ALTER EXTENSION provsql
+   UPDATE``, or drop and recreate the extension (losing stored
+   provenance).
 
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -324,11 +316,10 @@ rendering.
     docker run -p 5433:5432 -p 8001:8000 inriavalda/provsql
 
 The ``-p host:container`` flags publish the container's PostgreSQL (5432) and
-ProvSQL Studio (8000) on host ports of your choice, which works uniformly
-across native Docker, Docker Desktop, and rootless podman. The example maps
-them to ``5433`` and ``8001`` to avoid clashing with a PostgreSQL or Studio
-you may already run locally on the default ``5432`` / ``8000``; pick whatever
-free host ports you like. To use a specific release version:
+ProvSQL Studio (8000) on host ports of your choice; this works with native
+Docker, Docker Desktop and rootless podman. The example maps them to ``5433``
+and ``8001`` to avoid clashing with a local PostgreSQL or Studio on the
+default ``5432`` / ``8000``; any free host ports will do. To use a specific release version:
 
 .. code-block:: bash
 
@@ -341,7 +332,7 @@ chose); the container also prints these instructions on startup.
 The image is seeded with the same tutorial and case-study databases as the
 ProvSQL Playground (``tutorial``, ``cs1``, ``cs2``, ``cs4``–``cs7``). Studio
 lands on ``tutorial``; switch between them from its connection chip, or point
-``psql`` at any of them (e.g. ``psql -h localhost -p 5433 cs1 test``).
+``psql`` at any of them (e.g., ``psql -h localhost -p 5433 cs1 test``).
 
 ProvSQL Studio
 --------------

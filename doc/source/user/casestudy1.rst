@@ -4,12 +4,11 @@
 Case Study: Intelligence Agency
 ===============================
 
-This case study, largely extending the scenario introduced when
-ProvSQL was first presented
-:cite:`DBLP:journals/pvldb/SenellartJMR18`, demonstrates ProvSQL's
-custom semiring capability, where-provenance, probability computation
-with multiple algorithms, and circuit export through a
-security-classification scenario.
+This case study largely extends the scenario of the paper that first
+presented ProvSQL :cite:`DBLP:journals/pvldb/SenellartJMR18`. Through a
+security-classification scenario, it demonstrates custom semirings,
+where-provenance, probability computation with several algorithms, and
+circuit export.
 
 The Scenario
 ------------
@@ -63,10 +62,10 @@ and load it into a fresh PostgreSQL database:
 
 This creates:
 
-* ``classification_level`` – an ordered ENUM
+* ``classification_level`` -- an ordered ENUM
   (``unclassified`` < ``restricted`` < ``confidential`` < ``secret`` < ``top_secret`` < ``unavailable``)
   where ``unavailable`` is a sentinel representing the semiring 𝟘 (no derivation possible)
-* ``personnel`` – 7 agents with name, position, city, and clearance level
+* ``personnel`` -- 7 agents with name, position, city, and clearance level
 
 
 Step 1: Explore the Database
@@ -139,9 +138,8 @@ For each shared city, what is the *minimum clearance level* required to
 have inferred that the city has multiple agents? An analyst who knows
 the city only needs to see the lowest-cleared agent there.
 
-This is the security shape of the min-max m-semiring, computed by the
-compiled function :sqlfunc:`sr_minmax` over the ``classification_level``
-enum:
+The min-max m-semiring, available as :sqlfunc:`sr_minmax`, answers this
+over the ``classification_level`` enum:
 
 * ``⊕`` (OR combination) = ``min``: to infer *either* agent was
   involved, you only need clearance for the less-classified one (one
@@ -198,8 +196,8 @@ identifies the agent. Find cities where *all* agents are alone using
 
 .. note::
 
-   ProvSQL's ``EXCEPT`` uses the *monus* operator ``⊖`` of the
-   provenance semiring rather than plain set difference. Every city
+   ProvSQL evaluates ``EXCEPT`` with the *monus* operator ``⊖`` of the
+   provenance semiring. Every city
    appears in the result with a provenance formula; the formula
    evaluates to ``𝟘`` for cities that are definitely shared and to a
    non-trivial expression for cities that *could* be single-agent in
@@ -249,11 +247,11 @@ Assign each agent a probability equal to ``id / 10.0``:
       PERFORM set_prob(provenance(), probability) FROM personnel;
     END $$;
 
-Now Juma has probability 0.1, Paul 0.2, …, Jing 0.7.
+Now Juma has probability 0.1, Paul 0.2, and so on up to Jing 0.7.
 
 
-Step 8: Probability – Exact
----------------------------
+Step 8: Probability -- Exact
+----------------------------
 
 Compute the exact probability that each city is a single-agent city:
 
@@ -276,7 +274,7 @@ Nairobi (agents with probabilities 0.1 and 0.2) has probability
 (0.4 and 0.7) scores ``0.54``. Paris (0.3, 0.5, 0.6) gives ``0.41``.
 
 
-Step 9: Probability – Monte Carlo
+Step 9: Probability -- Monte Carlo
 -----------------------------------
 
 For larger circuits, exact evaluation can be expensive. Monte Carlo
@@ -304,7 +302,7 @@ Compare the runtime against the exact method (``\timing`` in psql,
 or the per-query timing Studio displays).
 
 
-Step 10: Probability – Knowledge Compiler
+Step 10: Probability -- Knowledge Compiler
 ------------------------------------------
 
 .. note::
@@ -341,11 +339,10 @@ on large circuits of specific forms:
     ORDER BY city;
 
 Compare the runtime (``\timing`` in psql, or Studio's per-query
-timing) against the possible-worlds and
-Monte Carlo methods. On this small example, the external knowledge
-compiler will be slower than the other methods: invoking an external
-process and compiling the circuit carries significant overhead that
-only pays off on much larger circuits.
+timing) against the possible-worlds and Monte Carlo methods. On this
+small example the external knowledge compiler is slower: invoking an
+external process carries an overhead that only pays off on much larger
+circuits.
 
 
 Step 11: Visualise a Provenance Circuit
@@ -357,8 +354,8 @@ box-art diagram using
 (which must be on your ``PATH``). The query guards the call with
 :sqlfunc:`tool_available`, so without ``graph-easy`` -- in particular in
 the :ref:`Playground <playground-note>`, where Studio's interactive
-:doc:`circuit mode <studio>` is the better view anyway -- it says so
-rather than failing:
+:doc:`circuit mode <studio>` is the better view anyway -- it returns a
+message instead of failing:
 
 .. code-block:: postgresql
 
@@ -492,19 +489,17 @@ see `Margin of error <https://en.wikipedia.org/wiki/Margin_of_error>`_).
 
 The ``'tree-decomposition'`` method is exact and built into ProvSQL (no
 external binary required). It is often the fastest exact method on simple
-queries, but it fails on circuits with high treewidth – when that happens,
-fall back to ``'compilation'`` or one of the other methods.
+queries, but it fails on circuits with high treewidth; then fall back to
+``'compilation'`` or one of the other methods.
 
-One further method is worth knowing. ``'independent'`` is the cheapest of
-all – it multiplies and adds marginal probabilities directly – but it
-applies only when the lineage is *independent*, with no input tuple shared
-between the branches of an :math:`\oplus` or :math:`\otimes`. The path
-query above is **not** independent (the self-join ``m2.x = m1.y`` makes the
-two matrix lookups share tuples), so
-``probability_evaluate(provenance(), 'independent')`` raises
-``ProvSQL: Not an independent circuit`` rather than returning a wrong
-answer; it is the method to reach for on genuinely tuple-independent
-lineage.
+``'independent'`` is the cheapest method of all -- it multiplies and adds
+marginal probabilities directly -- but it applies only when the lineage is
+*independent*, with no input tuple shared between the branches of an
+:math:`\oplus` or :math:`\otimes`. The path query above is **not**
+independent (the self-join ``m2.x = m1.y`` makes the two matrix lookups
+share tuples), so ``probability_evaluate(provenance(), 'independent')``
+raises ``ProvSQL: Not an independent circuit`` instead of returning a wrong
+answer. Use it on tuple-independent lineage.
 
 
 Step 14: The Boolean Expression Behind a Token
@@ -514,8 +509,7 @@ Step 14: The Boolean Expression Behind a Token
 circuit. Without a mapping it uses internal variable names ``x0``,
 ``x1``…; with an optional second argument naming a provenance
 mapping table the leaves are labelled by the mapping's ``value``
-column instead. This is the same expression ProvSQL hands to its
-d-DNNF compilers internally to compute probabilities.
+column instead.
 
 .. code-block:: postgresql
 
@@ -531,14 +525,9 @@ d-DNNF compilers internally to compute probabilities.
     WHERE city = 'Nairobi';
 
 For Nairobi, the result is the circuit ``(Juma ⊕ Paul) ⊖ (Juma ⊗ Paul)``
-from Step 5, interpreted in the Boolean function semiring – every
-provenance gate is mapped to its Boolean counterpart (``⊕`` to ``∨``,
-``⊗`` to ``∧``, ``⊖`` to ``∧¬``) – and the resulting Boolean function
-rendered as a formula over anonymous variables. Unlike
-:sqlfunc:`sr_formula`, the provenance mapping is optional: the
-expression captures the circuit's logical structure independently of
-any naming, and a mapping can be supplied later if you want the
-leaves labelled.
+from Step 5 read as a Boolean function (``⊕`` as ``∨``, ``⊗`` as ``∧``,
+``⊖`` as ``∧¬``) and rendered as a formula over anonymous variables.
+Unlike with :sqlfunc:`sr_formula`, the provenance mapping is optional.
 
 
 Step 15: Programmatic Circuit Inspection
@@ -561,8 +550,8 @@ with the low-level circuit API. Capture Nairobi's monus token first:
     ) t
     WHERE city = 'Nairobi';
 
-:sqlfunc:`get_nb_gates` reports how many gates have been materialized in the
-current database's circuit:
+:sqlfunc:`get_nb_gates` reports how many gates the current database's
+provenance circuit holds:
 
 .. code-block:: postgresql
 
@@ -598,8 +587,6 @@ returning the table and column count for an input token:
     SELECT identify_token(child) AS source
     FROM nairobi_token, unnest(get_children((get_children(prov))[1])) AS child;
 
-Both leaves resolve to ``(personnel, 6)`` – the ``personnel`` table with
+Both leaves resolve to ``(personnel, 6)``: the ``personnel`` table with
 its six non-provenance columns (``id``, ``name``, ``position``, ``city``,
-``classification``, and the ``probability`` column added in Step 7). This
-is exactly the traversal :sqlfunc:`view_circuit` performs to render the
-box-art diagram.
+``classification``, and the ``probability`` column added in Step 7).

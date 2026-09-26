@@ -1,8 +1,8 @@
 ProvSQL Studio
 ==============
 
-ProvSQL Studio is a Python-backed web UI for the ProvSQL extension. It
-runs as a separate package, connects to any PostgreSQL database with
+ProvSQL Studio is a web UI for the ProvSQL extension. It is installed
+as a separate package, connects to any PostgreSQL database with
 ProvSQL installed, and lets you inspect provenance interactively
 through five complementary modes:
 
@@ -108,20 +108,19 @@ In-page connection editor
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A plug icon (:fa:`plug`) next to the connection-status dot in the top navigation
-opens a pop-up panel where you can paste a DSN. Studio
-probes the new DSN with ``SELECT 1`` before swapping pools, so a typo
-or wrong password leaves the existing connection up and surfaces the
-PostgreSQL error inline. The status dot polls every 5 seconds; its
-tooltip shows the active ``user@host:port`` endpoint.
+opens a pop-up panel where you can paste a DSN. Studio tests the new
+DSN before switching, so a typo or wrong password leaves the existing
+connection up and shows the PostgreSQL error inline. The status dot
+is refreshed every 5 seconds; its tooltip shows the active
+``user@host:port`` endpoint.
 
 Database switcher
 ^^^^^^^^^^^^^^^^^
 
 Clicking the database name in the top nav lists every accessible
 database on the current server; pick one and the page reloads onto
-it. The query box is wiped on switch (the previous query rarely
-makes sense against a different database) but is pushed onto the
-history first, so **Alt+↑** recovers it.
+it. The query box is cleared on switch, but its content is pushed
+onto the history first, so **Alt+↑** recovers it.
 
 Two utility buttons sit nearby in the top nav: :fa:`sync` refreshes
 Studio's cached metadata (schema, provenance mappings, custom
@@ -134,8 +133,8 @@ schema for a clean slate (the ``provsql`` extension survives).
 Search path
 ^^^^^^^^^^^
 
-Studio pins ``provsql`` at the end of the per-batch ``search_path``
-automatically, so the case-study idiom
+Studio pins ``provsql`` at the end of ``search_path`` automatically,
+so the case-study idiom
 ``SET search_path TO public, provsql;`` is unnecessary. The header
 shows a lock chip for the pinned ``provsql``; the rest of
 ``search_path`` is editable under the *Session* group of the
@@ -156,10 +155,10 @@ Circuit mode
 
 Circuit mode is the visual counterpart to :sqlfunc:`view_circuit`
 and the programmatic walks via :sqlfunc:`get_gate_type`,
-:sqlfunc:`get_children`, and :sqlfunc:`identify_token`. The query
-runs unwrapped, so the ``provsql`` UUID column and any ``agg_token``
-cells appear in the result table as raw values; clicking one renders
-its provenance DAG in the sidebar.
+:sqlfunc:`get_children`, and :sqlfunc:`identify_token`. The
+``provsql`` UUID column and any ``agg_token`` cells appear in the
+result table as raw values; clicking one renders its provenance DAG in
+the sidebar.
 
 .. figure:: /_static/studio/circuit-mode.png
    :alt: Studio Circuit mode showing a small DISTINCT-circuit with the
@@ -201,8 +200,8 @@ Past queries are kept in a session history. **Alt+↑** and **Alt+↓**
 step through them in place; the :fa:`history` :guilabel:`History` button opens a list view
 of recent queries to pick from.
 
-The query box accepts multiple semicolon-separated statements;
-Studio splits and runs them in a single transaction. Only the
+The query box accepts multiple semicolon-separated statements, run
+in a single transaction. Only the
 last statement's result is rendered in the result table;
 preceding statements are useful for setup (``SET``,
 ``CREATE TABLE``, fixture ``INSERT``\ s…) before the interesting
@@ -210,28 +209,24 @@ preceding statements are useful for setup (``SET``,
 
 The result table is capped at :guilabel:`Result rows` (default 1000 rows,
 tunable in `Configuration`_). When more rows are available, the
-result-table footer shows a ``(first 1000; more available)`` marker
-so the truncation is explicit.
+result-table footer shows a ``(first 1000; more available)`` marker.
 
 Each column header carries the column's SQL type name as a tooltip, and
 ProvSQL-significant columns get a small pill next to the column
-name, mirroring the schema-panel pills described under
-:ref:`studio-schema-panel`: terracotta :sc:`rv` for
+name, as in the :ref:`studio-schema-panel`: terracotta :sc:`rv` for
 ``random_variable``, terracotta :sc:`agg` for ``agg_token``, and
 purple :sc:`prov` for the row-provenance ``provsql`` column itself.
-The pills make it obvious which result columns carry circuit
-references (and are therefore clickable in Circuit mode) without
-having to inspect the schema panel.
+These are the columns that carry circuit references, and are
+therefore clickable in Circuit mode.
 
-The :sc:`prov` pill is kind-aware: when the planner-side classifier
-(:ref:`provsql.classify_top_level <provsql-classify-top-level>`, which
-Studio enables automatically) certifies the result, the pill becomes
-:sc:`prov-tid` or :sc:`prov-bid` accordingly; an OPAQUE result keeps
-the bare :sc:`prov` label but in a muted tone so the lack of
-certification is visible at a glance.  Hovering the pill surfaces
-the certified kind's meaning plus the list of provenance-tracked
-source relations the query touches, which is the same information
-the underlying ``NOTICE`` carries.
+When the result is certified tuple-independent or block-independent
+(Studio enables
+:ref:`provsql.classify_top_level <provsql-classify-top-level>`
+automatically), the :sc:`prov` pill becomes :sc:`prov-tid` or
+:sc:`prov-bid`; an OPAQUE result keeps the bare :sc:`prov` label in a
+muted tone. Hovering the pill shows the certified kind's meaning and
+the provenance-tracked source relations the query touches, as in the
+corresponding ``NOTICE``.
 
 .. _studio-query-toggles:
 
@@ -239,50 +234,32 @@ Per-query toggles
 ~~~~~~~~~~~~~~~~~
 
 A four-way :guilabel:`Provenance scheme` switch next to the
-query box selects which provenance behaviour the connection runs
-under for the next batch :
+query box selects the provenance class the next batch runs under:
 
-* :guilabel:`Semiring` (default) : standard provenance tracking,
-  no special configuration enabled.  The resulting circuit accepts every
-  compiled and custom semiring.
-* :guilabel:`Where` : sets ``provsql.provenance = 'where'``, so
-  the planner emits ``project`` and ``eq`` gates that record the
-  source cell of each output value (see :doc:`where-provenance`).
-  Where mode (top nav) locks this position on, because the
-  hover-to-trace surface needs the where-provenance gates ; in
-  Circuit mode the choice is free.
-* :guilabel:`Boolean` : sets ``provsql.provenance = 'boolean'``, so
-  the planner runs the safe-query rewriter and tags the resulting
-  root with a Boolean-rewrite marker (see :doc:`probabilities`).
-  Only Boolean-faithful semirings will evaluate the resulting
-  circuit ; the eval-strip semiring picker filters incompatible
-  entries out when the root carries the marker.
-* :guilabel:`Absorptive` : sets ``provsql.provenance = 'absorptive'``,
-  licensing constructions sound only for absorptive semirings --
-  chiefly stopping a cyclic recursive query at its absorptive-value
-  fixpoint (the minimal-paths semantics; see :ref:`network-reliability-btw`)
-  and the absorptive circuit simplifications.  Only absorptive (and
-  Boolean-rewrite-compatible) semirings then evaluate the circuit.
+* :guilabel:`Semiring` (default): standard provenance tracking. The
+  resulting circuit accepts every compiled and custom semiring.
+* :guilabel:`Where`: sets ``provsql.provenance = 'where'``, recording
+  the source cell of each output value (see :doc:`where-provenance`).
+* :guilabel:`Boolean`: sets ``provsql.provenance = 'boolean'``,
+  enabling the safe-query rewriting (see :doc:`probabilities`). Only
+  Boolean-compatible semirings evaluate the resulting circuit; the
+  eval-strip semiring picker hides the others.
+* :guilabel:`Absorptive`: sets ``provsql.provenance = 'absorptive'``,
+  allowing constructions sound only for absorptive semirings, chiefly
+  stopping a cyclic recursive query at its fixpoint (the minimal-paths
+  semantics; see :ref:`network-reliability-btw`). Only absorptive (and
+  Boolean-compatible) semirings then evaluate the circuit.
 
-Three modes lock this switch rather than leaving it free.  Where
-mode (above) pins it to :guilabel:`Where`.  **Contributions** and
-**Temporal** modes pin it to :guilabel:`Boolean` : both read the
-circuit purely as a Boolean function -- Shapley/Banzhaf weights,
-respectively the Boolean-to-temporal homomorphism -- so the
-provenance class cannot change their result, while :guilabel:`Boolean`
-additionally enables the safe-query rewriter.  The switch is freely
-user-controllable only in Circuit and Notebook modes.
+The switch is free in Circuit and Notebook modes. Where mode locks it
+to :guilabel:`Where`; **Contributions** and **Temporal** modes lock it
+to :guilabel:`Boolean`, since they read the circuit as a Boolean
+function, so the provenance class cannot change their result.
 
-The selected scheme is session-sticky : it persists across
-batches so two queries run with the same scheme without
-re-toggling.  An ``update_provenance`` (``provsql.update_provenance``)
-checkbox next to the switch carries provenance through
-``INSERT``, ``UPDATE``, and ``DELETE`` statements (see
-:doc:`data-modification`) ; the checkbox is independent of the
-scheme and freely user-controllable.
-
-Both the scheme and the checkbox are sent to the server alongside
-each query.
+The selected scheme persists across batches. An
+``update_provenance`` (``provsql.update_provenance``) checkbox next to
+the switch carries provenance through ``INSERT``, ``UPDATE``, and
+``DELETE`` statements (see :doc:`data-modification`); it is
+independent of the scheme and never locked.
 
 .. _studio-circuit-example:
 
@@ -311,10 +288,10 @@ Frontier expansion
 Studio caps each circuit fetch at the value of
 ``--max-circuit-nodes`` (default 200, tunable in
 `Configuration`_). Nodes whose children were not fetched in the
-current request carry a small gold ``+`` badge: clicking it requests
-another breadth-first search (BFS) layer rooted at the frontier node
-and merges it into the current scene. The cap is per-fetch, not per-scene, so a circuit
-grows interactively as you expand the frontiers that interest you.
+current request carry a small gold ``+`` badge: clicking it fetches
+another breadth-first layer below that node and merges it into the
+current scene. The cap applies to each fetch, so a circuit grows as
+you expand the frontiers that interest you.
 
 .. _studio-circuit-inspector:
 
@@ -328,47 +305,45 @@ attribute for ``eq``, value for ``mulinput``, relation id and
 column list for ``input`` and ``update``, and so on.
 ``input`` and ``update`` gates additionally show the stored
 probability, read-only. A probability is
-:ref:`written once <persistence-transactions>`, so changing one means
-giving the row a fresh input gate with
-:sqlfunc:`replace_input` -- which leaves the old gate, and every
-circuit already built over it, carrying the old value. Studio shows
-the value and names the recipe in the cell's tooltip rather than
-doing that rewrite behind an inspector field.
+:ref:`written once <persistence-transactions>`; to change one, give
+the row a fresh input gate with :sqlfunc:`replace_input`, as the
+cell's tooltip recalls. Circuits already built over the old gate keep
+the old value.
 
-A ``gate_assumed`` wrapper labelled ``'boolean'`` (added by the
-safe-query rewriter when the provenance class is ``'boolean'``) is
-rendered as a small :sc:`B` badge stamped on top of its child gate
-rather than as a separate node, since structurally it is a marker
-rather than a distinct operation; the load-time Boolean-only folds
-stamp the same badge on the gates they rewrite.  A wrapper labelled
-``'absorptive'`` (a recursive query truncated at the absorptive
-value fixpoint, or compiled by the bounded-treewidth reachability
-route), or the load-time absorptive folds, stamp an amber :sc:`A`
-badge instead.  Either badge narrows the evaluation strip's semiring
-menu to the options that are sound on the marked gate -- only
-absorptive semirings for a recursion root (including ``Tropical
-(min-plus, nonnegative)``, which computes exact min-cost reachability
-there), absorptive or Boolean-compatible ones for fold-marked gates.
+Some gates are drawn as badges on their child instead of as separate
+nodes:
 
-A ``plus`` / ``times`` gate carrying the persisted **d-DNNF
-certificate** (deterministic alternatives / decomposable conjunction
-by construction -- emitted by the bounded-treewidth reachability
-route and the certified HAVING enumerations, see
-:doc:`probabilities`) is stamped with a green :sc:`D` badge; its
-inspector states which property is certified.  The certificate is
-what routes :sqlfunc:`probability_evaluate` to the linear exact
-``independent`` method on these subcircuits.
+* A ``gate_assumed`` wrapper labelled ``'boolean'`` (added under the
+  ``'boolean'`` provenance class) shows as a small :sc:`B` badge; gates
+  simplified under Boolean-only rules carry the same badge.
+* A wrapper labelled ``'absorptive'`` (a recursive query truncated at
+  its fixpoint, or a result of the bounded-treewidth reachability
+  route), and gates simplified under absorptive rules, show an amber
+  :sc:`A` badge.
+
+Either badge narrows the evaluation strip's semiring menu to the
+options that are sound on the marked gate: only absorptive semirings
+for a recursion root (including ``Tropical (min-plus, nonnegative)``,
+which computes exact min-cost reachability there), absorptive or
+Boolean-compatible ones for the other marked gates.
+
+A ``plus`` / ``times`` gate carrying a **d-DNNF certificate**
+(deterministic alternatives / decomposable conjunction by
+construction, produced by the bounded-treewidth reachability route
+and the certified HAVING enumerations, see :doc:`probabilities`) is
+stamped with a green :sc:`D` badge; its inspector states which
+property is certified. On these subcircuits,
+:sqlfunc:`probability_evaluate` uses the linear exact ``independent``
+method.
 
 The inversion-free certificate (a ``gate_annotation`` wrapper on a
-certified result root, see :doc:`probabilities`) is likewise elided
-and rendered as a teal :sc:`IF` badge on its child. Its dashed ring
-is drawn concentric *outside* the Boolean ring, so that on the rare
-gate marked both ways the two rings stay distinguishable rather than
-overlapping. Pinning that root shows the certificate header (atom / class counts)
-and the variable-block order in the inspector. Pinning a certified
-leaf surfaces its per-input order key (root value, secondary value,
-factor -- or the shared self-join *guard*) and its rank within the
-shown scene in the inspector.
+certified result root, see :doc:`probabilities`) shows as a teal
+:sc:`IF` badge on its child, with its dashed ring drawn outside the
+:sc:`B` ring when a gate carries both. Pinning that root shows the
+certificate header (atom / class counts) and the variable-block
+order in the inspector. Pinning a certified leaf shows its per-input
+order key (root value, secondary value, factor -- or the shared
+self-join *guard*) and its rank within the shown scene.
 
 .. _studio-circuit-eval-strip:
 
@@ -387,17 +362,17 @@ custom and “Other” entries below:
     pretty-prints the provenance circuit as a symbolic expression
     :cite:`DBLP:conf/pods/GreenKT07`; ``how`` is the same algebra in
     canonical :math:`\mathbb{N}[X]` sum-of-products form, so two
-    semantically-equal circuits collapse to identical strings :
-    suitable for provenance-aware equivalence checks. ``why`` and
+    semantically-equal circuits give identical strings, which suits
+    provenance-aware equivalence checks. ``why`` and
     ``which`` are the set-valued projections.
   * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
     ``lukasiewicz``. Łukasiewicz is the continuous-valued fuzzy logic
     on numeric values in :math:`[0, 1]`; for the discrete fuzzy /
     trust shape on a user-defined enum lattice, see ``maxmin`` under
     *User-enum* below.
-  * *Intervals*: ``interval-union``. One UI option backed by the
+  * *Intervals*: ``interval-union``. One UI option covering
     :sqlfunc:`sr_temporal`, :sqlfunc:`sr_interval_num` and
-    :sqlfunc:`sr_interval_int` kernels: the strip picks the right one
+    :sqlfunc:`sr_interval_int`: the strip picks the right one
     from the selected mapping's multirange type
     (``tstzmultirange`` / ``nummultirange`` / ``int4multirange``);
     requires PostgreSQL 14+. See :doc:`temporal` for the
@@ -429,8 +404,8 @@ type: only ``boolean``-typed mappings appear under ``boolean``, only
 the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
 ``numeric`` / ``real`` / ``double precision``) under the numeric
 group, only multirange-typed mappings under ``interval-union``, and
-only mappings whose ``value`` column is a user-defined enum
-(``pg_type.typtype = 'e'``) under ``minmax`` / ``maxmin``.
+only mappings whose ``value`` column is a user-defined enum under
+``minmax`` / ``maxmin``.
 Polymorphic entries (``boolexpr``, ``formula``, ``how``, ``why``,
 ``which``) accept any mapping. ``boolexpr``, ``formula`` and ``PROV-XML
 export`` accept the mapping as *optional*: with one, leaves are
@@ -438,33 +413,37 @@ labelled by the mapping's ``value`` column; without one, leaves carry
 their gate UUID (``PROV-XML``), a bare ``x<id>`` placeholder
 (``boolexpr``) or the same abbreviated UUID the circuit's nodes show
 (``formula``). A partial mapping is fine for those three: what it
-covers is labelled, the rest identified. Custom-
-semiring entries filter to mappings whose value type matches the
-wrapper's return type. Mismatches are surfaced before the round-trip
-as ``(no compatible mappings : expected …)`` in the picker.
+covers is labelled, the rest identified. Custom-semiring entries
+filter to mappings whose value type matches the wrapper's return
+type. When no mapping fits, the picker shows
+``(no compatible mappings : expected …)``.
 
-:fa:`play` :guilabel:`Run` reports the result inline along with the runtime. For an
-approximate method the strip also shows the ``(ε, δ)`` error bound ProvSQL
-reports for that run: a *relative* error bound (the estimate is within a factor
-``1 ± ε`` of the true probability) for ``karp-luby`` and the weighted counters,
-shown as ``relative error ≤ 10%, prob ≥ 95%``; and an *additive* bound (a
-``Hoeffding`` absolute error,
-`<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
-``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``. The sample-based
-methods also report the actual sample count (informative on the adaptive
-``(ε, δ)`` path, where ProvSQL derives it), e.g. ``…, 2,120 samples``.
-:fa:`eraser` :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
-not obscure the canvas; :fa:`clipboard` :guilabel:`Copy` writes the just-rendered payload
-(with full precision for probability, regardless of the rounded
-display) to the clipboard.
+:fa:`play` :guilabel:`Run` reports the result inline along with the
+runtime. For an approximate method the strip also shows the
+``(ε, δ)`` error bound ProvSQL reports for that run:
+
+* a *relative* error bound (the estimate is within a factor
+  ``1 ± ε`` of the true probability) for ``karp-luby`` and the
+  weighted counters, shown as ``relative error ≤ 10%, prob ≥ 95%``;
+* an *additive* bound (a ``Hoeffding`` absolute error,
+  `<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
+  ``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``.
+
+The sample-based methods also report the actual sample count
+(informative on the adaptive ``(ε, δ)`` path, where ProvSQL derives
+it), e.g., ``…, 2,120 samples``. :fa:`eraser` :guilabel:`Clear` wipes
+the result so a verbose Why or Formula output does not obscure the
+canvas; :fa:`clipboard` :guilabel:`Copy` copies the result to the
+clipboard, with full precision for a probability whatever the rounded
+display.
 
 The probability cell click-toggles between rounded (per the panel's
 :guilabel:`Probability decimals` setting) and full double-precision; copies
 always carry the full-precision form.
 
 The same evaluation picker also exposes the **knowledge-compilation
-pipeline**, not as a side-effect of a probability run but as its own
-standalone entries: a *Knowledge compilation* group offers the DIMACS
+pipeline** as standalone entries: a *Knowledge compilation* group
+offers the DIMACS
 CNF (:sqlfunc:`tseytin_cnf`), the compiled d-D circuit
 (:sqlfunc:`compile_to_ddnnf_dot`), the same d-D in NNF text form, and
 the tree decomposition with its treewidth
@@ -474,8 +453,8 @@ per-method timeout, skipping unavailable tools). Selecting one and pressing
 :fa:`play` :guilabel:`Run` produces the artifact directly: the d-D circuit and the
 tree decomposition take over the main canvas (a toolbar :fa:`arrow-left`
 :guilabel:`back` button restores the original provenance circuit), while the CNF and NNF
-render as text panels. Compilers that are not installed on the server
-are filtered out of the compiler picker (via :sqlfunc:`tool_available`).
+render as text panels. The compiler picker lists only the compilers
+installed on the server (see :sqlfunc:`tool_available`).
 See :doc:`knowledge-compilation` for the full pipeline.
 
 .. figure:: /_static/studio/kc-compiled-ddnnf.png
@@ -496,20 +475,18 @@ provenance circuit, with two refinements specific to those views:
 * In the **tree-decomposition** canvas, each bag is coloured by its
   index in the elimination order and clicking the bag focuses the
   inspector on its members. The inspector resolves each member's
-  source row (provenance UUID → table / row), so the user can trace
-  back which tuple a given variable came from.
+  source row (provenance UUID → table / row), showing which tuple a
+  given variable came from.
 * When a tree-decomposition bag or an internal d-DNNF gate
   (:guilabel:`AND` / :guilabel:`OR` / :guilabel:`NOT`) is pinned, the
-  evaluation strip hides itself: those nodes are intermediate
-  artifacts of the compilation, not roots of a probabilistic
-  sub-circuit, so the usual semiring / probability surface does not
-  apply.
+  evaluation strip is hidden: these nodes are intermediate results of
+  the compilation, not roots of a provenance sub-circuit.
 
 When the pinned node is instead an ``agg_token`` or ``semimod`` gate
-over random variables, the strip extends the moment / distribution-
-profile / sample surface (otherwise offered on ``random_variable``
-leaves; see :doc:`continuous-distributions`) to the aggregated value,
-and hides the eval-strip options that do not apply to such a target.
+over random variables, the strip offers the moment, distribution
+profile and sample entries (otherwise offered on ``random_variable``
+leaves; see :doc:`continuous-distributions`) on the aggregated value,
+and hides the options that do not apply to such a target.
 
 .. _studio-circuit-oversized:
 
@@ -520,11 +497,9 @@ When a top-level circuit fetch exceeds the cap, Studio shows a
 structured banner instead of an error: ``This subgraph has 4,521
 nodes; the cap is 200 (rendering at depth 4)`` followed by a
 single-click :guilabel:`Render at depth 1, then expand interactively` button
-when the depth-1 envelope itself fits under the cap. Wide-bound
-circuits (for instance aggregations with high fan-in) leave the
-button out rather than promising a render that will exceed the cap
-again. The eval strip (above) still works against the unrendered
-root: it operates on the token UUID, not the rendered DAG.
+when the depth-1 envelope itself fits under the cap; for very wide
+circuits (for instance aggregations with high fan-in) the button is
+omitted. The eval strip (above) still works on the unrendered root.
 
 .. figure:: /_static/studio/circuit-413.png
    :alt: Oversize-circuit banner showing 'This subgraph has X
@@ -544,25 +519,21 @@ For nodes whose underlying gate is a scalar random-variable root
 (``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
 ``gate_mixture``), the eval strip exposes a *Distribution profile*
 entry under the *Distribution* group. Running it returns
-header stats (mean :math:`\mu`, variance :math:`\sigma^2`, and --
-where the entropy evaluator resolves the shape -- the entropy
-:math:`H` in nats, Shannon for a discrete root and differential
-for a continuous one, via :sqlfunc:`entropy`),
-an inline-SVG histogram of the sub-circuit's distribution, a
-PDF/CDF toggle, per-bar tooltips with :math:`\sigma` markers, and
-wheel-zoom on the value axis. The histogram is backed
-server-side by :sqlfunc:`rv_histogram`; the sample count comes
-from ``provsql.rv_mc_samples`` and the seed from
-``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
+header stats (mean :math:`\mu`, variance :math:`\sigma^2`, and,
+where :sqlfunc:`entropy` can compute it, the entropy :math:`H` in
+nats, Shannon for a discrete root and differential for a continuous
+one), a histogram of the sub-circuit's distribution (computed by
+:sqlfunc:`rv_histogram`), a PDF/CDF toggle, per-bar tooltips with
+:math:`\sigma` markers, and wheel-zoom on the value axis. The sample
+count comes from ``provsql.rv_mc_samples`` and the seed from
+``provsql.monte_carlo_seed`` (both in the Config panel).
 
-When the pinned node resolves to a recognised closed-form shape
+When the pinned node resolves to a recognised closed-form shape,
 the panel overlays the analytical PDF (or CDF, depending on the
 toggle) on the histogram as a smooth terracotta curve, and
-point masses as vertical stems capped by a small disc. The
-overlay makes the simplifier's analytical wins visible: when
-``2 * Exp(0.4)`` folds to ``Exp(0.2)`` the panel shows the
-exact exponential decay curve over the MC-sampled bars, so the
-user can verify by eye that the fold matched the distribution.
+point masses as vertical stems capped by a small disc. For instance,
+``2 * Exp(0.4)`` simplifies to ``Exp(0.2)``, and the panel draws the
+exact exponential curve over the sampled bars.
 
 The recognised shapes are:
 
@@ -583,15 +554,12 @@ to the conditioning interval and renormalise; mixture arms
 truncate individually and the Bernoulli weight rebalances by
 the ratio of arm masses; categorical outcomes outside the
 interval are dropped and surviving masses renormalise to 1;
-Diracs survive iff their value sits in the interval, and an
-infeasible event raises a clean “conditioning event is
-infeasible” error without running 100,000 wasted MC samples.
+Diracs survive iff their value sits in the interval. An
+infeasible event raises a “conditioning event is infeasible” error.
 
-The curve is computed server-side by
-:sqlfunc:`rv_analytical_curves`; shapes outside the closed-form
-table (``gate_arith`` composites of independent RVs that the
-simplifier cannot fold, non-integer Erlang shapes) render
-histogram-only without an overlay.
+The curve is computed by :sqlfunc:`rv_analytical_curves`; other
+shapes (``gate_arith`` composites of independent RVs that do not
+simplify, non-integer Erlang shapes) show the histogram only.
 
 For pure-discrete shapes (a Dirac, a categorical, or a nested
 mixture whose every arm is one of those) the CDF mode draws a
@@ -615,9 +583,9 @@ the right.
 The same group hosts a *Sample* entry that draws raw samples
 via :sqlfunc:`rv_sample`; the result renders as a collapsible
 panel with a six-value inline preview and a “show full list”
-expander. When the conditioning event's acceptance
-rate truncates the run below the requested ``n``, the panel
-surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.
+expander. When the conditioning event's acceptance rate yields fewer
+samples than the requested ``n``, the panel suggests raising
+``provsql.rv_mc_samples``.
 
 The *Moment* entry on the same strip computes :sqlfunc:`moment`
 or :sqlfunc:`central_moment` for a chosen ``k`` (raw vs central
@@ -633,9 +601,9 @@ Conditioning and the row-prov auto-preset
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The eval strip carries a *Condition on* text input that takes any
-provenance UUID, when populated, every distribution-shaped
-evaluation (profile, sample, moment, quantile, support) routes
-through the conditional path. Clicking a result-table cell auto-presets the
+provenance UUID; when it is filled, every distribution-shaped
+evaluation (profile, sample, moment, quantile, support) is
+conditioned on it. Clicking a result-table cell presets the
 field to the row's provenance UUID, with a :guilabel:`Conditioned
 by:` :fa:`link` :guilabel:`row prov` badge visible underneath the
 input. Clicking the active
@@ -643,14 +611,11 @@ badge clears the conditioning and reverts to the unconditional
 answer; clicking the muted badge restores the row provenance.
 Manual edits stick within a row and reset on row navigation.
 
-Combined with the distribution profile, this makes side-by-side
-comparison of unconditional vs conditional shape two clicks: pin
-the random variable, run *Distribution profile* unconditional,
-toggle the badge, run it conditional. The truncated closed-form
-table (Normal via Mills ratio, Uniform on the intersected
-support, Exponential by memorylessness) takes over when
-applicable; otherwise the panel reflects the rejection-sampling
-estimate at the configured budget.
+To compare the unconditional and conditional shapes, pin the random
+variable, run *Distribution profile*, toggle the badge, and run it
+again. Truncated Normal, Uniform and Exponential distributions are
+computed in closed form; otherwise the panel shows a
+rejection-sampling estimate with the configured number of samples.
 
 .. _studio-circuit-simplify-on-load:
 
@@ -658,18 +623,13 @@ Simplified-circuit rendering
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Circuit mode honours the ``provsql.simplify_on_load`` setting
-(see :doc:`configuration` and :doc:`continuous-distributions`) and
-renders the in-memory peephole-simplified graph via the
-:sqlfunc:`simplified_circuit_subgraph` SRF. Toggling it in
-the Config panel switches between the raw, gate-creation view
-(useful when debugging RV constructors or the comparison-rewriter
-path) and the simplified, evaluation-time view (what every
-downstream consumer sees). Comparators decidable from the
-propagated support (a Normal restricted to ``x > 2`` reduces
-trivially when shifted out of the support) collapse to Bernoulli
-``gate_input`` leaves before the canvas renders, so the visible
-graph matches what the semiring evaluators and Monte-Carlo
-sampler actually consume.
+(see :doc:`configuration` and :doc:`continuous-distributions`),
+rendering the simplified circuit returned by
+:sqlfunc:`simplified_circuit_subgraph`. Toggling it in the Config
+panel switches between the circuit as built and the simplified
+circuit that evaluation actually uses. In the simplified view,
+comparisons decidable from the support of their operands collapse to
+Bernoulli ``gate_input`` leaves.
 
 .. _studio-contributions-mode:
 
@@ -679,14 +639,13 @@ Contributions mode
 Contributions mode answers a different question from Circuit mode: not
 *how* a result tuple was derived, but *how much each input tuple
 mattered* to it. It is the visual counterpart of the :sqlfunc:`shapley`
-/ :sqlfunc:`banzhaf` family (see :doc:`shapley`), turning the bulk
-:sqlfunc:`shapley_all_vars` / :sqlfunc:`banzhaf_all_vars` enumeration
-into an interactive, ranked heat-map.
+/ :sqlfunc:`banzhaf` family (see :doc:`shapley`), showing the output
+of :sqlfunc:`shapley_all_vars` / :sqlfunc:`banzhaf_all_vars` as an
+interactive, ranked heat-map.
 
-Queries are typed into the same `Query box`_ as in Circuit mode, though
-the :guilabel:`Provenance scheme` is locked to :guilabel:`Boolean`
-(Shapley/Banzhaf read the circuit as a Boolean function, so the scheme
-cannot affect the contributions). Run a query, then **click a result row's**
+Queries are typed into the same `Query box`_ as in Circuit mode, with
+the :guilabel:`Provenance scheme` locked to :guilabel:`Boolean`
+(see `Per-query toggles`_). Run a query, then **click a result row's**
 ``provsql`` **cell** to pin it as the *target tuple*: the contribution
 of every input tuple toward that target is computed and drawn in the
 sidebar. When the result has a single UUID-typed cell, it is pinned
@@ -707,22 +666,21 @@ the set, with the numeric value alongside. The value is shown to the
 expand it to full precision and copy that value to the clipboard. The
 controls above the chart drive the computation:
 
-* :guilabel:`Measure` : :guilabel:`Shapley` (averaged over input
+* :guilabel:`Measure`: :guilabel:`Shapley` (averaged over input
   orderings) or :guilabel:`Banzhaf` (averaged over coalitions). Both
   are computed in the *expected* probabilistic sense, so the Shapley
   values of all inputs sum to the target's marginal probability.
-* :guilabel:`Method` : how the decision-diagram behind each value is
-  built. :guilabel:`auto` cost-selects the cheapest route
-  (``interpret-as-dd`` / ``tree-decomposition`` / ``compilation``),
-  reusing the probability chooser's cost model; the named routes force
-  one. :guilabel:`compilation` runs the external d-DNNF compiler chosen
+* :guilabel:`Method`: how each value is computed. :guilabel:`auto`
+  picks the cheapest of ``interpret-as-dd`` / ``tree-decomposition``
+  / ``compilation`` by estimated cost; the named methods force one.
+  :guilabel:`compilation` runs the external d-DNNF compiler chosen
   in the adjacent :guilabel:`Compiler` picker.
-* :guilabel:`Compiler` : shown only for the :guilabel:`compilation`
+* :guilabel:`Compiler`: shown only for the :guilabel:`compilation`
   method, it lists the external d-DNNF compilers the server can reach
   (the same tool registry :ref:`Probability evaluate
   <studio-circuit-eval-strip>` draws on). In the Playground, where no
   compiler is bundled, the list is empty.
-* :guilabel:`Labels` : the :ref:`provenance mapping
+* :guilabel:`Labels`: the :ref:`provenance mapping
   <studio-circuit-eval-strip>` whose ``value`` column names the inputs
   (the ``ON provenance = variable`` join). With :guilabel:`source row`
   selected instead, each input is resolved to its full tracked row (in
@@ -731,9 +689,9 @@ controls above the chart drive the computation:
 
 The :fa:`fingerprint` :guilabel:`Show full UUIDs` toggle expands every
 abbreviated UUID (the target line, the result cells, and any unresolved
-input labels) to its full form, as in Circuit mode. The round-trip time
-of each computation is reported next to the target token, so the Method
-routes can be compared on cost.
+input labels) to its full form, as in Circuit mode. The time taken by
+each computation is reported next to the target token, so the methods
+can be compared.
 
 Changing any control re-computes for the pinned target. A wide input
 relation can mint thousands of variables; the chart shows the top 200
@@ -746,12 +704,10 @@ Where mode
 
 Where mode is the visual counterpart to :sqlfunc:`where_provenance`
 (see :doc:`where-provenance`). Queries are typed into the same
-`Query box`_ as in Circuit mode. Where mode enables
-``provsql.provenance = 'where'`` on the connection and wraps every
-``SELECT`` so the result carries the where-provenance of each output
-value. Hovering a result cell highlights the source cells (in
-the sidebar) that contributed to it. No explicit
-:sqlfunc:`where_provenance` call is required.
+`Query box`_ as in Circuit mode, with ``provsql.provenance = 'where'``
+set automatically; no explicit :sqlfunc:`where_provenance` call is
+required. Hovering a result cell highlights the source cells (in the
+sidebar) that contributed to it.
 
 .. figure:: /_static/studio/where-mode.png
    :alt: Studio Where mode with a result row hovered, highlighting
@@ -761,12 +717,12 @@ the sidebar) that contributed to it. No explicit
    highlights the personnel rows that produced it.
 
 The sidebar lists every provenance-tracked relation. Each panel
-header reports its row count: ``personnel – 100 of ~50000 tuples``
-makes the per-relation cap explicit when a relation is too large to
-materialise in full (default 100 rows, tunable in
-`Configuration`_). The :guilabel:`Input gates only` toggle (default on)
-hides relations whose first ``provsql`` token is not an ``input``
-gate, so derived materialisations do not crowd the panel.
+header reports its row count, e.g., ``personnel – 100 of ~50000
+tuples`` when a relation exceeds the per-relation cap (default 100
+rows, tunable in `Configuration`_). The :guilabel:`Input gates only`
+toggle (default on) hides relations whose first ``provsql`` token is
+a derived gate, such as materialised query results, keeping only
+relations whose tokens are ``input`` gates.
 
 Each result row gets a :fa:`project-diagram` :guilabel:`Circuit` button that
 switches to Circuit mode and pre-loads the provenance DAG of that
@@ -794,10 +750,9 @@ Each output cell becomes hover-aware: hovering ``name``,
 Wrap-fallback notice
 ^^^^^^^^^^^^^^^^^^^^
 
-If a Where-mode query touches no provenance-tracked relation, Studio
-silently drops the wrap and surfaces an INFO banner instead of
-raising. This is the right default for case-study scripts that do
-bulk setup before the first interesting ``SELECT``.
+If a Where-mode query touches no provenance-tracked relation, it runs
+as ordinary SQL and Studio shows an INFO banner instead of an error,
+so setup statements run normally.
 
 .. _studio-temporal-mode:
 
@@ -805,10 +760,8 @@ Temporal mode
 -------------
 
 Temporal mode places the rows of a relation or a query on a **validity
-timeline**, reading the per-token validity that ProvSQL's temporal
-surface maintains (see :doc:`temporal`). It is available when the
-extension's temporal functions are present, which requires
-PostgreSQL 14+.
+timeline**, from the validity ProvSQL tracks for each token (see
+:doc:`temporal`). It requires PostgreSQL 14+.
 
 .. figure:: /_static/studio/temporal-mode.png
    :alt: Studio Temporal mode: the source and time-operation controls on
@@ -828,15 +781,11 @@ Two orthogonal controls drive the view:
   full validity).
 
 For a :guilabel:`Query` source the :guilabel:`Provenance scheme` switch
-is locked to :guilabel:`Boolean`, as in Contributions mode :
-:sqlfunc:`sr_temporal` lifts a Boolean reading of the circuit through
-the Boolean-to-temporal homomorphism, so the scheme cannot change the
-timeline.
+is locked to :guilabel:`Boolean`, as in Contributions mode.
 
-Both sources use one mechanism: the SQL is wrapped with
-:sqlfunc:`sr_temporal` over a **validity mapping**, and the time
-operation re-evaluates it as a base-level filter (mirroring the
-:sqlfunc:`timeslice` / :sqlfunc:`timetravel` SRF bodies). A validity
+For both sources, validity is computed with :sqlfunc:`sr_temporal`
+over a **validity mapping**, and the time operation filters rows as
+:sqlfunc:`timeslice` / :sqlfunc:`timetravel` do. A validity
 mapping is a ``(provenance, value <multirange>)`` relation, such as one made
 by :sqlfunc:`create_provenance_mapping` (``maintained => true``); the
 :guilabel:`Validity mapping` picker lists every such relation, with the
@@ -868,20 +817,17 @@ the tick at the boundary is marked with the new date or year.
 
 By default the lanes follow the query's own order. The :guilabel:`Order`
 control re-sorts them chronologically -- :guilabel:`by start` (earliest
-validity first) or :guilabel:`by end` -- entirely client-side, so a
-succession of ministers or roles reads in time order without threading an
-``ORDER BY sr_temporal(...)`` into the query.
+validity first) or :guilabel:`by end` -- without re-running the query.
 
-Three validity shapes get an explicit marker rather than an ordinary
-bar: an **unbounded** end (``-∞`` / ``∞``) runs the bar to the axis edge;
+Three validity shapes get an explicit marker: an **unbounded** end (``-∞`` / ``∞``) runs the bar to the axis edge;
 a single **instant** infers a narrow window from the instant's
 precision; and an **empty union** (a row valid at no time) shows a
 centred ``∅ never``. Hovering a bar reveals its precise half-open
-interval, e.g. ``[2016-01-01, 2022-01-01)``. All instants are rendered
+interval, e.g., ``[2016-01-01, 2022-01-01)``. All instants are rendered
 and parsed at UTC.
 
 The result table on the right mirrors the timeline's rows; the
-underlying ``SELECT`` (with its :sqlfunc:`sr_temporal` wrap and time
+underlying ``SELECT`` (with its :sqlfunc:`sr_temporal` call and time
 filter) is available from the query box, so a timeline view can be
 copied out as ordinary SQL. The :doc:`case study <casestudy4>` walks
 through the same operations on a worked dataset.
@@ -894,8 +840,8 @@ Notebook mode
 Notebook mode is a Jupyter-style notebook over your ProvSQL database:
 an ordered list of cells -- SQL, Markdown, circuit snapshots, semiring
 evaluations -- executed against a persistent database session (the
-*kernel*) and saved as a standard ``.ipynb`` file. It is the right
-mode for narrated, replayable analyses: the bundled tutorial and case
+*kernel*) and saved as a standard ``.ipynb`` file. It suits
+narrated, replayable analyses: the bundled tutorial and case
 studies (see `Example notebooks`_) are notebooks.
 
 .. figure:: /_static/studio/notebook-mode.png
@@ -913,27 +859,23 @@ Cells and the kernel
 **SQL cells** run on the notebook's kernel: a dedicated database
 session that persists across cells, so temporary tables, ``SET``
 commands, and prepared statements made by one cell are visible to the
-next -- the Jupyter state model, with the database session playing the
-part of the Python interpreter. Each cell executes in its own
-transaction: a failed cell rolls back cleanly (the error lands in the
-cell's output) while previously committed cells persist. What the cell
-appended to the *provenance circuit* survives the rollback, but as
-orphans that nothing references: gates are immutable and re-created
-idempotently, and a probability the cell wrote is cleared with it. See
-:doc:`persistence` for what that leaves behind and how to reclaim it. Execution
-counters (``[1]``, ``[2]``, …) track what ran on the current kernel,
-and results render through the same table renderer as the query box --
-provenance pills, clickable UUID cells and all.
+next, as in Jupyter. Each cell executes in its own transaction: a
+failed cell rolls back (the error lands in the cell's output) while
+previously committed cells persist. What the failed cell added to the
+*provenance circuit* remains, unreferenced, while a probability it
+wrote is cleared; see :doc:`persistence` for how to reclaim that
+space. Execution counters (``[1]``, ``[2]``…) track what ran on the
+current kernel, and results render as in the query box, with
+provenance pills and clickable UUID cells.
 
-The kernel starts lazily on the first run and its chip in the toolbar
+The kernel starts on the first run and its chip in the toolbar
 shows the backend pid and database. :fa:`play` :guilabel:`Run` runs the
 selected cell; :fa:`forward` :guilabel:`Run all` executes the
 cells top to bottom; :fa:`times-circle` :guilabel:`Interrupt` cancels the statement in
 flight; :fa:`redo` :guilabel:`Restart kernel` discards the session (temporary
-tables and session ``SET`` s are lost, counters reset), which is the
-clean-slate button when state has drifted. Idle kernels are dropped
-server-side after a timeout, and a connection switch drops them all;
-the front-end simply starts a fresh kernel on the next run.
+tables and session ``SET`` s are lost, counters reset). Idle kernels
+are dropped after a timeout, and a connection switch drops them all;
+a fresh kernel starts on the next run.
 
 The toolbar also appends fresh cells (:fa:`plus` :guilabel:`SQL` /
 :fa:`plus` :guilabel:`Markdown`) and, as in Circuit mode, expands
@@ -986,8 +928,8 @@ Circuit and evaluation cells
 
 Clicking a provenance UUID in a result inserts a **circuit cell**
 below the query: a snapshot of the provenance DAG behind that token,
-painted with the same gate glyphs as Circuit mode (no depth control --
-the fetch is capped like Circuit mode's initial render). Clicking a
+drawn as in Circuit mode, without depth control (the fetch is capped
+like Circuit mode's initial render). Clicking a
 different UUID retargets the same cell, and :fa:`sync` re-fetches the
 snapshot against the live circuit; the :fa:`external-link-alt`
 :guilabel:`Circuit mode` button jumps to the full canvas (frontier expansion, inspector,
@@ -998,10 +940,10 @@ For a plain provenance token, the circuit cell offers
 semiring or probability method, optional free-text arguments and
 provenance mapping, run against the cell's token. The invocation and
 its result are saved with the notebook, so a loaded notebook shows its
-evaluations without recomputing them. (Aggregate and
-random-variable tokens get no Evaluate button: their dedicated
-dispatch -- distribution profiles, moments, aggregate inspection --
-lives in Circuit mode, one jump away.)
+evaluations without recomputing them. Aggregate and
+random-variable tokens get no Evaluate button: their evaluations
+(distribution profiles, moments, aggregate inspection) are in Circuit
+mode.
 
 .. figure:: /_static/studio/notebook-circuit-cell.png
    :alt: A circuit cell showing a small plus-rooted DAG with monus and
@@ -1017,28 +959,26 @@ Provenance scheme
 The toolbar's :guilabel:`Provenance scheme` selector is the notebook's
 default (the same four-way switch as the query box, see
 `Per-query toggles`_); each SQL cell can override it with the small
-:fa:`sliders-h` scheme chip in its actions, cycled per cell and
-honoured at run time.
-Per-cell overrides are what make mixed notebooks work -- e.g. one
-recursive-CTE cell running under the Boolean scheme inside an
-otherwise standard-provenance notebook.
+:fa:`sliders-h` scheme chip in its actions, which cycles through the
+schemes, e.g., to run one recursive-CTE cell under the Boolean scheme
+in an otherwise standard-provenance notebook.
 
 Tabs and database bindings
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-A notebook is not the whole program: it runs against a *database*
-whose state persists beyond it. Every notebook is therefore **bound**
-to the database it was authored against (recorded in the ``.ipynb``
+A notebook runs against a *database* whose state persists beyond it,
+so every notebook is **bound** to the database it was authored
+against (recorded in the ``.ipynb``
 metadata -- the name only, never credentials), and the tab bar shows
 one tab per open notebook, named after its first level-1 Markdown
 heading. Loading a notebook always opens a new tab, bound per its
 metadata.
 
 When a tab's binding differs from the live connection, a banner says
-so and offers the three sensible moves -- switch the connection to the
-bound database, create it if it does not exist (the scratch-database
-escape hatch for hermetic runs), or rebind the notebook to the current
-database. Nothing switches silently.
+so and offers three actions: switch the connection to the bound
+database, create it if it does not exist (to run the notebook on a
+fresh database), or rebind the notebook to the current database.
+Nothing switches silently.
 
 .. figure:: /_static/studio/notebook-binding-banner.png
    :alt: The binding banner reading 'This notebook is bound to cs1;
@@ -1051,13 +991,12 @@ database. Nothing switches silently.
 Saving, loading, autosave
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:fa:`download` :guilabel:`Save` downloads the notebook as an nbformat-v4 ``.ipynb``
--- directly openable in Jupyter-aware tooling. Cell outputs are
-included with standard MIME fallbacks (HTML tables, self-contained
-SVG circuit snapshots, plain-text evaluation results), so GitHub and
-nbviewer render a saved notebook as a readable static document;
-Studio itself re-renders from richer payloads stored alongside under
-``application/vnd.provsql.*`` keys. :fa:`folder-open` :guilabel:`Load` opens an
+:fa:`download` :guilabel:`Save` downloads the notebook as an
+nbformat-v4 ``.ipynb``, directly openable in Jupyter-aware tooling.
+Cell outputs are included in standard formats (HTML tables, SVG
+circuit snapshots, plain-text evaluation results), so GitHub and
+nbviewer render a saved notebook as a readable static document.
+:fa:`folder-open` :guilabel:`Load` opens an
 ``.ipynb`` in a new tab; it also accepts a ``.sql`` file (a fixture
 script, a ``pg_dump`` dump…), appended to the current notebook as one
 ready-to-run SQL cell. Between saves, every tab autosaves to the
@@ -1083,12 +1022,11 @@ Notebook mode in the Playground
 
 Notebook mode works in the :ref:`Playground <playground-note>`, with
 one caveat: the in-browser PostgreSQL has a single session, shared by
-every notebook tab's kernel and by the other API calls. Kernel state
-is therefore visible across tabs, and restarting any kernel (mapped
-onto ``DISCARD ALL``) resets them all. The binding banner's
+all notebook tabs. Kernel state is therefore visible across tabs, and
+restarting any kernel resets them all. The binding banner's
 database-creation action works there too, and
-``?nb=<name>`` deep links open the bundled examples --
-e.g. `provsql.org/playground/?nb=tutorial
+``?nb=<name>`` deep links open the bundled examples,
+e.g., `provsql.org/playground/?nb=tutorial
 <https://provsql.org/playground/?nb=tutorial>`_.
 
 .. _studio-schema-panel:
@@ -1110,35 +1048,28 @@ pills:
    relation; primary-key columns are solid-underlined and ``repair_key``
    (BID) grouping keys dotted-underlined.
 
-* :sc:`prov` (purple) on a relation whose ``provsql`` column is
-  injected by the planner: provenance tracking is active.  The
-  pill is sub-classified by the relation's certified kind (see
-  :doc:`probabilities` for the TID vs BID model) : :sc:`PROV-TID`
+* :sc:`prov` (purple) on a provenance-tracked relation. The
+  pill is refined by the relation's certified kind (see
+  :doc:`probabilities` for the TID vs BID model): :sc:`PROV-TID`
   for tuple-independent tables registered via
   :sqlfunc:`add_provenance`, :sc:`PROV-BID` for
   block-independent tables registered via :sqlfunc:`repair_key`,
   and a bare :sc:`prov` in a muted tone for relations whose kind
-  is opaque.  This is the same classification the safe-query
-  rewriter consults to decide whether a query is in scope for
-  the ``'boolean'`` provenance class.
+  is opaque. This is the classification that decides whether a
+  query is in scope for the ``'boolean'`` provenance class.
 * :sc:`mapping` (gold) on a relation shaped
   ``(value <T>, provenance uuid)``, such as one from
-  :sqlfunc:`create_provenance_mapping`. The two pills are
-  mutually exclusive: a mapping that also carries a planner-
-  injected ``provsql`` column is classified as :sc:`mapping` (the
-  more specific category).
+  :sqlfunc:`create_provenance_mapping`. A mapping that is also
+  provenance-tracked gets only the :sc:`mapping` pill.
 
 Clicking a relation row (or focusing it and pressing Enter / Space)
 replaces the query box with a ready-to-run
-``SELECT * FROM <relation>;`` so the inspected table is one click
-away from being queried.
+``SELECT * FROM <relation>;``.
 
-Columns whose type is one of ProvSQL's circuit-bearing types
-carry their own terracotta pill next to the column name:
-:sc:`rv` for ``random_variable`` (operators rewrite into
-``gate_cmp`` / ``gate_arith``; see
-:doc:`continuous-distributions`) and :sc:`agg` for ``agg_token``
-(each value is a circuit root with a running aggregate value).
+Columns whose values are circuit references carry their own
+terracotta pill next to the column name: :sc:`rv` for
+``random_variable`` (see :doc:`continuous-distributions`) and
+:sc:`agg` for ``agg_token``.
 
 Key columns are underlined, following the relational-schema
 convention: a **solid** underline marks a primary-key column, and a
@@ -1148,18 +1079,15 @@ the TID vs BID model in :doc:`probabilities`).
 
 On a tracked table, each column is a click target that prefills
 ``SELECT create_provenance_mapping('<table>_<col>_mapping',
-'<schema>.<table>', '<col>');`` into the query box, so a fresh
-mapping is two clicks away. The click affordance is suppressed
-on :sc:`rv` and :sc:`agg` columns, since their values are circuit
-references rather than scalars and a mapping built from them
-would not label input gates meaningfully.
+'<schema>.<table>', '<col>');`` into the query box. This is
+not offered on :sc:`rv` and :sc:`agg` columns, whose values are
+circuit references and would not make meaningful labels.
 
 On any provenance-eligible plain table, :fa:`plus` :guilabel:`prov` and
 :fa:`minus` :guilabel:`prov` action chips prefill ``SELECT add_provenance(...)``
 / ``SELECT remove_provenance(...)``. They are hidden on views
-(regular and materialised) and on foreign tables, since the
-underlying ``ALTER TABLE ADD COLUMN`` does not work on those
-relation kinds, and on mappings.
+(regular and materialised) and foreign tables, which cannot take a
+provenance column, and on mappings.
 
 .. _studio-configuration:
 
@@ -1175,14 +1103,13 @@ The Config panel groups its options into four sections:
   ``provsql.tool_search_path`` is superuser-only (see
   :doc:`configuration`); when Studio is connected as a non-superuser
   role, its field is shown read-only and labelled *(admin-managed)*,
-  reflecting the value an administrator pinned (or the server's default
-  ``PATH``) rather than letting an edit silently have no effect.
-  ``provsql.provenance`` and ``provsql.update_provenance`` live
-  next to the query box instead (see `Per-query toggles`_), since
-  they are typically flipped per query rather than per session.
-  Studio also forces ``provsql.aggtoken_text_as_uuid = on`` for the
-  whole session: clickable ``agg_token`` cells in the result table
-  need that.
+  with the value an administrator set (or the server's default
+  ``PATH``).
+  ``provsql.provenance`` and ``provsql.update_provenance`` are set
+  next to the query box instead (see `Per-query toggles`_).
+  Studio also sets ``provsql.aggtoken_text_as_uuid = on`` for the
+  whole session, which makes ``agg_token`` cells clickable in the
+  result table.
 * **Probabilities** gathers the GUCs that steer probability and
   random-variable evaluation: ``provsql.simplify_on_load``,
   ``provsql.monte_carlo_seed``, ``provsql.rv_mc_samples`` (all
@@ -1190,11 +1117,11 @@ The Config panel groups its options into four sections:
   ``provsql.fallback_compiler`` dropdown selecting the d-DNNF compiler
   ``makeDD`` falls back to (see :doc:`knowledge-compilation`), its
   choices validated against the compilers resolvable on the server.
-* **Session** wraps the per-request session state: the
+* **Session** holds the session settings: the
   ``statement_timeout`` applied to every batch, and the visible part
   of ``search_path`` (``provsql`` is always pinned at the end).
-* **Display limits** holds the size knobs: :guilabel:`Max circuit depth`
-  (the BFS depth cap on the initial fetch), :guilabel:`Nodes per fetch` (the
+* **Display limits** holds the size limits: :guilabel:`Max circuit depth`
+  (the depth cap on the initial fetch), :guilabel:`Nodes per fetch` (the
   per-fetch node cap), :guilabel:`Sidebar rows per relation` (per-relation
   row cap in the Where-mode sidebar), :guilabel:`Result rows` (row cap on
   the result table), and :guilabel:`Probability decimals` (number of
@@ -1220,10 +1147,10 @@ Each option is also exposed on the CLI as a flag
 (``--statement-timeout``, ``--max-sidebar-rows``, ``--max-result-rows``,
 ``--max-circuit-nodes``, ``--max-circuit-depth``, ``--search-path``,
 ``--tool-search-path``);
-the CLI wins on startup, the panel writes back to the JSON.  The one
-exception is :guilabel:`Probability decimals`, which is stored
-per-browser (in ``localStorage``) rather than in ``config.json``, and
-has no CLI flag.
+a flag given on the command line takes precedence at startup, and
+panel edits are saved to ``config.json``. The one exception is
+:guilabel:`Probability decimals`, which is stored in the browser, not
+in ``config.json``, and has no command-line flag.
 
 .. _studio-tools-panel:
 
@@ -1231,10 +1158,9 @@ Tools panel
 -----------
 
 A tools button (the wrench-and-screwdriver icon, :fa:`tools`) in the top nav,
-left of the Config cog (:fa:`cog`), opens the **external-tool registry** --
-the same ``provsql.tools``
-catalog the compilation and weighted-counting dropdowns draw from (see
-:doc:`/user/tool-registry`).
+left of the Config cog (:fa:`cog`), opens the **external-tool registry**:
+the ``provsql.tools`` catalog the compilation and weighted-counting
+dropdowns draw from (see :doc:`/user/tool-registry`).
 
 Tools are **grouped by operation** (Compilation, Weighted counting,
 Rendering). Each row shows a tool's availability (a green dot when its binary
@@ -1245,15 +1171,15 @@ its endpoint or executable.
 A superuser may manage the registry in place: edit a tool's preference
 (higher is selected first), toggle it on or off, **edit** it (the :fa:`pen`
 pencil reopens the form pre-filled), or unregister it (the :fa:`times`
-cross). :fa:`plus` :guilabel:`Register a tool` opens the same form. Picking the *Kind* swaps the relevant fields: a
+cross). :fa:`plus` :guilabel:`Register a tool` opens the same form.
+The *Kind* determines the fields: a
 ``cli`` tool takes an executable and a command template; a ``kcmcp`` tool (a
 warm :doc:`KCMCP </dev/kc-server-protocol>` server) takes a *Connection* --
 either *Managed* (ProvSQL launches and supervises it via
 :ref:`provsql.kcmcp_server <provsql-kcmcp-server>`) or an *Endpoint* address
 (``unix:/path`` or ``host:port``). The input formats, output format, and
 parser are offered as the values that make sense for the chosen operation.
-The registry's mutators are superuser-only, so a non-superuser session sees
-the panel read-only.
+A non-superuser session sees the panel read-only.
 
 .. figure:: /_static/studio/tools-panel.png
    :alt: Studio Tools panel: the external-tool registry grouped by operation,
@@ -1271,11 +1197,11 @@ Mode-switching
 
 The mode tabs in the top nav switch between :fa:`project-diagram`
 Circuit, :fa:`chart-bar` Contributions, :fa:`clock` Temporal,
-:fa:`search-location` Where, and :fa:`book-open` Notebook. A switch carries the current SQL forward via
-``sessionStorage`` (in Notebook mode, the selected cell's SQL); it
-auto-replays only when the user just ran the query, so unrun drafts
-and plain reloads never auto-execute (important for side-effecting
-statements like :sqlfunc:`add_provenance`).
+:fa:`search-location` Where, and :fa:`book-open` Notebook. A switch
+carries the current SQL forward (in Notebook mode, the selected
+cell's SQL); it is re-run only if you just ran it, so unrun drafts
+and plain reloads never execute automatically (which matters for
+side-effecting statements like :sqlfunc:`add_provenance`).
 
 In Where mode, every result row gets a :fa:`project-diagram`
 :guilabel:`Circuit` button that
@@ -1292,9 +1218,7 @@ Limitations
 
 * **Per-fetch circuit cap, not per-scene**: ``--max-circuit-nodes``
   bounds each fetch independently, so a scene assembled by repeated
-  frontier expansions can exceed the cap. This is intentional: the
-  cap exists to keep the browser responsive on initial render, not
-  to prevent drilling deep where you want to.
+  frontier expansions can exceed the cap.
 * **Verbose semiring outputs are unbounded**: ``formula``, ``how``,
   ``why``, ``which``, and ``PROV-XML export`` can return multi-megabyte
   strings on large circuits. Compute time is bounded by
@@ -1322,131 +1246,68 @@ extension version.
      - Notes
    * - ``1.0.x``
      - ``≥ 1.4.0``
-     - First public release. Requires :sqlfunc:`circuit_subgraph`,
-       :sqlfunc:`resolve_input`, and the
-       ``provsql.aggtoken_text_as_uuid`` setting (used for clickable
-       ``agg_token`` cells), all introduced in 1.4.0.
+     - First public release.
    * - ``1.1.x``
      - ``≥ 1.5.0``
-     - Adds renderers for the continuous-distribution gate
-       family (``gate_rv``, ``gate_arith``, ``gate_mixture``,
-       float8 ``gate_value``), the *Distribution profile* /
-       *Sample* / *Moment* / *Support* evaluators, the
-       *Condition on* row-provenance auto-preset, and
+     - Adds rendering of continuous-distribution circuits, the
+       *Distribution profile* / *Sample* / *Moment* / *Support*
+       evaluators, the *Condition on* row-provenance preset, and
        simplified-circuit rendering driven by
-       ``provsql.simplify_on_load``. Backed by the
-       :sqlfunc:`simplified_circuit_subgraph`, :sqlfunc:`rv_histogram`
-       and :sqlfunc:`rv_sample` C entry points introduced in 1.5.0.
-       See :doc:`continuous-distributions`.
+       ``provsql.simplify_on_load``. See
+       :doc:`continuous-distributions`.
    * - ``1.2.x``
      - ``≥ 1.6.0``
      - Adds the three-way :guilabel:`Provenance scheme` selector
-       (Semiring / Where / Boolean), the :sc:`B` badge on
-       ``gate_assumed_boolean`` wrappers, the
-       :sc:`PROV-TID` / :sc:`PROV-BID` schema-panel sub-pills, and
-       the eval-strip semiring filter that hides non-Boolean
-       -compatible semirings whenever the inspected root carries
-       the Boolean-rewrite marker.  Backed by the
-       safe-query rewriter, the ``gate_assumed_boolean`` gate type,
-       and the per-table TID / BID metadata store introduced in
-       1.6.0.  See :doc:`probabilities` and :doc:`provenance-tables`.
+       (Semiring / Where / Boolean), the :sc:`B` badge, the
+       :sc:`PROV-TID` / :sc:`PROV-BID` schema-panel pills, and the
+       eval-strip filter hiding semirings that are not Boolean-compatible
+       on a Boolean-marked root. See :doc:`probabilities` and
+       :doc:`provenance-tables`.
    * - ``1.3.x``
      - ``≥ 1.7.0``
-     - Adds the knowledge-compilation strip (the DIMACS CNF with its
+     - Adds the knowledge-compilation entries (the DIMACS CNF with its
        variable-to-source-tuple mapping, the compiled d-DNNF and
        tree-decomposition canvases, the ``.nnf`` text export, and the
        multi-backend :guilabel:`Probability benchmark`), the
        ``provsql.fallback_compiler`` row in the Config panel, the
-       moment / distribution-profile / sample surface on ``agg_token``
+       moment / distribution-profile / sample entries on ``agg_token``
        and ``semimod`` targets, and tool-availability filtering of the
-       compiler / counter pickers. Backed by the knowledge-compilation
-       SQL surface (:sqlfunc:`tseytin_cnf`, :sqlfunc:`compile_to_ddnnf`,
-       :sqlfunc:`ddnnf_stats`, :sqlfunc:`tree_decomposition_dot`,
-       :sqlfunc:`tool_available`) and
-       the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
-       See :doc:`knowledge-compilation`.
+       compiler / counter pickers. See :doc:`knowledge-compilation`.
    * - ``1.4.x``
      - ``≥ 1.8.0``
-     - Adds the :ref:`Tools panel <studio-tools-panel>`: an in-app view of
-       the ``provsql.tools`` external-tool registry, grouped by operation,
-       with per-tool availability, ``cli`` / ``kcmcp`` kind, and (for a
-       superuser) in-place register / edit / enable / preference /
-       unregister management, including warm
-       :doc:`KCMCP </dev/kc-server-protocol>` servers reached by a managed
-       or explicit endpoint. Backed by the ``provsql.tools`` view and the
-       ``register_tool`` / ``unregister_tool`` / ``set_tool_*`` SQL surface
-       and the ``provsql.kcmcp_server`` GUC introduced in 1.8.0.
-       See :doc:`/user/tool-registry`.
-
-       Also renders the **inversion-free** certificate: a teal :sc:`IF`
-       badge on a certified result root (coexisting with the Boolean
-       :sc:`B` badge), with the certificate header and variable-block
-       order in the inspector and the per-input order key plus rank on
-       certified leaves, and offers the ``inversion-free`` method in the
-       eval strip and :guilabel:`Probability benchmark` when the root is
-       certified. Backed by the ``gate_annotation`` gate type, the
-       :sqlfunc:`annotate` / :sqlfunc:`inversion_free_key` SQL surface,
-       and the ``inversion-free`` probability method introduced in 1.8.0.
-       See :doc:`probabilities`.
+     - Adds the :ref:`Tools panel <studio-tools-panel>`, including
+       :doc:`KCMCP </dev/kc-server-protocol>` servers reached by a
+       managed or explicit endpoint (see :doc:`/user/tool-registry`),
+       and the **inversion-free** certificate: the :sc:`IF` badge, its
+       inspector details, and the ``inversion-free`` method in the eval
+       strip and :guilabel:`Probability benchmark`. See
+       :doc:`probabilities`.
    * - ``1.5.x``
      - ``≥ 1.9.0``
-     - Adds :ref:`Notebook mode <studio-notebook-mode>`: a Jupyter-style
-       notebook (SQL / Markdown / circuit-snapshot / evaluation cells)
-       over a pinned kernel session, with the Jupyter keymap, per-cell
-       provenance-scheme overrides, tabs as database bindings,
-       ``.ipynb`` save / load with viewer-ready output fallbacks, the
-       bundled tutorial / case-study example notebooks
-       (``/notebook?nb=<name>``), and Playground support. Also a
-       nav-bar action (:fa:`broom`) to empty the connected database, and ``agg_token``
-       arithmetic results rendered as *value (\*)* like plain aggregate
-       tokens. Backed by extension features introduced in 1.9.0: the
-       idempotent :sqlfunc:`add_provenance` /
-       :sqlfunc:`create_provenance_mapping` (the self-establishing
-       example notebooks re-run cleanly) and the ``agg_token``
-       arithmetic operator surface whose ``gate_arith`` tokens record
-       their computed value.
+     - Adds :ref:`Notebook mode <studio-notebook-mode>` with its example
+       notebooks and Playground support, the :fa:`broom` action to empty
+       the connected database, and ``agg_token`` arithmetic results
+       rendered as *value (\*)* like plain aggregate tokens.
    * - ``1.6.x``
      - ``≥ 1.10.0``
-     - Adds :ref:`Contributions mode <studio-contributions-mode>`
-       (per-input Shapley / Banzhaf bars, over
-       :sqlfunc:`shapley_all_vars` and the 1.10.0 cost-selected
-       d-DNNF construction) and renders 1.10.0's new constructs:
-       the four-way provenance-scheme selector with the :sc:`A`
-       badge, the :sc:`D` certificate badge, conditioned gates, and
-       Möbius (μ) nodes.  Notebook Markdown cells render math.
+     - Adds :ref:`Contributions mode <studio-contributions-mode>` and
+       renders 1.10.0's new constructs: the four-way provenance-scheme
+       selector with the :sc:`A` badge, the :sc:`D` certificate badge,
+       conditioned gates, and Möbius (μ) nodes. Notebook Markdown cells
+       render math.
    * - ``1.7.x``
      - ``≥ 1.11.0``
-     - Adds :ref:`Temporal mode <studio-temporal-mode>`: the validity
-       timeline with the Source (relation / query) x time-operation
-       (as-of / during / full) controls, the validity-mapping picker,
-       the adaptive axis with its date / year caption and rollover
-       markers, the as-of scrubber, and the during window frame. Builds
-       on the extension's temporal surface (:sqlfunc:`sr_temporal`,
-       :sqlfunc:`create_provenance_mapping`, ``time_validity_view``), and
-       requires 1.11.0 for its fixes to **maintained** provenance mappings
-       -- the self-maintaining ``time_validity_view`` the timeline reads --
-       and the server to be PostgreSQL 14+. See :doc:`temporal`.
+     - Adds :ref:`Temporal mode <studio-temporal-mode>`, which also
+       requires the server to be PostgreSQL 14+. See :doc:`temporal`.
    * - ``1.8.x``
      - ``≥ 1.12.0``
-     - Offers the three planner-time routes -- ``sq-rewrite``,
-       ``bounded-jw``, ``reachability`` -- as named probability methods in
-       the eval strip, each shown only on a token whose root carries that
-       route's tag, and makes :guilabel:`Formula` available on every gate
-       kind (the measure carriers and conditioned gates included) with an
-       optional provenance mapping. Backed by the route tags the extension
-       stamps on the roots those rewrites produce, the all-gate formula
-       pseudo-semiring, and the optional-mapping :sqlfunc:`sr_formula`
-       introduced in 1.12.0. See :doc:`probabilities` and
-       :doc:`semirings`.
-
-       Also moves all RV-family rendering onto the extension's family
-       registry: circuit-inspector glyphs and parameter symbols come
-       from :sqlfunc:`rv_families` and the inline density preview from a
-       server-computed :sqlfunc:`rv_analytical_curves` grid, so families
-       added to the extension (1.11.0's ``gamma`` / ``chi_squared``)
-       render without a Studio upgrade -- and 1.11.0 is a hard floor:
-       Studio keeps no client-side family table.
-       See :doc:`continuous-distributions`.
+     - Offers the ``sq-rewrite``, ``bounded-jw`` and ``reachability``
+       probability methods in the eval strip, each shown only on a token
+       produced by that route, and makes :guilabel:`Formula` available
+       on every gate kind with an optional provenance mapping (see
+       :doc:`probabilities` and :doc:`semirings`). Random-variable
+       families added to the extension render without a Studio
+       upgrade (see :doc:`continuous-distributions`).
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

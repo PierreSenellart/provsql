@@ -230,7 +230,6 @@ _SQL_FUNC_MAP = {
     'exp':                      '/doxygen-sql/html/group__random__variable__type.html#ga3d80fae2023d03307c2491ee88a9a0bc',
     'sqrt':                     '/doxygen-sql/html/group__random__variable__type.html#ga5d68648d2ca1ee05ea17d6c796abd19d',
     'quantile':                 '/doxygen-sql/html/group__probability.html#ga82ca9fd9531cf491bcefde6850de8321',
-    'rv_quantile':              '/doxygen-sql/html/group__probability.html#ga0bbbec825dd48bbcdb5311dd54ff78fc',
     'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga41d074e6a6e06d585efda49edd32f0a5',
     'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gabb228422bc96460b22ee9f75c5a4144e',
     'gmm':                      '/doxygen-sql/html/group__random__variable__type.html#ga447dc9a6c975298f7d0dcb7d37a11648',

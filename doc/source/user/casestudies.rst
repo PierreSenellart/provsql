@@ -3,33 +3,28 @@
 Case Studies: Overview
 ======================
 
-The :doc:`tutorial <tutorial>` is the gentle first contact with ProvSQL:
-it walks through the core workflow -- add provenance to a table, run a
-query, evaluate the result in a semiring -- on a single small example.
-The **case studies** that follow are longer, self-contained worked
+The :doc:`tutorial <tutorial>` introduces the core workflow -- add
+provenance to a table, run a query, evaluate the result in a semiring --
+on a single small example. The **case studies** are longer worked
 examples, each built around a realistic dataset and centred on a
-different facet of the system. They go well beyond the tutorial in both
-the breadth of SQL they exercise and the depth to which they push a
-particular capability.
+different aspect of ProvSQL.
 
-Each case study is independent: most ship a single self-contained
-``setup.sql`` to download and load; case study 3 instead gives
-instructions for fetching the large Île-de-France GTFS dataset (not
-bundled, due to its size), and case study 4 loads bundled data files
-from the source tree under ``doc/casestudy4/data/``. Each states its
-scenario and tasks up front and can be read on its own. Read the one whose theme
-matches what you want to learn; the :ref:`coverage matrix
-<case-study-coverage>` at the end of this page is the quickest way to
-find which study demonstrates a given feature.
+Each case study states its scenario and tasks up front and can be read
+on its own. Most ship a single ``setup.sql`` to download and load; case
+study 3 explains how to fetch the Île-de-France GTFS dataset (too large
+to bundle), and case study 4 loads the data files under
+``doc/casestudy4/data/`` in the source tree. The :ref:`coverage matrix
+<case-study-coverage>` at the end of this page shows which study
+demonstrates a given feature.
 
 .. tip::
 
    **No install required.** Every case study here except case study 3 (whose
    GTFS dataset is too large to bundle) runs in the `ProvSQL Playground
    <https://provsql.org/playground/>`_, the browser build of ProvSQL Studio,
-   on a ready-made database -- and all but case studies 3 and 4 also ship as
+   on a ready-made database. All but case studies 3 and 4 also ship as
    :ref:`runnable notebooks <studio-example-notebooks>`; each chapter links
-   straight to what it has. The Playground bundles no external tools, so
+   to what it has. The Playground bundles no external tools, so
    steps that explicitly call an external knowledge compiler (``d4``,
    ``c2d``…) or ``graph-easy`` do not run there, but the built-in methods
    and everything else do. See the :ref:`Playground note <playground-note>`.
@@ -75,7 +70,7 @@ What each case study covers
     detections.
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
-    The **continuous-distribution** surface end to end: ``random_variable``
+    **Continuous distributions** end to end: ``random_variable``
     columns (Normal / Uniform / Exponential / Erlang noise models, joined
     by the Gamma / Weibull / Pareto constructors and Bernoulli mixtures),
     arithmetic, comparison, and ``CASE`` on them, analytic moments with
@@ -97,19 +92,18 @@ What each case study covers
 
 :doc:`Case study 8 -- ProvSQL as a Probability Calculator <casestudy8>`
     ProvSQL as an **exact, correlation-aware probability calculator driven
-    in SQL**: textbook problems -- base-rate fallacy, correlation
-    breaking the independence formula, the method portfolio and its cost
-    chooser, a continuous posterior by truncation, the conditional
-    expectation of an aggregate, denial constraints as evidence, a
-    skewed waiting time (log-normal + quantiles + transforms),
-    discrete counts with a Beta rate posterior, the information gain
-    of a Bayesian update (entropy / KL), a Gaussian-mixture cohort,
-    empirically-loaded posteriors and forecast tables, and -- closing
-    into full Bayesian inference -- a latent (``random_variable``)
-    distribution parameter updated from data by likelihood weighting
-    (``observe`` / ``and_agg`` / ``evidence``) -- each answered by a
-    one-line query, the conditioning ones through the ``|`` ("given")
-    operator. A compact, notebook-first tour of the probability surface.
+    in SQL**. It answers textbook problems with one-line queries (the
+    conditioning ones through the ``|`` ("given") operator): the base-rate
+    fallacy, correlation breaking the independence formula, the method
+    portfolio and its cost chooser, a continuous posterior by truncation,
+    the conditional expectation of an aggregate, denial constraints as
+    evidence, a skewed waiting time (log-normal, quantiles, transforms),
+    discrete counts with a Beta rate posterior, the information gain of a
+    Bayesian update (entropy, KL), a Gaussian-mixture cohort,
+    empirically-loaded posteriors and forecast tables, and full Bayesian
+    inference: a latent (``random_variable``) distribution parameter
+    updated from data by likelihood weighting (``observe`` / ``and_agg`` /
+    ``evidence``).
 
 .. _case-study-coverage:
 
@@ -336,7 +330,7 @@ Continuous random variables
    "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian``", "", "", "", "", "", "", "", "", ""
    "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
-   "Latent (``random_variable``) distribution parameters, e.g. ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓"
+   "Latent (``random_variable``) distribution parameters, e.g., ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓"
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""
    "Order statistics (``greatest`` / ``least``, ``max`` / ``min`` aggregate)", "", "", "", "", "", "", "✓", "", ""

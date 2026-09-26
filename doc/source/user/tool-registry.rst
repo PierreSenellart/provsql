@@ -7,20 +7,18 @@ compilers ``d4``, ``d4v2``, ``c2d``, ``minic2d``, ``dsharp`` and Panini
 (KCBox), the model counters ``ganak``, ``sharpsat-td``, ``dpmc`` and
 ``weightmc``, and the GraphViz wrapper ``graph-easy``.
 
-The **tool registry** makes the set of these tools, how each is invoked, what
-it can do, and which is preferred **data** rather than compiled-in constants.
-An administrator can register a new tool, repoint one at a different binary,
-reorder preferences, or disable one, all at run time and without recompiling.
+The **tool registry** records these tools, how each is invoked, what it can
+do, and which is preferred, as data in the database. An administrator can
+register a new tool, repoint one at a different binary, reorder preferences,
+or disable one, all at run time and without recompiling.
 
-Out of the box the registry is seeded with exactly the tools ProvSQL knows
-about and their usual invocations, so nothing needs to be configured: a
-fresh database behaves identically to before the registry existed.
+Out of the box the registry holds the tools ProvSQL knows about with their
+usual invocations, so nothing needs to be configured.
 
 The catalog: ``provsql.tools``
 ------------------------------
 
-The read-only view :sqlfunc:`tool_available`'s companion, ``provsql.tools``,
-lists every registered tool:
+The read-only view ``provsql.tools`` lists every registered tool:
 
 .. code-block:: postgresql
 
@@ -30,7 +28,7 @@ lists every registered tool:
 Columns:
 
 ``name``
-    Logical id, e.g. ``d4`` or ``panini-obdd``. This is the value
+    Logical id, e.g., ``d4`` or ``panini-obdd``. This is the value
     :sqlfunc:`probability_evaluate` and :ref:`provsql.fallback_compiler
     <provsql-fallback-compiler>` accept.
 ``kind``
@@ -116,8 +114,8 @@ That compiler is then usable immediately:
 
 :sqlfunc:`unregister_tool` removes a tool (a seeded default becomes hidden);
 :sqlfunc:`set_tool_enabled` turns a tool off or on without forgetting its
-configuration; :sqlfunc:`set_tool_preference` reorders it. Each errors on an
-unknown name rather than silently doing nothing:
+configuration; :sqlfunc:`set_tool_preference` reorders it. Each raises an
+error on an unknown name:
 
 .. code-block:: postgresql
 
@@ -129,17 +127,15 @@ KCMCP servers (``kind = kcmcp``)
 
 A ``kcmcp`` tool compiles over a **warm, socket-attached server** speaking the
 :doc:`KCMCP protocol </dev/kc-server-protocol>` instead of spawning a process
-per call. ProvSQL keeps one connection per backend for the session's life, so
-repeated compilations skip the connect/handshake (and a future caching engine
-keeps its cross-query cache warm). The standalone ``tdkc --kcmcp`` is a
-reference server; in practice the server drives a knowledge compiler such as
-d4. The result is byte-for-byte the same d-DNNF as the CLI path, so probability
-/ Shapley results are identical, and ProvSQL falls back to the CLI path if the
-server is unreachable.
+per call, keeping one connection per session. The standalone ``tdkc --kcmcp``
+is a reference server; in practice the server drives a knowledge compiler such
+as d4. The d-DNNF, and hence the probability / Shapley results, are identical
+to those of the command-line tool, and ProvSQL falls back to the command-line
+tool if the server is unreachable.
 
 There are two ways to point a ``kcmcp`` tool at a server.
 
-**Endpoint mode** – connect to a server you run and supervise yourself, at a
+**Endpoint mode**: connect to a server you run and supervise yourself, at a
 fixed address (a local Unix socket, or ``host:port`` for a remote server):
 
 .. code-block:: postgresql
@@ -153,10 +149,10 @@ fixed address (a local Unix socket, or ``host:port`` for a remote server):
       endpoint      => 'unix:/run/provsql/kc.sock');
     SELECT probability_evaluate(t, 'compilation', 'kc-server') FROM mytable;
 
-**Managed mode** – let ProvSQL launch and supervise the server. Set
+**Managed mode**: let ProvSQL launch and supervise the server. Set
 :ref:`provsql.kcmcp_server <provsql-kcmcp-server>` to the launch command (with
-a ``{endpoint}`` placeholder); a supervisor background worker starts it,
-publishes its address, and restarts it if it exits. Register a tool whose
+a ``{endpoint}`` placeholder); ProvSQL starts it and restarts it if it
+exits. Register a tool whose
 ``endpoint`` is the literal ``managed``:
 
 .. code-block:: postgresql
@@ -181,8 +177,8 @@ Persistence
 -----------
 
 Registry changes are persisted in the ``provsql.tool_overrides`` table,
-overlaid on the compiled-in defaults, so a registration made in one session is
-honoured by every backend and survives a server restart. The table is marked
+on top of the built-in defaults, so a registration made in one session is
+honoured by every session and survives a server restart. The table is marked
 as extension configuration, so ``pg_dump`` carries your registrations with the
 database. An empty ``provsql.tool_overrides`` means exactly the built-in
 defaults; to reset everything, ``DELETE FROM provsql.tool_overrides``.

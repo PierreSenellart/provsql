@@ -1,7 +1,7 @@
 Shapley and Banzhaf Values
 ===========================
 
-ProvSQL computes *Shapley values* and *Banzhaf values* – game-theoretic
+ProvSQL computes *Shapley values* and *Banzhaf values*, game-theoretic
 measures from cooperative game theory that quantify the individual
 contribution of each input tuple to a query result.
 
@@ -75,7 +75,7 @@ provenance circuit to a d-DNNF and evaluates it efficiently. The optional
 third argument selects the d-DNNF construction
 (``'tree-decomposition'``, ``'interpret-as-dd'``, ``'compilation'``);
 with ``'compilation'``, the fourth argument names the external
-compiler, e.g. ``shapley(token, var, 'compilation', 'd4')``. When the
+compiler, e.g., ``shapley(token, var, 'compilation', 'd4')``. When the
 third argument is empty, ``'default'``, or ``'auto'``, the cheapest
 route is selected automatically.
 

@@ -30,12 +30,10 @@ probability in the textbook sense, `Bayes' rule
 
    \Pr(A \mid B) = \frac{\Pr(A \wedge B)}{\Pr(B)}.
 
-ProvSQL realises this by building a terminal *conditioned gate* over the two
-provenance tokens, whose probability evaluators read as exactly that ratio.
-Because gates are addressed by content, a base tuple shared between ``A`` and
-``B`` is **literally the same input gate** in both circuits, so the joint
-:math:`\Pr(A \wedge B)` is computed over the real overlap -- the conditional
-is correct even when ``A`` and ``B`` are correlated.
+A base tuple shared between ``A`` and ``B`` is the same input in both
+provenance circuits, so the joint :math:`\Pr(A \wedge B)` is computed over
+the real overlap: the conditional is correct even when ``A`` and ``B`` are
+correlated.
 
 Two conventions follow from the definition:
 
@@ -44,8 +42,7 @@ Two conventions follow from the definition:
   (:math:`\Pr(A \mid \text{true}) = \Pr(A)`).
 * **Nested conditioning folds** as a sequential `Bayesian update
   <https://en.wikipedia.org/wiki/Bayesian_inference>`_: ``(A | B) | C`` is
-  the same as ``A | (B ∧ C)``. The conditioned gate never nests; it stays one
-  level deep with the evidence accumulated.
+  the same as ``A | (B ∧ C)``.
 
 The operator family
 -------------------
@@ -69,7 +66,7 @@ either a provenance token,
                  (SELECT provenance() FROM screening WHERE positive GROUP BY ()) AS positive) e;
 
 or a **Boolean predicate** built from ``random_variable`` / ``agg_token``
-comparisons, which the planner lifts into an evidence gate for you:
+comparisons:
 
 .. code-block:: postgresql
 
@@ -78,9 +75,7 @@ comparisons, which the planner lifts into an evidence gate for you:
     SELECT expected(x | (x > 25)) FROM r;
 
 The evidence may also compare the value against **another random
-variable**. Conditioning on such an RV-vs-RV comparison is evaluated by
-a one-dimensional quadrature over the independent operands -- exact for
-uniforms:
+variable**; for independent uniform operands the result is exact:
 
 .. code-block:: postgresql
 
@@ -89,14 +84,12 @@ uniforms:
     WITH r AS (SELECT uniform(0,1) AS x, uniform(0,1) AS y)
     SELECT expected(x | (x > y)) FROM r;
 
-The dual question -- the *probability* a comparison holds rather than a
-conditioned moment -- is :sqlfunc:`probability` over the predicate:
-``probability(x > y)`` for two i.i.d. uniforms is exactly ``0.5``. See
-:doc:`continuous-distributions` for the comparison-event surface.
+The *probability* that a comparison holds is :sqlfunc:`probability` over
+the predicate: ``probability(x > y)`` for two i.i.d. uniforms is exactly
+``0.5`` (see :doc:`continuous-distributions`).
 
-The evidence side may itself be a comparison rather than a pre-built
-token, so a conditional probability over two comparison events is
-written directly: ``probability((A) | (B))`` is the correlation-aware
+A conditional probability over two comparison events is written
+directly: ``probability((A) | (B))`` is the correlation-aware
 :math:`\Pr(A \wedge B) / \Pr(B)`. For example, with
 ``x ~ Normal(1500, 400)`` and the nested events ``{x >= 2000} ⊂
 {x >= 1000}``:
@@ -106,15 +99,14 @@ written directly: ``probability((A) | (B))`` is the correlation-aware
     WITH r AS (SELECT normal(1500, 400) AS x)
     SELECT probability((x >= 2000) | (x >= 1000)) FROM r;  -- 0.1181
 
-Both comparisons share the ``x`` leaf, so the joint keeps the
-dependence (it is not ``Pr(A)·Pr(B)``); comparisons against constants on
-one distribution are resolved analytically and stay exact even at
-``provsql.rv_mc_samples = 0``.
+Both comparisons share ``x``, so the joint keeps the dependence (it is not
+``Pr(A)·Pr(B)``); comparisons against constants on one distribution are
+resolved analytically and stay exact even at ``provsql.rv_mc_samples = 0``.
 
 The same holds when a shared random variable is compared against *other*
-random variables rather than constants -- e.g. conditioning on which of
-several variables is largest. Both the probability and the moment sides
-are exact (no Monte Carlo):
+random variables, e.g., conditioning on which of several variables is
+largest. Both probabilities and moments are then computed without Monte
+Carlo:
 
 .. code-block:: postgresql
 
@@ -126,29 +118,26 @@ are exact (no Monte Carlo):
 
 The event ``x > y AND x > z`` says ``x`` is the largest of the three, so
 ``x`` conditioned on it is ``beta(3,1)`` (mean ``3/4``, variance
-``3/80``). ProvSQL evaluates these by marginalising each independent
-partner variable analytically, leaving a one-dimensional integral over
-the shared variable -- exact for the uniform case and high-accuracy
-otherwise.
+``3/80``). The result is exact for uniforms and computed by numerical
+integration, to high accuracy, for other distributions.
 
 The result of ``value | evidence`` is **terminal**: a conditioned value may
-only be conditioned further, never combined into a larger ``plus`` /
-``times`` / ``monus`` / aggregate gate.
+only be conditioned further, never combined by ``plus`` / ``times`` /
+``monus`` or an aggregate.
 
 On the token carrier (plain ``uuid`` values), the function spelling of
 the binary operator is :sqlfunc:`cond` ``(target, evidence)``,
 interchangeable with ``target | evidence``; the ``random_variable`` and
-``agg_token`` carriers back their ``|`` with
-:sqlfunc:`random_variable_cond` and :sqlfunc:`agg_token_cond`
-respectively.
+``agg_token`` carriers have :sqlfunc:`random_variable_cond` and
+:sqlfunc:`agg_token_cond` respectively.
 
 Unary ``| evidence`` -- conditioning a whole tuple
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Written as a term in the ``SELECT`` list (with no left operand), ``| evidence``
 is a **whole-tuple directive**: it conditions the *output provenance of every
-row* of the query on the evidence, then is stripped from the visible
-projection. The function spelling is :sqlfunc:`given` ``(evidence)``,
+row* of the query on the evidence. The function spelling is
+:sqlfunc:`given` ``(evidence)``,
 the same as the prefix ``| evidence``.
 
 .. code-block:: postgresql
@@ -201,16 +190,14 @@ The prefix ``!`` operator (function spelling :sqlfunc:`provenance_not`
 ``(event)``) is the **complement** of a Boolean provenance event: ``!x`` holds
 in exactly
 the worlds where ``x`` does not, so ``probability_evaluate(!x)`` is
-:math:`1 - \Pr(x)`. Unlike the conditioned gate, ``!`` is an ordinary
-m-semiring expression -- Boolean negation, :math:`\mathbb{1} \ominus x`
-underneath -- so it composes freely under ``times`` / ``plus``; the one thing
-it refuses is a conditioned (terminal) token.
+:math:`1 - \Pr(x)`. Unlike a conditioned token, ``!x`` combines freely
+under ``times`` / ``plus``; ``!`` refuses a conditioned (terminal) token.
 
-Its natural use with conditioning is a **denial constraint**: restricting a
+Its main use with conditioning is a **denial constraint**: restricting a
 query to the worlds where some forbidden pattern *does not* occur. The
-violation event ``W`` is just an ordinary query -- no hand-built gates --
-aggregated to a single token with ``provenance() ... GROUP BY ()``, and the
-query is conditioned on its negation, ``Q | !W``:
+violation event ``W`` is an ordinary query aggregated to a single token
+with ``provenance() ... GROUP BY ()``, and the query is conditioned on its
+negation, ``Q | !W``:
 
 .. code-block:: postgresql
 
@@ -225,10 +212,9 @@ query is conditioned on its negation, ``Q | !W``:
              (SELECT provenance() FROM bookings WHERE id = 1) | !w.violation)
     FROM w;
 
-The constraint can be any query: a forbidden pattern expressed as a query
-becomes a denial constraint by conditioning on the negation of "the pattern
-occurs", so ``!W`` is the event "no violation" and ``Q | !W`` restricts ``Q``
-to exactly the worlds the constraint admits. This is the MarkoViews
+The forbidden pattern can be any query: ``!W`` is the event "no violation"
+and ``Q | !W`` restricts ``Q`` to exactly the worlds the constraint admits.
+This is the MarkoViews
 construction :cite:`DBLP:journals/pvldb/JhaS12` -- conditioning a probabilistic
 database on the event that no constraint is violated. ``!`` is also useful on
 its own, wherever the complement of an event is wanted
@@ -270,7 +256,7 @@ Conditioning on a threshold predicate `truncates
 <https://en.wikipedia.org/wiki/Truncated_normal_distribution>`_ the
 distribution and renormalises it; the result is a value in its own right that
 you can select, store, or hand onward. See :doc:`continuous-distributions`
-for the closed-form truncation table (Normal, Uniform, Exponential) and the
+for the closed-form truncations and the
 Monte-Carlo fallback for other shapes.
 
 Probabilistic aggregates
@@ -295,11 +281,10 @@ In ProvSQL Studio
 
 Studio's :ref:`evaluation strip <studio-circuit-eval-strip>` exposes
 conditioning interactively: the :guilabel:`Condition on` input takes an
-evidence provenance UUID, auto-presetting to a clicked row's own provenance,
-with an adjacent :guilabel:`Conditioned by` badge that lights up while the
-result is being conditioned on it -- click the badge to toggle the
-conditioning off (an unconditional result) and back on. Distribution
-profiles, moments, and probabilities all honour it,
+evidence provenance UUID, preset to a clicked row's own provenance; the
+adjacent :guilabel:`Conditioned by` badge is lit while the result is
+conditioned, and clicking it toggles the conditioning off and back on.
+Distribution profiles, moments, and probabilities all take it into account,
 so the truncated histogram of a conditioned ``random_variable`` and the
 conditional mean of an ``agg_token`` are visible in the canvas. See
 :doc:`studio` for the panel and :doc:`case study 6 <casestudy6>` for it in

@@ -20,8 +20,8 @@ The Scenario
 You are building an evidence-synthesis tool for biomedical research. You have
 a small database of published studies, each with a study type
 (case report, observational, RCT, or meta-analysis) and a reliability score.
-Each study reports one or more *findings*: an exposure (e.g. Coffee, Exercise),
-an outcome (e.g. Cardiovascular Disease), and an observed effect (beneficial,
+Each study reports one or more *findings*: an exposure (e.g., Coffee, Exercise),
+an outcome (e.g., Cardiovascular Disease), and an observed effect (beneficial,
 harmful, or neutral).
 
 Your tasks:
@@ -54,7 +54,7 @@ Setup
 
 .. nb:omit-begin
 
-This tutorial assumes a working ProvSQL installation (see
+This case study assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy2/setup.sql>`
 and load it into a fresh PostgreSQL database:
 
@@ -69,10 +69,10 @@ and load it into a fresh PostgreSQL database:
 
 This creates four tables:
 
-* ``study`` – 8 published studies with type and reliability score
-* ``exposure`` – 7 exposures (Coffee, Exercise, Red Meat…)
-* ``outcome`` – 5 health outcomes (Cardiovascular Disease…)
-* ``finding`` – 25 study findings linking exposures to outcomes
+* ``study`` -- 8 published studies with type and reliability score
+* ``exposure`` -- 7 exposures (Coffee, Exercise, Red Meat…)
+* ``outcome`` -- 5 health outcomes (Cardiovascular Disease…)
+* ``finding`` -- 25 study findings linking exposures to outcomes
 
 Step 1: Explore the Database
 -----------------------------
@@ -81,7 +81,7 @@ Familiarise yourself with the data. The ``study_type`` column uses a PostgreSQL
 ``ENUM`` ordered by evidence quality:
 ``no_evidence < case_report < observational < rct < meta_analysis < perfect_evidence``,
 where ``no_evidence`` is the semiring 𝟘 (no derivation possible) and
-``perfect_evidence`` is the semiring 𝟙 (neutral for ⊗=MIN: does not degrade quality chains).
+``perfect_evidence`` is the semiring 𝟙 (neutral for ⊗ = MIN).
 
 .. nb:omit-begin
 
@@ -98,17 +98,16 @@ Step 2: Enable Provenance and Join with Lookup Tables
 ------------------------------------------------------
 
 Enable provenance tracking on ``finding``, the base fact table. Each row
-in ``finding`` receives a unique UUID circuit token that will be carried
-through any downstream query.
+in ``finding`` receives a unique UUID token, carried through any
+downstream query.
 
 .. code-block:: postgresql
 
     SELECT add_provenance('finding');
 
 Now build a view ``f`` by joining ``finding`` with the three
-lookup tables. ProvSQL transparently propagates each ``finding`` row's token
-through the join, so every row in ``f`` carries the provenance token of
-the ``finding`` row it came from. Define ``f`` using the following
+lookup tables. Every row in ``f`` carries the provenance token of the
+``finding`` row it came from. Define ``f`` using the following
 columns: ``study`` (the study title), ``study_type``, ``reliability``,
 ``exposure`` (the exposure name), ``outcome`` (the outcome name),
 and ``effect``.
@@ -138,11 +137,9 @@ and ``effect``.
 
 .. note::
 
-   Querying a view that references a provenance-enabled table automatically
-   exposes the provenance column: ProvSQL's planner hook fires on the
-   expanded query and propagates the ``finding`` token through the join.
-   Any query on ``f`` therefore carries full provenance, even though
-   provenance was never explicitly added to ``f`` itself.
+   A query on a view over a provenance-enabled table carries that table's
+   provenance: any query on ``f`` has full provenance, although provenance
+   was never added to ``f`` itself.
 
 Step 3: Create a Provenance Mapping
 -------------------------------------
@@ -170,9 +167,8 @@ findings of interest: the (Coffee, Cardiovascular Disease, harmful),
    evaluation function. With ``SELECT DISTINCT``, the computed formula
    becomes part of the distinct key, so rows with the same
    (exposure, outcome, effect) but different single-study formulas are
-   never collapsed – each keeps its own singleton formula. With
-   ``GROUP BY``, ProvSQL ⊕-combines all provenance tokens in the group
-   first, and then applies :sqlfunc:`sr_formula` once on the combined
+   never collapsed. With ``GROUP BY``, ProvSQL ⊕-combines all provenance
+   tokens in the group, and :sqlfunc:`sr_formula` applies to the combined
    token.
 
 .. raw:: html
@@ -229,7 +225,7 @@ independent alternatives (⊕). Use :sqlfunc:`sr_why` on ``f`` with
 
 Each inner set in ``witnesses`` is a minimal group of studies that together
 (⊗) derive the finding; the multiple inner sets are independent
-alternatives (⊕) – any one of them alone suffices.
+alternatives (⊕): any one of them alone suffices.
 
 Step 6: Evidence Grade Semiring
 --------------------------------
@@ -300,11 +296,10 @@ over the ``study_type`` column, and compute the evidence grade for every
 
 .. note::
 
-   Use ``GROUP BY`` (not ``SELECT DISTINCT``) when combining an aggregate
-   function with provenance evaluation over a grouped result. ``GROUP BY``
+   As in Step 4, use ``GROUP BY``, not ``SELECT DISTINCT``: ``GROUP BY``
    collapses each group into a single provenance token (via ⊕), whereas
-   ``SELECT DISTINCT`` would include the computed value in the distinct scope
-   and produce spurious duplicates.
+   ``SELECT DISTINCT`` includes the computed value in the distinct key and
+   produces spurious duplicates.
 
 Step 7: Where-Provenance
 --------------------------
@@ -329,7 +324,7 @@ Each entry in ``source`` takes the form ``[table:token:column]``, where
 ``token`` is the provenance UUID of the source row and ``column`` is its
 position in the table. Only ``effect`` is tracked, appearing as
 ``[finding:〈token〉:5]``; the remaining columns (``study``, ``study_type``,
-``exposure``, ``outcome``) appear as empty ``[]`` – they originate from
+``exposure``, ``outcome``) appear as empty ``[]``: they originate from
 ``study``, ``exposure``, and ``outcome`` tables that have no provenance
 enabled.
 
@@ -434,16 +429,15 @@ report it. Define the ``f_replicated`` view, which groups findings by
 
 .. note::
 
-   With ProvSQL, ``HAVING`` does not filter on the data at hand: whether a
-   group passes the threshold depends on which of its rows are present, and
-   that is what the group's provenance token records. A group that fails
-   the threshold may therefore still appear in the output, with a
+   With ProvSQL, whether a group passes the ``HAVING`` threshold depends
+   on which of its rows are present, and the group's provenance token
+   records this. A group may therefore appear in the output with a
    provenance that evaluates to the semiring zero ``𝟘`` wherever the
-   threshold fails. A group that can pass in no world at all -- here, a
-   finding backed by a single study, which will never have two -- may
-   either be left out of the output or appear in it with a provenance
-   evaluating to ``𝟘``. The two are equivalent: a row whose provenance is
-   ``𝟘`` is the same as an absent row.
+   threshold fails. A group that passes in no world at all -- here, a
+   finding backed by a single study -- is either left out of the output
+   or appears with a provenance evaluating to ``𝟘``. The two are
+   equivalent: a row whose provenance is ``𝟘`` is the same as an absent
+   row.
 
 Step 11: Inspect Replication with :sqlfunc:`sr_counting`
 ---------------------------------------------------------
@@ -464,13 +458,10 @@ ways it is derived.
 
 .. note::
 
-   :sqlfunc:`sr_counting` is a *provenance* semiring evaluation,
-   independent of the SQL ``COUNT(*)`` aggregate. ``COUNT(*)`` is standard
-   SQL that drives the ``HAVING`` threshold; :sqlfunc:`sr_counting`
-   evaluates the resulting provenance circuit under the counting semiring,
-   assigning each base finding the value from ``count_mapping`` (``1``
-   per row). The two happen to share the word "count" but serve completely
-   different roles.
+   :sqlfunc:`sr_counting` evaluates the provenance circuit in the counting
+   semiring, giving each base finding its value from ``count_mapping``
+   (``1`` per row). It is unrelated to the SQL ``COUNT(*)`` aggregate,
+   which drives the ``HAVING`` threshold.
 
 .. raw:: html
 
@@ -497,7 +488,7 @@ Step 12: Probability of Replication
 -------------------------------------
 
 Now use ``f_replicated`` to compute, for each (exposure, outcome, effect)
-triple, the probability that the finding is *replicated* – i.e. supported by
+triple, the probability that the finding is *replicated*, i.e., supported by
 at least two independent studies.
 
 .. raw:: html
@@ -516,8 +507,8 @@ at least two independent studies.
 
    </details>
 
-Single-study findings (Aspirin→Cognitive Decline, etc.) are no longer
-listed: their probability of being replicated is 0.
+Single-study findings (Aspirin→Cognitive Decline, etc.) are not listed:
+their probability of being replicated is 0.
 Exercise→CVD→beneficial drops from 0.9998 to 0.9868, reflecting that now
 *at least two* of the three studies must agree.
 
@@ -529,10 +520,9 @@ Step 13: Shapley Values
 Shapley values measure each study's marginal contribution to the *replication*
 probability of a finding. Because probabilities are set on the input tuples,
 :sqlfunc:`shapley` computes *expected* Shapley values in the probabilistic
-sense (see :doc:`the chapter on Shapley values <shapley>`). A key
-property of expected Shapley values is that
-they sum to the probability of the query result – here, the replication
-probability computed in Step 12.
+sense (see :doc:`the chapter on Shapley values <shapley>`). Expected
+Shapley values sum to the probability of the query result, here the
+replication probability computed in Step 12.
 
 Compute expected Shapley values for Exercise→CVD→beneficial, using
 ``f_replicated`` as the target and individual ``f`` rows as the variables.
@@ -669,9 +659,9 @@ input variable.
    </details>
 
 The output is identical to Step 13: Johnson2020, Smith2018, and Williams2021
-with the same Shapley values. The difference is in the calling convention –
-no enumeration of variables is needed – and in efficiency, especially when
-there are many input variables. Replace ``shapley_all_vars`` with
+with the same Shapley values. The difference is in the calling convention
+(no enumeration of variables) and in efficiency, especially when there are
+many input variables. Replace ``shapley_all_vars`` with
 ``banzhaf_all_vars`` to reproduce Step 14 in the same way.
 
 .. note::
@@ -707,11 +697,10 @@ the interactive twin of Steps 13–15.
 Step 16: Arithmetic on Aggregate Results
 ------------------------------------------
 
-ProvSQL tracks provenance through SQL aggregates: ``COUNT``, ``SUM``, and
-similar produce *aggregate tokens* (``agg_token``) that record the underlying
-contributions -- and arithmetic (``*``, ``+``…) over those aggregates stays
-inside provenance: the result is itself an aggregate token whose circuit
-combines the operand aggregates.
+SQL aggregates such as ``COUNT`` and ``SUM`` return *aggregate tokens*
+(``agg_token``) that keep the provenance of their inputs. Arithmetic
+(``*``, ``+``…) on them returns an aggregate token as well, combining
+the provenance of its operands.
 
 Compute a composite *evidence weight* per (exposure, outcome, effect) triple
 combining how many studies report it (``COUNT(*)``) with the highest
@@ -730,20 +719,18 @@ reliability among them (``MAX(reliability)``):
 
 .. note::
 
-   ``evidence_weight`` is an aggregate token: it can be inspected and
-   evaluated like any other provenance circuit, but it is not a plain
-   number. To get its *value*, cast it to ``NUMERIC`` as in
-   ``evidence_weight_value`` -- the cast extracts the computed number at
-   the price of losing the provenance, making it ordinary SQL data
-   again (usable in ``ORDER BY``, comparisons, further computation).
-   The group provenance -- the token associated with each
-   (exposure, outcome, effect) triple -- is unaffected and remains
+   ``evidence_weight`` is an aggregate token, which can be inspected and
+   evaluated like any provenance circuit. To get its *value* as a plain
+   number, cast it to ``NUMERIC`` as in ``evidence_weight_value``: the
+   cast drops the provenance and yields ordinary SQL data (usable in
+   ``ORDER BY``, comparisons, further computation). The group provenance
+   of each (exposure, outcome, effect) triple is unaffected and remains
    available for :sqlfunc:`probability_evaluate`, :sqlfunc:`shapley`,
-   etc. on the group itself.
+   etc.
 
 
-Step 17: Richer Aggregates – ``DISTINCT``, ``string_agg``, ``FILTER``
----------------------------------------------------------------------
+Step 17: Richer Aggregates -- ``DISTINCT``, ``string_agg``, ``FILTER``
+----------------------------------------------------------------------
 
 Provenance tracks through the full range of SQL aggregates, not just
 ``COUNT(*)``. For each (exposure, outcome) pair, count the *distinct*
@@ -762,10 +749,9 @@ studies, list them, and count how many of the findings are beneficial:
 
 Each aggregate value comes back as an ``agg_token`` (shown
 as ``value (*)``): the count, the concatenated list, and the filtered
-count all carry the provenance of the findings they summarise. So the
+count all carry the provenance of the findings they summarise, and the
 group's ``provenance()`` still feeds :sqlfunc:`probability_evaluate` or
-:sqlfunc:`sr_formula` as in the earlier steps – the richer aggregate did
-not flatten the lineage:
+:sqlfunc:`sr_formula` as in the earlier steps:
 
 .. code-block:: text
 
@@ -802,7 +788,7 @@ tagged and carrying its own lineage:
     GROUP BY exposure, outcome
     ORDER BY sign;
 
-The two arms keep distinct provenance – the beneficial row traces back
+The two arms keep distinct provenance: the beneficial row traces back
 to ``Brown2022``, the harmful one to ``Garcia2017``:
 
 .. code-block:: text

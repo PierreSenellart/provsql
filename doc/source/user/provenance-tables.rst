@@ -72,10 +72,8 @@ per-database metadata store.  To set up a table as BID
 provenance: it adds the ``provsql`` column itself and registers the
 table as BID with the chosen block-key columns.  Do not call
 :sqlfunc:`add_provenance` first; :sqlfunc:`repair_key` is an
-alternative to it, not a follow-up.  This classification is consulted
-by the safe-query rewriter (the ``'boolean'`` provenance-class opt-in
-optimisation, see :doc:`probabilities`) to verify that any
-projection it introduces preserves the table's block-key alignment.
+alternative to it, not a follow-up.  The ``'boolean'`` provenance-class
+optimisation (see :doc:`probabilities`) relies on this classification.
 
 .. note::
 
@@ -92,8 +90,8 @@ provenance token, use the :sqlfunc:`provenance()` function:
 
     SELECT name, provenance() FROM mytable;
 
-Within a query result, the ``provsql`` attribute carries a UUID value that represents the
-provenance circuit gate for that tuple.
+Within a query result, the ``provsql`` attribute carries a UUID that
+identifies the tuple's gate in the provenance circuit.
 
 Removing Provenance
 --------------------
@@ -116,9 +114,8 @@ Aggregates and ``INSERT ... SELECT``
 
 An aggregate over a provenance-tracked relation evaluates to an
 ``agg_token`` (see :doc:`aggregation`), which pairs the aggregate's
-value with the provenance of the aggregation.  ``INSERT ... SELECT``
-resolves its target column types before ProvSQL sees the query, so
-inserting such an aggregate into an ordinary column:
+value with the provenance of the aggregation.  Inserting such an
+aggregate into an ordinary column with ``INSERT ... SELECT``:
 
 .. code-block:: postgresql
 
@@ -156,12 +153,12 @@ Pass ``maintained => true`` to keep it current instead:
                                      maintained => true);
 
 A maintained mapping is extended automatically as new rows are inserted, and
--- crucially -- it stays correct under data modification: a delete or update
-rewrites a row's ``provsql`` into a compound gate, but the value remains keyed
-to the original input token, so evaluation still resolves it.  This matters
-for :doc:`temporal <temporal>` validity, where a row deleted at time *T* must
-keep its original interval bounded at *T* rather than losing it.  A maintained
-mapping requires ``column_name`` to be a plain column.
+it stays correct under data modification: a delete or update changes a row's
+``provsql`` token, but the value remains keyed to the original input token,
+so evaluation still resolves it.  This matters for :doc:`temporal <temporal>`
+validity, where a row deleted at time *T* keeps its original interval,
+bounded at *T*.  A maintained mapping requires ``column_name`` to be a plain
+column.
 
 ProvSQL Studio
 ---------------
@@ -204,8 +201,8 @@ operations that were applied:
 - ``delta`` (δ): aggregation boundary (``GROUP BY``)
 - ``agg``, ``semimod``: aggregate provenance
 - ``project``, ``eq``: where-provenance (column tracking, equijoin)
-- ``cmp``: ``HAVING`` comparisons (and the filter-on-RV comparator
-  lift, see :doc:`continuous-distributions`)
+- ``cmp``: ``HAVING`` comparisons (and comparisons on random variables
+  in ``WHERE``, see :doc:`continuous-distributions`)
 - ``mulinput``: multivalued input (one alternative of a
   block-independent input; see :doc:`probabilities`)
 
@@ -216,8 +213,8 @@ Two constant gates represent the semiring identity elements:
 Additional gate types support scalar values and continuous random
 variables (see :doc:`continuous-distributions`):
 
-- ``value``: scalar constant (``HAVING`` provenance and the
-  random-variable surface)
+- ``value``: scalar constant (``HAVING`` provenance and random
+  variables)
 - ``rv``: random-variable leaf carrying one of the registered
   distribution families (Normal, Uniform, Exponential, Gamma, Beta…;
   :sqlfunc:`rv_families` lists them all)
@@ -241,17 +238,14 @@ Further gate types serve specific features:
   integer coefficient per child (safe-UCQ probability evaluation)
 
 Two *transparent marker* gates wrap a single child without changing its
-value, recording metadata for a later stage (a circuit carrying them
-evaluates identically to one without):
+value (a circuit carrying them evaluates identically to one without):
 
 - ``assumed``: structural assumption marker whose ``extra`` label names
   the assumption the wrapped sub-circuit was computed under:
-  ``'boolean'`` (the default when the label is absent; added by the
-  safe-query rewriter and load-time Boolean-identity folding, recording
-  that only Boolean semantics are preserved) or ``'absorptive'``
-  (cyclic recursion truncated at the absorptive value fixpoint).
-  Evaluation under a semiring outside the recorded class refuses with
-  an explicit error.
+  ``'boolean'`` (the default when the label is absent: only Boolean
+  semantics are preserved) or ``'absorptive'`` (cyclic recursion
+  truncated at the absorptive value fixpoint).  Evaluation under a
+  semiring outside the recorded class refuses with an explicit error.
 - ``annotation``: carries the inversion-free certificate on a result root,
   or a per-input order key, for the ``'inversion-free'`` probability
   method (see :doc:`probabilities`).

@@ -3,8 +3,8 @@
 Knowledge Compilation
 =====================
 
-ProvSQL builds **provenance circuits** from SQL queries transparently,
-through its planner hook. When Boolean provenance is required, whether
+ProvSQL builds **provenance circuits** from SQL queries transparently.
+When Boolean provenance is required, whether
 for probability evaluation, for Shapley value computation, or simply at
 the user's request, a Boolean circuit of a particularly convenient form
 is obtained. This chapter follows the full pipeline behind
@@ -26,8 +26,8 @@ The same surfaces drive the knowledge-compilation panels of
 
    Because this chapter is entirely about knowledge compilation over
    Boolean provenance, you will usually want ProvSQL's Boolean-only
-   optimisations switched on for the whole session. They are gated
-   behind the :ref:`'boolean' provenance class
+   optimisations switched on for the whole session. They are enabled by
+   the :ref:`'boolean' provenance class
    <provsql-boolean-provenance>` GUC (off by default): issue ``SET
    provsql.provenance = 'boolean';``, or pick :guilabel:`Boolean` on
    ProvSQL Studio's :guilabel:`Provenance scheme` switch next to the
@@ -61,14 +61,10 @@ circuit into a `CNF
 <https://en.wikipedia.org/wiki/Tseytin_transformation>`_: one fresh
 variable per gate, plus clauses asserting that each gate variable is
 equivalent to the Boolean combination of its inputs.
-:sqlfunc:`tseytin_cnf` returns this encoding as text. The clauses and
-the variable numbering are exactly what the extension streams to
-``d4`` / ``c2d`` / ``minic2d`` / ``dsharp`` on a temporary file; the
-compilers receive the bare, unweighted CNF (only the ``weightmc``
-model counter gets an inline-weighted dialect, and MCC-style counters
-a separate weight-comment form), while :sqlfunc:`tseytin_cnf`'s
-default text output adds the mapping comments and weight lines
-described below on top:
+:sqlfunc:`tseytin_cnf` returns this encoding as text. Its clauses and
+variable numbering are exactly what the external compilers receive,
+with the mapping comments and weight lines described below added on
+top:
 
 .. code-block:: postgresql
 
@@ -116,9 +112,8 @@ weighted count returned by an external tool is meaningless until you
 know which provenance input each variable stands for. This is what the
 ``c input`` lines at the top of the output above record, one per input
 variable: its DIMACS number, the originating provenance UUID, and its
-probability. They make the CNF self-documenting at no cost to the
-solver: model counters and compilers ignore ``c`` comment lines, so the
-file stays valid DIMACS. Pass ``mapping => false`` to omit them. Only
+probability. Model counters and compilers ignore ``c`` comment lines, so
+the file stays valid DIMACS. Pass ``mapping => false`` to omit them. Only
 input variables appear (the auxiliary Tseytin variables, one per gate,
 are not provenance inputs).
 
@@ -188,13 +183,8 @@ The second argument names the compiler. ProvSQL ships bindings for:
       decomposability + determinism of d-DNNF; it is the canonical
       target of ``d4``.
 
-    Panini also ships ``R2-D2`` and ``CCDD`` target languages.
-    ProvSQL does **not** expose them: both emit ``K`` (kernelize) nodes encoding
-    literal-equivalence constraints over a shared kernel variable,
-    which break the decomposability invariant of a d-DNNF. A direct
-    AND-translation gives silently-wrong probabilities; a correct
-    translation requires case-splitting on the kernel variables and
-    is not yet implemented.
+    Panini's ``R2-D2`` and ``CCDD`` target languages are not supported,
+    since their output is not a d-DNNF.
 
 Each compiler must be installed and reachable on the PostgreSQL
 server's ``PATH``, or in a directory listed in the
@@ -277,17 +267,13 @@ tool. Both are accepted wherever a compiler name is, by
 :sqlfunc:`ddnnf_stats`, and the matching :sqlfunc:`probability_evaluate`
 methods.
 
-``interpret-as-dd`` reinterprets the provenance circuit *directly* as a
-d-DNNF, with no compilation step, reading each ``times`` as an AND of
-independent children and each ``plus`` as an *independent* OR, the
-latter rewritten by De Morgan into a ``NOT`` over an AND of ``NOT``\ s
-(``¬(¬a ∧ ¬b ∧ …)``) so the result stays a genuine d-DNNF. It is
-therefore exact only on circuits whose gates are genuinely independent,
-the shape an independent or read-once query produces; it does not try to
-certify that ``plus`` gates are deterministic (mutually exclusive),
-which would be expensive to assert. Gate types it cannot read this way
-raise an unsupported-gate error. It is the cheapest route, and the one
-the default method tries first.
+``interpret-as-dd`` reads the provenance circuit *directly* as a
+d-DNNF, with no compilation step, treating the children of each
+``times`` and each ``plus`` gate as independent. It is therefore exact
+only on circuits whose gates are genuinely independent, the shape an
+independent or read-once query produces. Gate types it cannot read this
+way raise an unsupported-gate error. It is the cheapest route, and the
+one the default method tries first.
 
 ``tree-decomposition`` is the structural fallback: it builds a `tree
 decomposition <https://en.wikipedia.org/wiki/Tree_decomposition>`_ of
@@ -316,10 +302,9 @@ carrying the treewidth:
 Weighted model counters: the ``wmc`` umbrella
 ---------------------------------------------
 
-The ``wmc`` method dispatches to a family of exact weighted model
-counters, each consuming the same DIMACS CNF emitted by
-:sqlfunc:`tseytin_cnf` (with the literal-weight ``c p weight`` lines
-required by the MCC 2024 input format):
+The ``wmc`` method dispatches to a family of weighted model
+counters, each consuming the DIMACS CNF emitted by
+:sqlfunc:`tseytin_cnf`:
 
 ``'ganak'``
     A projected weighted model counter from the meelgroup
@@ -329,8 +314,7 @@ required by the MCC 2024 input format):
 ``'sharpsat-td'``
     Tree-decomposition-guided exact counter
     :cite:`DBLP:conf/cp/KorhonenJ21`. Needs the ``flow_cutter_pace17``
-    helper alongside ``sharpsat-td`` so the counter can shell out to
-    its tree-decomposer.
+    tree decomposer installed alongside ``sharpsat-td``.
 
 ``'dpmc'``
     Two-stage planner + executor pipeline :cite:`DBLP:conf/cp/DudekPV20`:
@@ -356,12 +340,11 @@ Inspecting the in-memory circuit
 --------------------------------
 
 Before any compilation runs, the ``provsql.simplify_on_load`` GUC may
-have already rewritten parts of the circuit: identity / absorber
-collapses, ``gate_cmp`` resolutions for circuits over random variables,
-hybrid-evaluator simplifications (see :doc:`probabilities`).
-:sqlfunc:`simplified_circuit_subgraph` returns the post-simplification
-DAG, rooted at the given token, as a JSON adjacency list. This is the
-exact shape the probability evaluators traverse:
+have already simplified parts of the circuit (see :doc:`configuration`
+and :doc:`probabilities`).
+:sqlfunc:`simplified_circuit_subgraph` returns the simplified circuit,
+rooted at the given token, as a JSON adjacency list; this is the
+circuit the probability evaluators actually use:
 
 .. code-block:: postgresql
 
@@ -369,11 +352,8 @@ exact shape the probability evaluators traverse:
     FROM suspects WHERE id = 1;
 
 Each node carries its gate type, an inline ``extra`` field for typed
-leaves (random variables, ``cmp`` thresholds), and the longest-path
-depth from the root. The longest path is the canonical
-circuit-depth notion: it tracks the deepest chain of operators between
-the node and the output, which is what governs evaluation cost and
-matches the depth a renderer would draw.
+leaves (random variables, ``cmp`` thresholds), and its depth, the
+length of the longest path from the root.
 
 Checking tool availability
 --------------------------
@@ -389,8 +369,7 @@ subsequent ``compilation`` or ``view_circuit`` call would see it:
     SELECT tool_available('d4'), tool_available('c2d');
 
 A bare name is resolved through the shell; a name containing a slash is
-tested as a path. Studio uses this to grey out compilers that are not
-installed rather than letting them fail at run time.
+tested as a path.
 
 In ProvSQL Studio
 -----------------

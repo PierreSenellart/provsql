@@ -7,23 +7,24 @@ of equality, aggregates skip NULL inputs, and queries that look
 equivalent stop being equivalent the moment a NULL appears. ProvSQL
 tracks provenance *through* these rules: the rewritten query returns
 what vanilla PostgreSQL returns, and the provenance and probabilities it
-computes are correct with respect to SQL's own NULL semantics. This
-chapter states the rules ProvSQL follows and the few places where its
-behavior is a deliberate, documented choice.
+computes are correct under SQL's own NULL semantics. This chapter states
+the rules ProvSQL follows and the few places where its behaviour is a
+deliberate choice.
 
 What NULL Means Here
 ---------------------
 
 ProvSQL implements the *SQL-operational* reading of NULL: a NULL is a
 value like any other, predicates over it evaluate to *unknown* per SQL's
-three-valued logic (3VL), and a row whose condition is unknown is not an
+three-valued logic, and a row whose condition is unknown is not an
 answer. ProvSQL does **not** interpret NULL as an unknown quantity
 ranging over possible values (the "incomplete information" reading);
 NULL stays NULL in every possible world.
 
 Two rules pin the semantics down:
 
-* **Selection rule.** Every condition is evaluated under SQL's 3VL on
+* **Selection rule.** Every condition is evaluated under SQL's
+  three-valued logic on
   the actual data; a tuple whose condition evaluates to *unknown* or
   *false* is not an answer: depending on the construct it is either
   removed from the result or kept with the semiring **zero** as its
@@ -36,11 +37,11 @@ Two rules pin the semantics down:
   a world *W* -- evaluated under SQL's own semantics, NULLs included --
   exactly when *W* satisfies the tuple's Boolean provenance.
 
-Behavior by Construct
+Behaviour by Construct
 ----------------------
 
 **WHERE, JOIN, and HAVING predicates.** PostgreSQL itself evaluates
-deterministic predicates, 3VL included; ProvSQL only combines the tokens
+deterministic predicates, three-valued logic included; ProvSQL only combines the tokens
 of rows that survive. ``WHERE b > 5`` drops rows with a NULL ``b``, a
 NULL join key matches nothing, and their tokens simply never enter the
 circuit.
@@ -54,9 +55,9 @@ so they compose correctly with NULLs as-is.
 **NOT IN and quantified comparisons** (``op ALL``). Negation is where
 NULLs bite: ``x NOT IN Q`` is *unknown* -- hence not an answer -- as
 soon as ``Q`` contains a NULL (or ``x`` is NULL and ``Q`` is non-empty).
-ProvSQL's rewriting accounts for this: the removal condition it builds
-treats an unknown comparison like a match, so a subquery row with a NULL
-removes the outer row in every world containing it. Consequently,
+ProvSQL accounts for this: an unknown comparison counts as a match, so a
+subquery row with a NULL removes the outer row in every world containing
+it. Consequently,
 ``NOT IN``, ``NOT EXISTS``, and ``EXCEPT`` -- equivalent on NULL-free
 data -- get genuinely different provenance on data with NULLs, matching
 their different SQL answers. (See Step 12 of
@@ -97,17 +98,15 @@ an expression -- ``HAVING GREATEST(sum(b), 2) > 5`` -- is read as well,
 by a different route: see
 :ref:`what a guarded selection carries <case-over-aggregates>`.
 
-**Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked arms is
-lowered into its matched and NULL-padded arms with correct (monus)
-provenance for the padding. Chains of outer joins, outer joins mixed
-with inner joins and outer joins beside other ``FROM`` items are
-brought to that shape first: each outer join, with the joins below it,
-is computed in a subquery of its own. An outer join whose null-padded
-side is entirely *untracked* is also fine as-is: which rows are padded
-is then deterministic. An outer join with a tracked relation on a
-null-padded side is refused with an explicit error, rather than
-silently mis-tracked, in a query with a ``LATERAL`` item, or when a
-column merged by ``USING`` / ``NATURAL`` is read through the join.
+**Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked relations gives
+its NULL-padded rows the provenance of the absence of a match (a monus).
+This covers chains of outer joins, outer joins mixed with inner joins and
+outer joins beside other ``FROM`` items. An outer join whose null-padded
+side is entirely *untracked* is also fine: which rows are padded is then
+deterministic. An outer join with a tracked relation on a null-padded
+side is refused with an explicit error in a query with a ``LATERAL``
+item, or when a column merged by ``USING`` / ``NATURAL`` is read through
+the join.
 
 **Comparisons on NULL random variables.** A comparison involving a NULL
 ``random_variable`` -- a NULL constant or a NULL cell -- is unknown in
@@ -119,15 +118,13 @@ Zero-Annotated Rows May Stay Visible
 -------------------------------------
 
 A row whose annotation is the semiring zero is equivalent to an absent
-row, and ProvSQL does not always spend the effort of filtering such rows
-out: rewritten queries may return rows that vanilla SQL does not, whose
-annotation evaluates to zero. Typical examples are the antijoin arm of
+row, and ProvSQL does not always filter such rows out: queries may return
+rows that vanilla SQL does not, whose annotation evaluates to zero. Typical examples are the antijoin arm of
 a difference (a row removed *on this instance* but present in worlds
 where its remover is absent -- exactly what makes its probability
 meaningful) and ``HAVING`` groups that fail the predicate on this
-instance but pass it in other worlds. Deciding zero-ness in general
-requires evaluating the provenance and is semiring-relative, so
-visible-but-zero is the deliberate default. ProvSQL does leave out
+instance but pass it in other worlds. Deciding whether an annotation is
+zero requires evaluating it, in a given semiring. ProvSQL does leave out
 some rows it can tell to be zero at no cost, such as a ``HAVING`` group
 asked for ``count(*) >= 3`` over two rows, or for ``sum(x) > 10`` over
 values that add up to 8; which zero rows are left out and which stay
@@ -179,29 +176,25 @@ element:
      - 1
      - untracked source
 
-The load-bearing rule: **a NULL token never means "false"**. Whenever a
-condition is unknown or fails, ProvSQL's rewriting produces an explicit
-zero gate (for instance, ``provenance_cmp`` returns ``gate_zero``
-when an operand is NULL) rather than letting a NULL token reach ⊗, where
-it would read as *certainly true*.
+In particular, **a NULL token never means "false"**: whenever a condition
+is unknown or fails, ProvSQL produces an explicit zero annotation, never a
+NULL token, which ⊗ would read as *certainly true*.
 
 Unset Probabilities Are Certain
 --------------------------------
 
 An input token that was never given a probability with
 :sqlfunc:`set_prob` is treated as **certain** (probability 1.0) by
-:sqlfunc:`probability_evaluate` and everything downstream. This is the
-intended convention -- in typical deployments most tuples are
-deterministic and only a few tables are probabilistic -- but note the
-API asymmetry: :sqlfunc:`get_prob` returns NULL for such a token
-("never set"), while evaluation uses 1.0.
+:sqlfunc:`probability_evaluate` and everything downstream, since in
+typical deployments most tuples are deterministic and only a few tables
+are probabilistic. :sqlfunc:`get_prob`, however, returns NULL for such a
+token ("never set").
 
 Empty Groups in Evaluated Worlds
 ---------------------------------
 
-The value-aware evaluators (Monte Carlo sampling, ``HAVING`` world
-enumeration, the moment readouts) must give each aggregate a value in
-worlds where its group has no contributing row. The conventions:
+Probability and moment computations over aggregates follow these
+conventions in worlds where a group has no contributing row:
 
 * A ``HAVING`` comparison never passes in a world where the aggregate is
   NULL (no contributing row for ``sum``/``avg``/``min``/``max``).

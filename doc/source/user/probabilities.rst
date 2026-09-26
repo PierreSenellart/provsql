@@ -122,9 +122,9 @@ surface. It also accepts a Boolean event directly --
 
 With no further argument it returns the **exact** probability.  An
 optional second argument names a computation method and a third passes
-method-specific parameters (a comma-separated ``key=value`` list, the
-keys depending on the method; each method also keeps a historical
-shorthand, a bare sample count or a ``delta;epsilon`` pair).  You rarely
+method-specific parameters (a comma-separated ``key=value`` list whose
+keys depend on the method; a bare sample count or a ``delta;epsilon`` pair
+is also accepted).  You rarely
 need them: see :ref:`Choosing a guarantee <probability-guarantees>` just
 below, and the full catalogue under :ref:`forcing-a-method`.
 
@@ -165,9 +165,9 @@ request, per query.  Three things make this safe to rely on:
 - A ``δ = 0`` (no-failure) approximate request is honoured by a *deterministic*
   method, not a sampler.
 
-Naming a method explicitly is therefore an **escape hatch** -- for forcing a
-specific algorithm, for ``EXPLAIN``-style understanding, or for the rare case
-where you know your circuits better than the cost model.  The full catalogue,
+Naming a method explicitly forces a specific algorithm: useful for
+``EXPLAIN``-style understanding, or in the rare case where you know your
+circuits better than the cost model.  The full catalogue,
 with a summary table of where each method shines, is under
 :ref:`forcing-a-method`; most users can skip it.
 
@@ -201,10 +201,9 @@ group equals ``expected(sum(x), provenance())``, and a world is counted
 only where it contributes a value.  The one exception is a ``COUNT``
 without ``GROUP BY``: its row is there in every world, counting a real 0
 over no row.  ``AVG`` is exact over tuple-independent (or shared-anchor)
-groups via its joint (sum, count) distribution; other shapes are exact
-when they depend on at most 20 input tuples, whose possible worlds are
-then enumerated, and estimated by Monte Carlo at the
-``provsql.rv_mc_samples`` budget otherwise:
+groups.  Other shapes are exact when they depend on at most 20 input
+tuples, and otherwise estimated by Monte Carlo at the
+``provsql.rv_mc_samples`` budget:
 
 .. code-block:: postgresql
 
@@ -227,7 +226,7 @@ on the group existing (i.e., its provenance being true):
     GROUP BY dept;
 
 Without the second argument, the expectation is unconditional.  With
-it, the result is normalized by the probability of the condition. This
+it, the result is normalised by the probability of the condition. This
 :sqlfunc:`expected` ``(aggregate, condition)`` form is the aggregate-specific
 spelling of the conditioning operator ``|``; see :doc:`conditioning` for the
 uniform ``A | B`` ("``A`` given ``B``") operator across discrete events,
@@ -273,13 +272,11 @@ The discrete-Bernoulli setting above can be combined with a
 continuous tier: columns of type ``random_variable`` carry
 distributions (Normal, Uniform, Exponential, Erlang, Gamma, Log-normal, Weibull, Pareto, Beta, Categorical,
 Mixture) rather than scalars, and ``WHERE`` predicates on these
-columns are rewritten into conditioning events on the row's
-provenance. Evaluation routes through Monte Carlo by default, with
-a hybrid evaluator falling back to analytical closed forms where
-applicable (RangeCheck for support-decidable comparators, exact
-CDFs for single-distribution ``gate_cmp``,
-family-closure simplification for linear combinations of
-normals…). See :doc:`continuous-distributions` for the full
+columns become conditioning events on the row's provenance.
+Evaluation uses Monte Carlo by default and analytical closed forms
+where they apply (e.g., comparisons decidable from the supports, exact
+CDFs for a comparison over a single distribution, linear combinations
+of normals…). See :doc:`continuous-distributions` for the full
 surface.
 
 .. _tractable-cases:
@@ -289,13 +286,12 @@ When is exact evaluation tractable?
 
 Computing the exact probability is :math:`\#P`-hard in general
 :cite:`DBLP:journals/vldb/DalviS07`, but several structural restrictions make
-it tractable -- and ProvSQL recognises each and routes to a dedicated
-mechanism rather than a general-purpose counter. Each row below is a
+it tractable, and ProvSQL recognises each and evaluates it with a
+dedicated method. Each row below is a
 *sufficient* condition for tractability, classified by the shape of the
 **data**, of its probabilistic **annotation** (TID = tuple-independent,
-BID = block-independent-disjoint, *correlated* = arbitrary, e.g.
-view-derived), and of the **query**. The planner-time rewrites and the
-cost-based chooser apply whichever fits.
+BID = block-independent-disjoint, *correlated* = arbitrary, e.g.,
+view-derived), and of the **query**. ProvSQL applies whichever fits.
 
 The query conditions are stated over classes of the relational calculus --
 `conjunctive queries
@@ -342,11 +338,10 @@ remains, and ProvSQL falls back to knowledge compilation (``compilation`` /
 ``wmc``) for an exact answer or to an FPRAS (``monte-carlo`` / ``karp-luby``)
 for an approximate one (see :ref:`forcing-a-method`).
 
-Specialized routes for hard queries
+Specialised routes for hard queries
 -----------------------------------
 
-For two query families ProvSQL does not evaluate the provenance circuit
-built along the relational plan at all: it compiles a certified circuit
+For two query families ProvSQL compiles a certified circuit
 **along a tree decomposition of the data itself**, turning a
 :math:`\#P`-hard problem into one linear in the data.  Both are exact and
 need no external tool.
@@ -361,17 +356,15 @@ vertex is reachable from a source in a probabilistic graph, following the
 provenance refinement of Courcelle's theorem
 :cite:`DBLP:conf/icalp/AmarilliBS15`.  This problem is :math:`\#P`-hard in general,
 but becomes solvable in time *linear in the number of edges* when the
-graph has bounded treewidth – a property of many real networks
+graph has bounded treewidth -- a property of many real networks
 (series-parallel and outerplanar networks, transit and utility networks,
 workflow graphs…).
 
-The interface is an ordinary recursive reachability query.  Under
-``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the compiled
-circuit is the exact Boolean function of the provenance but only the
-*absorptive quotient* of the infinite recursive semiring provenance,
-so it lives in the same regime that already governs recursion on
-cyclic data; see :ref:`provsql-provenance-class`), the query rewriter
-recognises the shape
+The interface is an ordinary recursive reachability query, under
+``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the result is
+the exact Boolean provenance, but only the *absorptive quotient* of the
+infinite recursive semiring provenance, as for recursion on cyclic
+data; see :ref:`provsql-provenance-class`):
 
 .. code-block:: postgresql
 
@@ -385,11 +378,11 @@ recognises the shape
     SELECT node, probability_evaluate(provenance())
     FROM reach WHERE node = 42;
 
-over a provenance-tracked base relation ``link`` whose tuples carry
-probabilities, and compiles – along a tree decomposition of the edge
-graph – one provenance circuit per reachable vertex, in linear total
-size.  Cyclic graphs are handled natively and the computation is
-exact; vertex columns of any type work (values are compared as text).
+Here ``link`` is a provenance-tracked base relation whose tuples carry
+probabilities; ProvSQL produces one provenance circuit per reachable
+vertex, in linear total size.  Cyclic graphs are handled and the
+computation is exact; vertex columns of any type work (values are
+compared as text).
 
 Two variations of the shape are recognised as well.  *Undirected
 connectivity* is the natural symmetric traversal:
@@ -404,15 +397,15 @@ connectivity* is the natural symmetric traversal:
     )
     SELECT node, probability_evaluate(provenance()) FROM reach;
 
-and *deterministic edge filters* – a ``WHERE`` clause over the edge
-relation's columns alone – restrict which edges participate:
+and *deterministic edge filters* (a ``WHERE`` clause over the edge
+relation's columns alone) restrict which edges participate:
 
 .. code-block:: postgresql
 
     ... SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
         WHERE e.capacity >= 10 ...
 
-The base arm may also be a relation, ``SELECT v FROM sources`` – a
+The base arm may also be a relation, ``SELECT v FROM sources``: a
 *source set*.  When ``sources`` is itself provenance-tracked, each
 source participates with its tuple's probability (a probabilistic
 source set: "reachable from some present source"); an untracked
@@ -422,15 +415,14 @@ independent source set) and the query falls back.
 
 Edge relations prepared with :sqlfunc:`repair_key` work too: a block
 of mutually exclusive alternative edges (say, an uncertain road whose
-true endpoint is one of several candidates) compiles as a single
-(k+1)-way deterministic branching, preserving the block-independent
-semantics exactly.
+true endpoint is one of several candidates) keeps its
+block-independent semantics exactly.
 
-The recursive arm may even join a *derived* edge relation – a subquery
+The recursive arm may even join a *derived* edge relation, a subquery
 or view over several tracked tables.  Each derived edge then
-participates as a compound event (the conjunction of its base tuples),
-accepted when the derived edges' supports are pairwise disjoint – e.g.
-a one-to-one join; edges sharing a base tuple are correlated, and the
+participates as the conjunction of its base tuples.  This is accepted
+when the derived edges' supports are pairwise disjoint (e.g., a
+one-to-one join); edges sharing a base tuple are correlated, and the
 query falls back to the generic evaluation.
 
 *Bounded-hop reachability* is recognised as well: a hop-counting CTE
@@ -449,29 +441,20 @@ the recursive arm, and bounded by a (mandatory) ``WHERE`` qual:
     SELECT node, hops, probability_evaluate(provenance()) FROM reach;
 
 Row ``(v, h)`` carries the provenance of "some *walk* of exactly
-``h`` edges connects the source to ``v``" – walks, not simple paths,
-matching the recursive fixpoint's semantics: a cycle on the way pumps
-the achievable lengths, and the compilation (whose states refine from
-reachability relations to sets of achievable walk lengths) accounts
-for that exactly, on cyclic data too.  Both ``<`` and ``<=`` bounds,
+``h`` edges connects the source to ``v``": walks, not simple paths,
+matching the semantics of the recursive query, and exact on cyclic
+data too.  Both ``<`` and ``<=`` bounds,
 either column order, any integer seed, and the undirected, filtered,
 multi-source and ``repair_key`` variants compose with the counter.
-The natural follow-up, "which nodes are *within* k hops", obtained
-by deduplicating the hop column away:
+The natural follow-up, "which nodes are *within* k hops", deduplicates
+the hop column away and stays on the linear exact route:
 
 .. code-block:: postgresql
 
     ... SELECT node FROM reach GROUP BY node;
 
-stays on the fast route: the OR of a vertex's per-length tokens is
-correlated (lengths share edges), but the compilation pre-creates,
-at the very gate address this deduplication computes, a certified
-equivalent built from its native within-bound circuit, so
-:sqlfunc:`probability_evaluate` still settles on the linear exact
-method.
-
 *Cross-vertex aggregations* of a reachability CTE are recognised as
-well: grouping the reachable vertices by a column of a joined
+well, grouping the reachable vertices by a column of a joined
 (untracked) member relation:
 
 .. code-block:: postgresql
@@ -480,26 +463,18 @@ well: grouping the reachable vertices by a column of a joined
         FROM reach r JOIN regions t ON r.node = t.node
         GROUP BY t.region;
 
-collapses each group's per-vertex tokens into an OR of *correlated*
-events (the vertices share edges).  The route compiles, per group, the
-certified circuit of "some member vertex is reachable" (the
-set-reachability bit folded through the same decomposition DP) and
-plants it at the gate address the aggregation computes, so the
-per-region reliability evaluates through the linear certified route.
-All the groups share one compilation: the tree decomposition and
-variable analysis are built once, one cheap sweep runs per group, and
-the parts of the per-group circuits the group's members do not
-influence come out as the *same* gates (content-deduplicated
-emission), materialised once.  The ``SELECT DISTINCT`` spelling of the
-same aggregation (``SELECT DISTINCT t.region FROM ...`` with no
-``GROUP BY``) is provenance-identical and recognised too; a
-deterministic filter on the member relation's own columns
-(``WHERE t.kind = 'hospital'``) is allowed -- it restricts which
-members each group counts, exactly as an edge-column filter restricts
-the edges, and is pushed into the member gathering.  A tracked member
-relation, a filter that touches the recursive side, or any other
-deviation from the join-and-group-by-one-column shape simply skips the
-planting (the generic evaluation is always available).
+Each group's provenance is an OR of *correlated* events (the vertices
+share edges); ProvSQL compiles, per group, the certified circuit of
+"some member vertex is reachable", so the per-region reliability is
+evaluated exactly on the linear route.  All the groups share one
+compilation.  The ``SELECT DISTINCT`` spelling of the same aggregation
+(with no ``GROUP BY``) is recognised too.  A deterministic filter on
+the member relation's own columns (``WHERE t.kind = 'hospital'``) is
+allowed: it restricts which members each group counts, as an
+edge-column filter restricts the edges.  A tracked member relation, a
+filter that touches the recursive side, or any other deviation from
+the join-and-group-by-one-column shape falls back to the generic
+evaluation.
 
 *K-terminal conjunctions* close the family: a self-join of the CTE
 with one constant node binding per reference
@@ -510,30 +485,23 @@ with one constant node binding per reference
         FROM reach r1, reach r2, reach r3
         WHERE r1.node = 5 AND r2.node = 6 AND r3.node = 9;
 
-asks "are these vertices *all* reachable", and its row provenance
-is the product of the correlated per-vertex tokens.  The route
-compiles the certified all-members-reachable circuit (a richer
-congruence: each forgotten terminal pends on the boundary vertices
-that reach it, the pending sets folding through the same DP) and
-plants it at the address the conjunction computes, so the query
-evaluates to the **k-terminal reliability** through the linear
-certified route -- with joint-worlds semantics: under nonnegative
-min-plus (see :doc:`semirings`) the same token prices the cheapest
-covering subgraph, the **directed Steiner cost**, shared edges paid
-once where the raw product would pay them once per terminal.
+asks "are these vertices *all* reachable": its row provenance is the
+product of the correlated per-vertex tokens.  ProvSQL compiles the
+certified all-members-reachable circuit, so the query evaluates to the
+**k-terminal reliability** on the linear route.  The semantics is
+joint over worlds: under nonnegative min-plus (see :doc:`semirings`)
+the same token prices the cheapest covering subgraph, the **directed
+Steiner cost**, paying shared edges once where the raw product would
+pay them once per terminal.
 
-The emitted circuits are *deterministic and decomposable by
-construction* (**d-Ds** -- deterministic and decomposable, but not in
-negation normal form, so not d-DNNFs), and each ``plus`` / ``times``
-gate carries a
-persisted **certificate** of that property (readable with
-:sqlfunc:`get_infos`).  Downstream, the certificate is what makes the
-tokens cheap: :sqlfunc:`probability_evaluate`'s cost-based chooser
-settles on the linear exact ``independent`` method (which trusts
-certified gates the way it trusts read-once structure), and the
-d-D artefact surface – ``interpret-as-dd`` compilation,
-:sqlfunc:`ddnnf_stats`, :sqlfunc:`shapley` and :sqlfunc:`banzhaf` –
-works on them without external compilers.  Shapley values of the edge
+The circuits produced are *deterministic and decomposable by
+construction* (**d-Ds**; not in negation normal form, so not
+d-DNNFs), and each ``plus`` / ``times`` gate carries a persisted
+**certificate** of that property (readable with :sqlfunc:`get_infos`).
+Thanks to it, :sqlfunc:`probability_evaluate` settles on the linear
+exact ``independent`` method, and ``interpret-as-dd`` compilation,
+:sqlfunc:`ddnnf_stats`, :sqlfunc:`shapley` and :sqlfunc:`banzhaf` work
+on them without external compilers.  Shapley values of the edge
 tuples give a principled *edge criticality* analysis of the network:
 
 .. code-block:: postgresql
@@ -542,12 +510,10 @@ tuples give a principled *edge criticality* analysis of the network:
     FROM link;
 
 The same certified circuits evaluate exactly in every **absorptive
-semiring**, not just under probability: the deterministic world
-enumeration surfaces every minimal derivation support – every path –
-and absorption (:math:`1 \oplus a = 1`) erases the rest, so the value
-is the image of the absorptive provenance of the recursive query
+semiring**, not just under probability: the value is the image of the
+absorptive provenance of the recursive query
 :cite:`DBLP:conf/icdt/DeutchMRT14`.  In the nonnegative min-plus
-semiring this gives **exact min-cost reachability** – single-source
+semiring this gives **exact min-cost reachability**: single-source
 shortest distances, on cyclic data too, in time linear in the
 circuit:
 
@@ -558,33 +524,31 @@ circuit:
     FROM reach;
 
 The bounded-hop variant prices walks under a hop budget (a
-constrained shortest path that plain Dijkstra does not answer
-directly), and the cross-vertex aggregation gives per-region minima.
+constrained shortest path), and the cross-vertex aggregation gives
+per-region minima.
 The other absorptive semirings read the same tokens: the
 most-reliable path (:sqlfunc:`sr_viterbi`), the widest path
 (:sqlfunc:`sr_maxmin` over a capacity enum), fuzzy best paths
-(:sqlfunc:`sr_lukasiewicz`), and *temporal reachability* – when each
+(:sqlfunc:`sr_lukasiewicz`), and *temporal reachability*: when each
 edge carries a validity multirange, :sqlfunc:`sr_temporal` returns
 exactly the instants at which the vertex is reachable (see
-:doc:`temporal`).  To keep the unsound evaluations out, the
-materialised tokens carry the ``'absorptive'`` assumption marker
-(:sqlfunc:`get_gate_type` reports the root as ``assumed``): counting
-and why-provenance – genuinely infinite on cyclic recursion – refuse
-loudly instead of returning a silently wrong value, while probability
-and the absorptive semirings (see :doc:`semirings`) pass through.
+:doc:`temporal`).  The tokens carry the ``'absorptive'`` assumption
+marker (:sqlfunc:`get_gate_type` reports the root as ``assumed``):
+counting and why-provenance, genuinely infinite on cyclic recursion,
+raise an error instead of returning a wrong value, while probability
+and the absorptive semirings (see :doc:`semirings`) evaluate normally.
 
-When the route cannot apply – the data treewidth exceeds the supported
-limit (the same cap as the ``tree-decomposition`` method, here applied
-to the *data* treewidth, which is exactly the tractability
-assumption), the edge tuples are not independent base tuples, or the
-CTE deviates from the recognised shape – the query silently falls back
-to the generic recursive-fixpoint evaluation, preserving its behaviour
-exactly; set ``provsql.verbose_level`` to at least 10 to get a notice
-when the fallback fires, or 20 to confirm the compiled route.
+When the route cannot apply (the *data* treewidth exceeds the same cap
+as the ``tree-decomposition`` method, the edge tuples are not
+independent base tuples, or the CTE deviates from the recognised
+shape), the query silently falls back to the generic recursive
+evaluation, with the same behaviour as without the route.  Set
+``provsql.verbose_level`` to at least 10 to get a notice when the
+fallback fires, or 20 to confirm the compiled route.
 
-On a 2×n ladder network (treewidth 2), the integrated route answers
+On a 2×n ladder network (treewidth 2), the route answers
 exactly over 1,500 probabilistic edges in under 200 ms end to end,
-and the columnar form compiles 300,000 edges in seconds – where
+and the columnar form compiles 300,000 edges in seconds, whereas
 evaluating the equivalent recursive query's provenance crosses the
 circuit-treewidth cap at a few dozen edges, and the cyclic/undirected
 case exceeds minutes already at thirty edges.
@@ -594,36 +558,32 @@ case exceeds minutes already at thirty edges.
 Bounded joint width: hard UCQs over correlated data
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The query-side dichotomies – safe-query rewriting and the
-``inversion-free`` class – make a *self-join-free hierarchical* or
+The query-side dichotomies (safe-query rewriting and the
+``inversion-free`` class) make a *self-join-free hierarchical* or
 *inversion-free* query tractable, but only over **tuple-independent**
 inputs, and they give up on the genuinely :math:`\#P`-hard queries: the
 textbook one is :math:`H_0 = R(x), S(x, y), T(y)`, and behind it the
 whole hard family :math:`H_k`.  ProvSQL evaluates these **exactly**
-when a different parameter is small – the **joint width**: the
-treewidth of the data graph *together with* its correlation structure,
-not of either alone :cite:`Amarilli2016thesis` (§4.2).  There are
-instances whose data graph and whose provenance circuit are *both* of
-small treewidth yet whose joint width – and hardness – is large, so
-the bound has to be taken on the joint object (thesis Prop. 4.2.11);
-when it *is* bounded, the probability is linear in the data, even
-though the query is :math:`\#P`-hard and the inputs are arbitrarily correlated.
+when a different parameter is small, the **joint width**: the
+treewidth of the data graph *together with* its correlation structure
+:cite:`Amarilli2016thesis` (§4.2).  The data graph and the provenance
+circuit can *both* have small treewidth while the joint width, and the
+hardness, is large (thesis Prop. 4.2.11).  When the joint width *is*
+bounded, the probability is linear in the data, even though the query
+is :math:`\#P`-hard and the inputs are arbitrarily correlated.
 
-Like the reachability route above, the compilation is **data-side**: it
-runs along a tree decomposition of the data – for correlated inputs, of
-the data together with the slice of the provenance circuit that carries
-the correlations – emitting a certified **d-D** by construction, with no
-external compiler and no knowledge-compilation step.
+Like the reachability route above, the compilation runs along a tree
+decomposition of the data (for correlated inputs, together with the
+part of the provenance that carries the correlations) and produces a
+certified **d-D**, with no external compiler.
 
-The route is part of the Boolean machinery, so it takes the same opt-in
-as :ref:`safe-query rewriting <safe-query-rewriting>`: the ``'boolean'``
-provenance class, off by default.  Within that class it fires **automatically** – when a
-conjunctive query the safe-query rewriter declined (an unsafe / :math:`\#P`-hard
-UCQ) has its *existence* formed (a ``SELECT DISTINCT`` or a
-``GROUP BY``), the planner recognises the shape and replaces its
-provenance with the joint-width compiler's certified d-D, so
-``probability_evaluate(provenance())`` returns the exact marginal with no
-method named:
+The route takes the same opt-in as :ref:`safe-query rewriting
+<safe-query-rewriting>`: the ``'boolean'`` provenance class, off by
+default.  Within that class it applies **automatically** to a
+conjunctive query the safe-query rewriter declined (an unsafe /
+:math:`\#P`-hard UCQ) whose *existence* is formed by a
+``SELECT DISTINCT`` or a ``GROUP BY``: ``probability_evaluate(provenance())``
+then returns the exact marginal with no method named:
 
 .. code-block:: postgresql
 
@@ -636,21 +596,18 @@ method named:
     GROUP BY t.id;
 
 (The ``provsql.joint_width`` GUC, on by default, is only a debug switch
-to turn the recognition off and compare against the literal circuit.)
+to turn the route off and compare against the literal circuit.)
 
-A ``GROUP BY`` is compiled in a **single pass**: the facts are gathered
-once, the joint graph is decomposed once, and one bottom-up sweep emits
-one d-D per group, so a query with many answer groups still pays a
-single gather + decomposition + sweep.
+A ``GROUP BY`` is compiled in a **single pass** over all its groups, so a
+query with many answer groups costs about as much as one.
 
 Because the bound is on the joint object, the route stays exact where
 every query-side method is inapplicable: over **correlated** inputs
 (:sqlfunc:`repair_key` blocks, view-derived provenance), the one cell of
 the :ref:`tractability table <tractable-cases>` that nothing else fills.
-When the joint width exceeds the supported cap, or the query is not a
-recognised UCQ-existence shape, the substitution simply does not fire
-and the query falls back to the literal circuit and the general
-chooser; set ``provsql.verbose_level`` to confirm which route ran.
+When the joint width exceeds the supported cap, or the query shape is
+not recognised, the query is evaluated on its literal circuit by the
+general chooser; set ``provsql.verbose_level`` to confirm which route ran.
 
 :doc:`Case Study 7 <casestudy7>`, Step 9, walks a worked example over
 both independent and :sqlfunc:`repair_key`-correlated reviewing data.
@@ -680,7 +637,7 @@ table summarises where each shines:
        at most once).  Linear time.
    * - ``sq-rewrite``, ``bounded-jw``, ``reachability``
      - exact
-     - The same linear sweep, on the circuit one of the three :ref:`planner-time
+     - The ``independent`` computation, on the circuit one of the three :ref:`planner-time
        routes <route-methods>` produced (read-once rewrite; certified d-D from the
        joint-width or reachability compiler).  Reported under the producing
        route's name so ``provsql.last_eval_method`` tells them apart.
@@ -693,8 +650,7 @@ table summarises where each shines:
      - Safe UCQs that are tractable *only* because the :math:`\#P`-hard terms of
        their inclusion-exclusion expansion cancel (:ref:`Möbius inversion
        <safe-ucq-mobius>`, the :math:`q_9` / :math:`Q_W` class).  Applies to a
-       ``gate_mobius``-rooted token; a linear signed sweep over
-       certified-independent islands.
+       ``gate_mobius``-rooted token.
    * - ``possible-worlds``
      - exact
      - Very few input tuples (a couple of dozen at most): brute force over all
@@ -702,8 +658,8 @@ table summarises where each shines:
    * - ``possible-worlds-aggregates``
      - exact
      - A comparison of aggregate results (a ``HAVING`` clause, the rank of a
-       ``LIMIT``) over few input tuples: the same brute force, the aggregates'
-       values computed in each world rather than turned into Boolean terms.
+       ``LIMIT``) over few input tuples: the same brute force, computing the
+       aggregates' values in each world.
    * - ``sieve``
      - exact
      - Few clauses: a small monotone-DNF provenance (inclusion-exclusion).
@@ -742,33 +698,29 @@ Each method in detail:
 ``'independent'``
     Exact computation by a single linear pass that treats each gate as
     independent.  It is correct on **read-once** provenance (each input tuple
-    used at most once) and on **certified d-D circuits** -- the
-    deterministic-and-decomposable circuits the safe-query, reachability and
-    joint-width compilers emit, whose ``plus`` / ``times`` gates carry a
-    certificate of that property which the method trusts the same way it
-    trusts read-once structure.  It errors on a circuit that is neither:
+    used at most once) and on the **certified d-D circuits** that the
+    safe-query, reachability and joint-width compilers produce.  It errors on
+    a circuit that is neither:
 
     .. code-block:: postgresql
 
         SELECT probability_evaluate(provenance(), 'independent') FROM suspects;
 
     When the circuit came from one of those three compilers, the default
-    strategy reports it under that compiler's own name instead -- see
-    ``'sq-rewrite'`` / ``'bounded-jw'`` / ``'reachability'`` below.  Naming
-    ``'independent'`` explicitly stays available on any circuit: it names the
-    computation rather than its producer.
+    strategy reports it under that compiler's own name instead (see
+    ``'sq-rewrite'`` / ``'bounded-jw'`` / ``'reachability'`` below); naming
+    ``'independent'`` explicitly still works on such a circuit.
 
 .. _route-methods:
 
 ``'sq-rewrite'``, ``'bounded-jw'``, ``'reachability'``
-    The three **planner-time routes**.  Each replaces a query's ordinary
-    lineage with a circuit of its own -- the :ref:`safe-query (read-once)
+    The three **planner-time routes**: the :ref:`safe-query (read-once)
     rewriter <safe-query-rewriting>`, the joint-width UCQ compiler and the
-    bounded-treewidth reachability compiler -- and then hands that circuit to
-    the ordinary dispatcher, which resolves all three by the same linear sweep
-    ``'independent'`` performs.  What the three method names add is *which
-    rewrite produced the circuit*, so ``provsql.last_eval_method`` distinguishes
-    them instead of reporting ``independent`` for all four cases:
+    bounded-treewidth reachability compiler.  Each replaces a query's
+    ordinary provenance with a circuit of its own, evaluated by the same
+    linear pass as ``'independent'``.  The method names record *which route
+    produced the circuit*, so ``provsql.last_eval_method`` distinguishes them
+    instead of reporting ``independent`` for all four cases:
 
     .. code-block:: postgresql
 
@@ -776,9 +728,7 @@ Each method in detail:
         SELECT probability_evaluate(provenance()) FROM reachable;
         SHOW provsql.last_eval_method;   -- reachability
 
-    Each route stamps a tag on the root it produces, which is what the method
-    reads back; naming one on a root the route did not produce is an error
-    rather than a silent evaluation under the wrong label.  The default
+    Naming one on a token the route did not produce is an error.  The default
     strategy already picks the right one, so naming them explicitly is mainly
     useful for testing:
 
@@ -796,18 +746,16 @@ Each method in detail:
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
 
 ``'possible-worlds-aggregates'``
-    The same enumeration, with the aggregates' values computed in each world:
-    a comparison is then read from the values it compares there.  Every other
-    route works on the Boolean form of the circuit, in which a comparison of
-    aggregate results becomes one term per subset of the rows it aggregates --
-    the rank of a row among 21 candidates is millions of gates, though those
-    rows read a handful of input tuples.  So the chooser takes this route when
-    a comparison aggregates more rows than the circuit has input tuples, and
-    at most 20 of them; below that, the resolution and its closed forms are
-    cheaper.  It is also the route for an aggregate whose contributions are
-    themselves aggregate results (an ``avg`` of a ``count``, see
-    :ref:`reaggregation`), whatever the counts: no closed form reads such a
-    value, which is one per world:
+    The same enumeration, with the aggregates' values computed in each world
+    and a comparison read from the values it compares there.  The other
+    methods turn a comparison of aggregate results into one term per subset
+    of the rows it aggregates (the rank of a row among 21 candidates is
+    millions of gates, though those rows read a handful of input tuples).
+    So the chooser takes this method when a comparison aggregates more rows
+    than the circuit has input tuples, and at most 20 of them; below that,
+    the other methods are cheaper.  It is also the method for an aggregate
+    whose contributions are themselves aggregate results (an ``avg`` of a
+    ``count``, see :ref:`reaggregation`), whatever the counts:
 
     .. code-block:: postgresql
 
@@ -867,15 +815,11 @@ Each method in detail:
     target (default ``epsilon=0.1, delta=0.05`` when omitted):
 
     - ``samples=N`` (or a bare integer ``N``) -- a fixed number of sampling
-      rounds; deterministic runtime. The rounds are spread across the clauses
-      by *stratified* sampling (each clause gets a share proportional to its
-      probability), which tightens the estimate at a given budget compared with
-      drawing a clause at random each round.
-    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target, served by a
-      *self-adjusting stopping rule*: the method samples only until the
-      estimate is provably within the target, so on outputs whose clauses
-      barely overlap it stops far short of the worst-case
-      ``⌈4(e−2)·m·ln(2/δ)/ε²⌉`` rounds over the ``m`` clauses.
+      rounds; deterministic runtime.
+    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target: the method
+      samples only until the estimate is provably within the target, so on
+      outputs whose clauses barely overlap it stops far short of the
+      worst-case ``⌈4(e−2)·m·ln(2/δ)/ε²⌉`` rounds over the ``m`` clauses.
     - ``delta=D`` -- failure-probability target (only with ``epsilon``).
     - ``max_samples=N`` -- caps the number of rounds (only with the adaptive
       path), bounding the runtime for very small ``ε`` or large ``m``; if the
@@ -897,9 +841,8 @@ Each method in detail:
 ``'stopping-rule'``
     A universal **relative** ``(ε, δ)`` estimator that runs on the generic
     circuit, so unlike ``'karp-luby'`` it applies to **any** provenance -- plain
-    Boolean, random-variable, or HAVING-aggregate alike.  It samples under an
-    optimal stopping rule, halting as soon as the estimate is provably within
-    the relative target, in ``O(S / (p ε²) · ln(1/δ))`` for an output of
+    Boolean, random-variable, or HAVING-aggregate alike.  It stops sampling as
+    soon as the estimate is provably within the relative target, in ``O(S / (p ε²) · ln(1/δ))`` for an output of
     probability ``p``.  The third argument is the ``(ε, δ)`` target (with an
     optional ``max_samples`` cap; if the cap is reached first the guarantee
     degrades from relative to the additive accuracy actually achieved).  Pin
@@ -922,16 +865,14 @@ Each method in detail:
 
 ``'d-tree'``
     Anytime **certified-interval** computation
-    :cite:`DBLP:conf/icde/OlteanuHK10`: starting from cheap leaf bounds, it
-    refines the interval by independent-or decomposition (the connected
-    components of the clause graph) and Shannon expansion on the most frequent
-    variable until the interval is narrow enough, or exact (width 0).  It fills
-    two corners the other exact methods do not: it returns an exact value where
-    the provenance treewidth **exceeds** ``'tree-decomposition'``'s cap, and --
-    being *deterministic*, at a cost independent of ``δ`` -- it is the method
-    that honours a ``δ = 0`` (no-failure) approximate request, returning a
-    certified interval rather than a point estimate.  It works on any Boolean
-    circuit (a monotone-DNF provenance takes an optimised path).  Called by name
+    :cite:`DBLP:conf/icde/OlteanuHK10`: starting from cheap bounds, it
+    refines a certified interval until it is narrow enough, or exact (width 0).
+    It fills two corners the other exact methods do not: it returns an exact
+    value where the provenance treewidth **exceeds**
+    ``'tree-decomposition'``'s cap, and, being *deterministic* (its cost does
+    not depend on ``δ``), it honours a ``δ = 0`` (no-failure) approximate
+    request, returning a certified interval rather than a point estimate.  It
+    works on any Boolean circuit.  Called by name
     with no third argument it refines to the exact value; given an accuracy
     target it stops at a certified interval of that width:
 
@@ -959,17 +900,14 @@ Each method in detail:
     Exact computation for the safe UCQs that need :ref:`Möbius inversion
     <safe-ucq-mobius>` -- those tractable only because the :math:`\#P`-hard
     terms of their inclusion-exclusion expansion cancel (the :math:`q_9` /
-    :math:`Q_W` class).  It applies to a token whose root is the signed
-    ``gate_mobius`` combination the planner substitutes for such a query; it
-    is a linear sweep that sums the certified-independent islands'
-    probabilities with the stored integer coefficients (it errors on a token
-    that is not ``gate_mobius``-rooted).  This is the *fast* route only: the
-    gate carries the query's literal provenance, so naming **another** method on
-    the same token (``'possible-worlds'``, ``'monte-carlo'``, ...), or asking
-    for ``shapley`` / ``banzhaf``, evaluates that provenance instead and returns
-    the same exact answer (slower).  The default strategy already takes the
-    fast Möbius path automatically for a ``gate_mobius``-rooted token, so
-    naming it explicitly is mainly useful for testing:
+    :math:`Q_W` class).  It applies to the ``gate_mobius``-rooted token
+    ProvSQL produces for such a query, in linear time, and errors on any other
+    token.  Naming **another** method on the same token
+    (``'possible-worlds'``, ``'monte-carlo'``…), or asking for ``shapley`` /
+    ``banzhaf``, evaluates the query's literal provenance instead and returns
+    the same exact answer, more slowly.  The default strategy already takes
+    the Möbius route for such a token, so naming it explicitly is mainly
+    useful for testing:
 
     .. code-block:: postgresql
 
@@ -1001,8 +939,8 @@ Each method in detail:
     depends on the chosen tool -- ``'ganak'`` / ``'sharpsat-td'`` / ``'dpmc'``
     are exact, ``'weightmc'`` is an approximate ``(ε, δ)`` counter. The third
     argument selects the counter and its options as
-    ``tool=<name>[,epsilon=E][,delta=D]`` (the legacy ``tool[;tool_args]`` form
-    is still accepted): ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`,
+    ``tool=<name>[,epsilon=E][,delta=D]`` (a ``tool[;tool_args]`` form is also
+    accepted): ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`,
     ``'sharpsat-td'`` :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
     :cite:`DBLP:conf/cp/DudekPV20`, or ``'weightmc'``. Same PATH /
     ``provsql.tool_search_path`` considerations as ``'compilation'``:
@@ -1025,32 +963,28 @@ Default strategy (no second argument)
     circuit never hangs on the wrong method.
 
     The empty default is identical to an explicit ``'exact'`` request on
-    an ordinary Boolean circuit -- **with one deliberate exception**. On a
-    circuit carrying continuous random variables (see
-    :doc:`continuous-distributions`), some comparison events cannot be resolved to
-    a closed form and are correlation-dependent in a way the analytic
-    pre-passes decline to marginalise (for instance conditioning on a
-    mixture's own Bernoulli selector, or a comparison over a combination of
-    mixtures). For those the empty default **falls back to the Monte Carlo
-    sampler** (an approximate ``(ε, δ)`` estimate at the
-    ``provsql.rv_mc_samples`` budget, which couples every shared variable
-    and selector correctly), whereas an explicit ``'exact'`` request is a
-    contract for an exact value and instead **raises** rather than silently
-    returning an estimate -- name ``'monte-carlo'`` explicitly to opt in.
-    The fallback is disabled by ``provsql.rv_mc_samples = 0``, which makes
-    the default raise as well.
+    an ordinary Boolean circuit, **with one exception**. On a circuit
+    carrying continuous random variables (see
+    :doc:`continuous-distributions`), some comparison events have no closed
+    form and depend on correlations that cannot be marginalised analytically
+    (for instance conditioning on a mixture's own Bernoulli selector, or a
+    comparison over a combination of mixtures). For those the empty default
+    **falls back to the Monte Carlo sampler** (an approximate ``(ε, δ)``
+    estimate at the ``provsql.rv_mc_samples`` budget), whereas an explicit
+    ``'exact'`` request **raises an error** instead of returning an
+    estimate; name ``'monte-carlo'`` explicitly to opt in.
+    ``provsql.rv_mc_samples = 0`` disables the fallback, and the default then
+    raises as well.
 
 To time every method on one circuit and compare results side by side,
 use ProvSQL Studio's benchmark panel; see :doc:`studio`.
 
-Performance optimizations under the hood
+Performance optimisations under the hood
 ----------------------------------------
 
-Probability evaluation runs through the Boolean-circuit pipeline
-(``getBooleanCircuit``, then one of the evaluation methods above).  Two
-families of optimisation exploit Boolean-specific structure to make this
-faster, sometimes by orders of magnitude; both are transparent to the
-result.
+Four optimisations exploit Boolean-specific structure to make
+probability evaluation faster, sometimes by orders of magnitude; none
+changes the result.
 
 .. _safe-query-rewriting:
 
@@ -1060,11 +994,9 @@ Safe-query rewriting (provenance class ``'boolean'``)
 When the provenance class is ``'boolean'`` (``provsql.provenance``, off by
 default), the planner recognises the *safe* hierarchical
 conjunctive-query subclass of Dalvi-Suciu :cite:`DBLP:journals/jacm/DalviS12`
-and rewrites such queries with per-atom ``DISTINCT`` projections so
-that the resulting provenance circuit is *read-once*.  A read-once
-circuit can be probability-evaluated in linear time by the
-``'independent'`` method, instead of falling through to
-``'tree-decomposition'`` or external compilation.
+and rewrites such queries so that their provenance circuit is
+*read-once*, evaluated in linear time by the ``'independent'`` method
+instead of ``'tree-decomposition'`` or external compilation.
 
 The rewriter recognises self-join-free hierarchical conjunctive
 queries over TID or BID base tables, plus a number of extensions
@@ -1074,7 +1006,7 @@ UNIQUE constraints, constant selections, transparent deterministic
 relations, certain self-joins, UCQs with disjoint branches…); see
 :ref:`safe-query-rewriter` in the developer documentation for the
 full set.  Queries outside the
-recognised class are passed through unchanged: the GUC enables an
+recognised class are passed through unchanged: the setting enables an
 opt-in shortcut, never a different result.
 
 .. code-block:: postgresql
@@ -1085,11 +1017,10 @@ opt-in shortcut, never a different result.
     FROM suspects, witnesses
     WHERE suspects.case_id = witnesses.case_id;
 
-**Trade-off.**  The rewriter tags the root gate so that semiring
-evaluators incompatible with Boolean rewriting refuse to run on the
-result (see :doc:`semirings` for the compatibility list).  In
-practice this means: turn the GUC on for probability-heavy
-workloads on hierarchical CQs, turn it off (or re-evaluate in a
+**Trade-off.**  Semiring evaluators incompatible with Boolean rewriting
+refuse to run on the result (see :doc:`semirings` for the compatibility
+list).  In practice: use the ``'boolean'`` class for probability-heavy
+workloads on hierarchical CQs, and switch it off (or re-evaluate in a
 fresh session) before running ``sr_counting``, ``sr_how``,
 ``sr_why`` on the same circuit.
 
@@ -1102,35 +1033,33 @@ The *inversion-free* ``UCQ(OBDD)`` class of Jha & Suciu
 :cite:`DBLP:conf/icdt/JhaS11` -- hierarchical, tuple-independent queries
 whose provenance admits a polynomial-size OBDD -- is a second linear-time
 route for safe queries, a sibling of the :ref:`safe-query rewrite
-<safe-query-rewriting>`.  ProvSQL certifies the query, attaches the
-certificate to the provenance root, and the default chooser takes the
-route automatically, right after ``'independent'``, so no method need be
-named.  Where ``'tree-decomposition'`` would blow up because the provenance
-is not low-treewidth, the route builds a *structured* d-DNNF over a
-query-derived variable order that stays linear in the provenance, and
-``'inversion-free'`` reads it in one pass.
+<safe-query-rewriting>`.  ProvSQL certifies the query and the default
+chooser takes the route automatically, right after ``'independent'``, so
+no method need be named.  It stays linear in the provenance where
+``'tree-decomposition'`` would blow up because the provenance is not
+low-treewidth.
 
 It differs from the safe-query rewrite on three counts:
 
 - **Self-joins.**  The inversion-free class natively admits queries that
   join a relation with itself; the safe-query rewrite targets
   self-join-free CQs and recovers only limited self-join cases.
-- **Provenance scheme.**  The inversion-free path evaluates the literal
+- **Provenance scheme.**  The inversion-free route evaluates the literal
   provenance unchanged, so it does **not** require the ``'boolean'``
-  provenance class -- it applies under the default semiring scheme too --
+  provenance class (it applies under the default semiring scheme too),
   and is governed by its own ``provsql.inversion_free`` GUC (on by
   default).  The safe-query rewrite restructures the query and fires only
   under ``provsql.provenance = 'boolean'``.
 - **Edge cases.**  In exchange it certifies fewer shapes: the safe-query
   rewrite recovers safety from functional dependencies and BID blocks
   (see :ref:`safe-query-rewriting`), which the inversion-free certifier
-  does not -- its atoms must be strictly tuple-independent.  (A plain
+  does not: its atoms must be strictly tuple-independent.  (A plain
   constant selection is fine either way: the certifier treats it as a
   transparent atom-local filter.)
 
 The certifier does let a **non-tracked relation** act as a transparent
 filter, and **flattens SPJ subqueries and views** before checking the
-class -- a join inside a view, a view referenced several times (a
+class: a join inside a view, a view referenced several times (a
 structured self-join), and views-over-views all reduce to their base
 atoms first.  An aggregating or ``UNION`` view, a correlated subquery,
 or a query still non-hierarchical after flattening is not certified and
@@ -1152,24 +1081,23 @@ computation follows Dalvi, Schnaitter & Suciu (PODS 2010).  Under the
 ``'boolean'`` provenance class, when the safe-query rewriter and the
 inversion-free certifier both decline a UCQ-existence shape (a
 ``SELECT DISTINCT`` / ``GROUP BY`` over a ``UNION``), ProvSQL
-recognises this class and roots the provenance in a *signed Möbius
-combination* over read-once islands, which the default probability
-route evaluates in one linear pass; no method needs to be named.
+recognises this class and replaces the provenance with a *signed Möbius
+combination* of read-once parts, which the default probability
+evaluation handles in one linear pass; no method needs to be named.
 :doc:`Case Study 7 <casestudy7>` runs the complete :math:`q_9`
 example.
 
 Like the safe-query rewrite, this is a shortcut, not a different
-result: the gate keeps the query's literal provenance as a transparent
-child, so :sqlfunc:`shapley`, :sqlfunc:`banzhaf`, PROV export, and
-any *named* probability method (``possible-worlds``, …) answer
-exactly as on the ordinary provenance, necessarily more slowly, since
-the literal provenance is the very :math:`\#P`-hard circuit the
-cancellation sidesteps.  Only the default / ``mobius`` probability
+result: the query's literal provenance is kept, so :sqlfunc:`shapley`,
+:sqlfunc:`banzhaf`, PROV export, and any *named* probability method
+(``possible-worlds``…) answer exactly as on the ordinary provenance,
+necessarily more slowly, since the literal provenance is the
+:math:`\#P`-hard circuit the cancellation avoids.  Only the default / ``mobius`` probability
 takes the fast route.
 
 The route runs in :math:`O(|D|^e)` (:math:`e` the essential-variable
 count), so the linear hierarchical and inversion-free routes are
-tried first; where it applies, it takes precedence over the
+tried first.  Where it applies, it takes precedence over the
 :ref:`joint-width compiler <bounded-joint-width>`, whose success on
 these queries is not guaranteed.  Inputs must be tuple-independent,
 with one probabilistic tuple per element tuple and no two query slots
@@ -1178,20 +1106,14 @@ the general chooser.  ``provsql.mobius`` (on by default), the
 ``provsql.mobius_max_gates`` data-cost cap and the
 ``provsql.mobius_max_cnf`` query-cost cap control the route.
 
-**Self-joins.**  A query that repeats a relation is handled, not
-refused.  Two normalisations run before the recursion, exactly as in
-the dichotomy proof: *shattering* separates an atom that pins a
-constant (``S(a,y)``, left by a per-answer head) from one that does
-not (``S(x,z)``), and *ranking* separates an atom with a repeated
-variable (``S(x,x)``) from one with distinct variables, by splitting
-the relation into disjoint shards -- one per equality pattern and
-pinned constant of its tuples.  What remains, two components over one
-relation (Dalvi & Suciu's :math:`q_J = R(x_1),S(x_1,y_1),T(x_2),S(x_2,y_2)`),
-is genuinely correlated, and the route computes it as
-:math:`P(c_1) + P(c_2) - P(c_1 \lor c_2)`, the disjunctive detour that
-makes UCQ, rather than CQ, the natural class.  A self-join carrying an
-inversion (``S(x,y),S(y,x)``) is outside every tractable class and
-declines.
+**Self-joins.**  A query that repeats a relation is handled.  As in
+the dichotomy proof, atoms that pin a constant (``S(a,y)``) or repeat a
+variable (``S(x,x)``) are separated from the others; two remaining
+components over one relation (Dalvi & Suciu's
+:math:`q_J = R(x_1),S(x_1,y_1),T(x_2),S(x_2,y_2)`) are computed as
+:math:`P(c_1) + P(c_2) - P(c_1 \lor c_2)`.  A self-join carrying an
+inversion (``S(x,y),S(y,x)``) is outside every tractable class and is
+declined.
 
 .. _having-shortcuts:
 
@@ -1201,33 +1123,29 @@ HAVING closed-form shortcuts
 For the common ``GROUP BY g HAVING <agg> op c`` thresholds (``op`` one of
 ``>=``, ``>``, ``<=``, ``<``, ``=``, ``<>``) ProvSQL computes the group's
 probability in closed form, replacing the exponential DNF the general
-HAVING path would build.  Each fires automatically when its soundness
-preconditions hold -- each per-row provenance a single ``gate_input``
-leaf, the group-level aggregate not shared with another comparator -- and
-needs no GUC.
+HAVING path would build.  Each applies automatically, with no setting to
+change, when each row's provenance is a single input token and the
+group's aggregate is not shared with another comparison.
 
-**COUNT.**  ``COUNT(*) op c`` is recognised as a Poisson-binomial CDF over
-the per-row Bernoulli indicators and computed directly, in
+**COUNT.**  ``COUNT(*) op c`` is computed as a Poisson-binomial
+distribution over the rows' presence, in
 ``O(N × min(C, N−C))`` per group (``N`` the per-group row count).
 HAVING-COUNT queries that would otherwise hit ``'tree-decomposition'`` or
-``'compilation'`` now resolve in milliseconds.  A multi-comparator HAVING
+``'compilation'`` resolve in milliseconds.  A multi-comparator HAVING
 (``COUNT(*) >= a AND COUNT(*) <= b``) falls through to the general path.
 
-**MIN / MAX.**  ``MIN(a) op c`` and ``MAX(a) op c`` need no DP: ProvSQL
-partitions the group's rows on whether their value ``a`` satisfies the
-comparison against ``c`` and computes the probability as a product of the
-rows' presence probabilities, in ``O(N)`` per group.  For example
+**MIN / MAX.**  ``MIN(a) op c`` and ``MAX(a) op c`` are computed as a
+product of the rows' presence probabilities, in ``O(N)`` per group.  For
+example,
 ``MAX(a) >= c`` holds iff at least one row with ``a >= c`` is present,
 with probability ``1 − ∏ (1 − p_i)`` over those rows; ``MIN(a) >= c``
 holds iff no row with ``a < c`` is present and the group is non-empty.
 All twelve ``(MIN|MAX, op)`` cases have analogous closed forms.
 
-**SUM.**  ``SUM(a) op c`` is handled by a weighted-sum dynamic program:
-the distribution of the group's running sum over the present rows is built
-by convolution, and the probability is read off as the mass of the sums
-satisfying the comparison (with the empty group excluded), in
-``O(N × R)`` per group with ``R`` the range of reachable sums.  Because
-``R`` grows with the magnitude of the values the shortcut is
-*pseudo*-polynomial and steps aside for the general path when the range is
-too wide; for the usual small-integer weights it replaces the exponential
-enumeration with a fast DP.
+**SUM.**  ``SUM(a) op c`` is computed from the distribution of the
+group's sum (the empty group excluded), in ``O(N × R)`` per group with
+``R`` the range of reachable sums.  Because ``R`` grows with the
+magnitude of the values, the shortcut is *pseudo*-polynomial and steps
+aside for the general path when the range is too wide; for the usual
+small-integer values it replaces the exponential enumeration with a fast
+computation.

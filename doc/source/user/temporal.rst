@@ -1,10 +1,9 @@
 Temporal Features
 ==================
 
-ProvSQL provides support for *temporal databases* – databases where data
+ProvSQL provides support for *temporal databases*, where data
 validity is associated with time intervals
-:cite:`DBLP:conf/pw/WidiaatmajaDDS25`. This feature is implemented on top
-of the data-modification tracking infrastructure.
+:cite:`DBLP:conf/pw/WidiaatmajaDDS25`.
 
 .. note::
 
@@ -15,9 +14,9 @@ Overview
 
 Temporal provenance allows you to track when each fact was valid, represent
 intervals of validity, and query the database "as of" a given point in time.
-The implementation uses the PostgreSQL
+Validity periods are values of the PostgreSQL
 `tstzmultirange <https://www.postgresql.org/docs/current/rangetypes.html>`_
-type to represent validity periods.
+type.
 
 Temporal Tables
 ---------------
@@ -27,8 +26,7 @@ A temporal table is simply a provenance-enabled table
 (``provsql.update_provenance = on``, see :doc:`data-modification`): no
 validity column is added to the user table. Validity ranges live in the
 ``provsql.update_provenance`` table (its ``valid_time`` column, a
-``tstzmultirange``), maintained automatically by the data-modification
-machinery; the
+``tstzmultirange``), maintained automatically; the
 functions below (:sqlfunc:`get_valid_time`, :sqlfunc:`timetravel`,
 :sqlfunc:`timeslice`, :sqlfunc:`history`) query them.
 
@@ -63,35 +61,31 @@ associated with a query result via its provenance:
            sr_temporal(provenance(), 'interval_mapping')
     FROM temporal_table;
 
-:sqlfunc:`union_tstzintervals` is a backward-compatible alias for
-:sqlfunc:`sr_temporal` retained for existing code; new code should
-use :sqlfunc:`sr_temporal` directly. See :doc:`semirings` for a
+:sqlfunc:`union_tstzintervals` is an alias for
+:sqlfunc:`sr_temporal`; new code should use :sqlfunc:`sr_temporal`. See :doc:`semirings` for a
 description of the underlying interval-union m-semiring.
 
 :sqlfunc:`sr_temporal` is the ``tstzmultirange`` specialisation of a
 more general interval-union m-semiring parameterised by the carrier
-type: union for ⊕, intersection for ⊗, and set difference for monus,
-defined uniformly over any densely-ordered linearly-ordered carrier
-with a bounded order. ProvSQL ships two further instances :
-:sqlfunc:`sr_interval_num` over ``nummultirange`` (e.g.
+type: union for ⊕, intersection for ⊗, and set difference for monus.
+ProvSQL ships two further instances:
+:sqlfunc:`sr_interval_num` over ``nummultirange`` (e.g.,
 measurement-validity ranges in scientific data integration) and
 :sqlfunc:`sr_interval_int` over ``int4multirange`` (e.g., page-range
 or line-range provenance in scholarly or source-code corpora). All
-three share the same algebra and the same C++ kernel
-(``IntervalUnion(Oid)``), differing only in the underlying multirange
-type. ProvSQL Studio surfaces them as a single
-``Interval union (multirange)`` option in its evaluation strip, with
-the kernel selected automatically from the chosen mapping's value
-type; see :doc:`studio`.
+three share the same algebra and differ only in the multirange
+type. ProvSQL Studio offers them as a single
+``Interval union (multirange)`` option in its evaluation strip, picking
+the instance from the chosen mapping's value type; see :doc:`studio`.
 
 The interval-union semiring is absorptive, so it also evaluates
 recursive queries under the ``'absorptive'`` provenance class (see
-:ref:`provsql-provenance-class`) – including *temporal reachability*:
-over a graph whose edges carry validity multiranges, an ordinary
-recursive reachability query (compiled along a tree decomposition of
-the data on bounded-treewidth graphs, cyclic data included; see
-:doc:`probabilities`) evaluates with :sqlfunc:`sr_temporal` to
-exactly the set of instants at which each vertex is reachable:
+:ref:`provsql-provenance-class`), including *temporal reachability*.
+Over a graph whose edges carry validity multiranges, cyclic data
+included, an ordinary recursive reachability query evaluates with
+:sqlfunc:`sr_temporal` to exactly the set of instants at which each
+vertex is reachable (on bounded-treewidth graphs; see
+:doc:`probabilities`):
 
 .. code-block:: postgresql
 
@@ -139,5 +133,5 @@ Relationship to Data Modification Tracking
 
 Temporal support is built on top of data modification tracking
 (see :doc:`data-modification`). The provenance circuit records the full
-history of insertions and deletions, which is then interpreted temporally
-by the interval-aware evaluation functions.
+history of insertions and deletions, which the functions above interpret
+temporally.

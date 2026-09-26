@@ -32,8 +32,8 @@ annotation identifying its source.
 Using Where-Provenance
 -----------------------
 
-With where-provenance enabled, you can query the source location of a
-value using the :sqlfunc:`where_provenance` function:
+With where-provenance enabled, :sqlfunc:`where_provenance` returns the
+source location of each value:
 
 .. code-block:: postgresql
 
@@ -59,8 +59,8 @@ Projection Gates
 
 Where-provenance introduces additional gate types in the circuit:
 
-* ``project`` – tracks which column a value was projected from.
-* ``eq`` – tracks equijoin conditions that constrained a value.
+* ``project``: tracks which column a value was projected from.
+* ``eq``: tracks equijoin conditions that constrained a value.
 
 These gates appear alongside the usual ``plus``/``times`` gates when
 where-provenance is active.

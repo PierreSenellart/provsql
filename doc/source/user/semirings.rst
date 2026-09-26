@@ -17,8 +17,8 @@ The built-in evaluation functions all follow the same calling convention:
 
 where ``provenance()`` returns the token for the current output row and
 ``mapping_name`` is the name of a provenance mapping table.
-Semirings are also extended with a *monus* operation allowing to
-represent the output of non-monotone queries.
+Semirings are also extended with a *monus* operation, which represents
+the output of non-monotone queries.
 
 ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
 drives every compiled and custom semiring interactively: pick a
@@ -81,7 +81,7 @@ a join would show as ``a⊗b``; one that could come from either ``a`` or
 
 Unlike the other ``sr_*`` functions, :sqlfunc:`sr_formula` serialises the
 circuit instead of evaluating it, so it renders **every** kind of gate and
-refuses none – including the ones that carry no algebraic meaning and that
+refuses none -- including the ones that carry no algebraic meaning and that
 the proper semirings reject: random-variable leaves, arithmetic over them,
 mixtures, ``CASE`` selections, observations and conditioning (see
 :doc:`continuous-distributions`).  Ordinary arithmetic notation is used
@@ -96,8 +96,8 @@ for those, kept visually distinct from the semiring's ``⊕`` / ``⊗``:
     -- Bernoulli(0.4) ? normal(0, 1) : normal(5, 1)
 
 The mapping argument is optional (such circuits have no leaf mapping at
-all).  A variable leaf the mapping does not name – every leaf when no
-mapping is given, and the uncovered ones when a partial mapping is –
+all).  A variable leaf the mapping does not name -- every leaf when no
+mapping is given, and the uncovered ones when a partial mapping is --
 renders as an abbreviated UUID, the same abbreviation ProvSQL Studio
 prints on the circuit's nodes:
 
@@ -109,10 +109,7 @@ prints on the circuit's nodes:
     SELECT sr_formula(provenance()) FROM suspects;
     -- 81ee17e5… ⊗ 139dd2d7…
 
-This mirrors :sqlfunc:`sr_boolexpr`'s ``x<id>`` fallback, and it matters
-for more than readability: ``𝟙`` is the multiplicative identity, so an
-unnamed leaf rendered that way would be *absorbed* by the enclosing
-``⊗`` and take the structure of the formula with it.
+This mirrors :sqlfunc:`sr_boolexpr`'s ``x<id>`` fallback.
 
 Counting Semiring (m-semiring)
 -------------------------------
@@ -131,7 +128,7 @@ The mapping should assign integer values (typically ``1``) to leaf tokens.
 Why-Provenance
 ---------------
 
-:sqlfunc:`sr_why` returns the *why-provenance* of a result – the set of
+:sqlfunc:`sr_why` returns the *why-provenance* of a result -- the set of
 witnesses (sets of input tuples) that support the result:
 
 .. code-block:: postgresql
@@ -139,7 +136,7 @@ witnesses (sets of input tuples) that support the result:
     SELECT name, sr_why(provenance(), 'my_mapping')
     FROM mytable;
 
-Leaf values may be bare labels (e.g. ``Alice``, treated as the singleton
+Leaf values may be bare labels (e.g., ``Alice``, treated as the singleton
 witness ``{{Alice}}``) or already-structured why-provenance values
 (``{}`` for zero, ``{{}}`` for one, ``{{a},{b,c}}`` for a multi-witness
 set), which lets the output of one ``sr_why`` query be reused as input
@@ -148,7 +145,7 @@ to another.
 How-Provenance
 ---------------
 
-:sqlfunc:`sr_how` returns the *how-provenance* of a result – the
+:sqlfunc:`sr_how` returns the *how-provenance* of a result -- the
 canonical polynomial in :math:`\mathbb{N}[X]` over the input-tuple
 labels :cite:`DBLP:conf/pods/GreenKT07`.  Each derivation contributes
 a monomial; coefficients count
@@ -159,20 +156,20 @@ distinct derivations of the same monomial:
     SELECT name, sr_how(provenance(), 'my_mapping')
     FROM mytable;
 
-The result is rendered in canonical sum-of-products form, e.g.
+The result is rendered in canonical sum-of-products form, e.g.,
 ``2⋅Alice⋅Bob + Alice^2 + Bob^2``.  Multiplication is the dot
 ``⋅``; exponents use ``^k``; ``0`` and ``1`` denote the additive and
 multiplicative identities.  Because the form is canonical, two
 semantically-equivalent provenance circuits collapse to identical
 strings, making :sqlfunc:`sr_how` suitable for provenance-aware query
-equivalence (e.g. checking that two ETL pipelines produce the same
+equivalence (e.g., checking that two ETL pipelines produce the same
 provenance, not just the same tuples).  The how-semiring is
 :math:`\mathbb{N}[X]`, the universal commutative semiring for
 provenance.
 
-Leaf values may be bare labels (e.g. ``Alice``, treated as the
+Leaf values may be bare labels (e.g., ``Alice``, treated as the
 monomial ``Alice``), the literal ``0``, or already-structured
-polynomials following the same canonical syntax as the output (e.g.
+polynomials following the same canonical syntax as the output (e.g.,
 ``2⋅Alice⋅Bob^2 + 3⋅Charlie``), so the output of one ``sr_how`` query
 can be reused as input to another.
 
@@ -180,7 +177,7 @@ Which-Provenance (Lineage)
 ---------------------------
 
 :sqlfunc:`sr_which` returns the *which-provenance* (also known as
-*lineage*) of a result – a single set of input labels that contributed
+*lineage*) of a result -- a single set of input labels that contributed
 to it, namely the union of all witnesses:
 
 .. code-block:: postgresql
@@ -193,7 +190,7 @@ The result is rendered as ``{a,b,c}`` for a non-empty derivation, or
 which-provenance is more compact (a flat set rather than a set of
 sets) but loses the breakdown into individual derivations.
 
-Leaf values may be bare labels (e.g. ``Alice``, treated as the
+Leaf values may be bare labels (e.g., ``Alice``, treated as the
 singleton ``{Alice}``), the literal ``⊥`` (the additive zero), or
 already-structured sets (``{}`` for the multiplicative identity,
 ``{a,b,c}`` for a non-empty set), so the output of one ``sr_which``
@@ -237,12 +234,11 @@ on cyclic graphs:
                              nonnegative => true) AS min_cost
     FROM reach;
 
-On bounded-treewidth data this is also *fast*: the recursive
-reachability shapes compile along a tree decomposition of the data
-graph into certified circuits of linear total size (see
-:doc:`probabilities`), which min-plus evaluation -- like any
-absorptive-semiring evaluation -- reads off exactly, in time linear
-in the circuit.  Single-source shortest distances over thousands of
+On bounded-treewidth data this is also *fast*: the query compiles into
+a circuit of linear total size, which min-plus evaluation, like any
+absorptive-semiring evaluation, reads exactly in time linear in the
+circuit (see :doc:`probabilities`).
+Single-source shortest distances over thousands of
 probabilistic edges, hop-bounded variants (the min cost of reaching a
 vertex within :math:`k` hops), per-region minima (through a
 ``GROUP BY`` over a joined member relation) and **exact directed
@@ -309,9 +305,7 @@ identity is ``'{(,)}'`` (the universal range):
     SELECT entity_id, sr_temporal(provenance(), 'validity_mapping')
     FROM mytable;
 
-:sqlfunc:`union_tstzintervals` is a thin SQL alias for
-:sqlfunc:`sr_temporal`, retained for backward compatibility; both
-compute the same union of validity intervals.
+:sqlfunc:`union_tstzintervals` is an alias for :sqlfunc:`sr_temporal`.
 
 Requires PostgreSQL ≥ 14 (for ``tstzmultirange``).
 
@@ -373,10 +367,9 @@ plays the role of the semiring 𝟘 (no derivation possible):
                            'unclassified'::classification_level) AS clearance
     FROM (SELECT DISTINCT city FROM personnel) t;
 
-This is the compiled replacement for the hand-rolled access-control
-semiring previously documented as the *security semiring*: a single
-implementation covers any user enum (security lattices, fuzzy-discrete
-trust levels, three-valued logic, project-specific orderings).
+These two functions cover any user enum: security lattices,
+fuzzy-discrete trust levels, three-valued logic, project-specific
+orderings.
 
 .. _custom-semirings:
 
@@ -450,14 +443,11 @@ suite: :download:`test/sql/capability.sql <../../../test/sql/capability.sql>`
 
 .. note::
 
-    :sqlfunc:`provenance_evaluate` is a PL/pgSQL function that traverses
-    the provenance circuit recursively.  It does not support ``cmp`` gates
-    introduced by ``HAVING`` clauses; queries with ``HAVING`` will produce
-    an error.
+    :sqlfunc:`provenance_evaluate` does not support queries with
+    ``HAVING`` clauses: they produce an error.
     The built-in compiled semirings (:sqlfunc:`sr_formula`,
-    :sqlfunc:`sr_counting`, etc.) are implemented in C, support the
-    aggregation and ``HAVING`` gate types (``agg``, ``semimod``,
-    ``cmp``, ``value``), and are significantly faster.
+    :sqlfunc:`sr_counting`, etc.) support aggregation and ``HAVING``,
+    and are significantly faster.
     Prefer compiled semirings when available; use
     :sqlfunc:`provenance_evaluate` for semirings not covered by the
     built-in set.
@@ -485,13 +475,11 @@ can also populate it manually for custom scenarios:
 Compatibility with Boolean-Provenance Rewriting
 ------------------------------------------------
 
-When the provenance class is ``'boolean'`` (``provsql.provenance``) (see
-:doc:`probabilities`), the planner rewrites hierarchical CQs to a
-read-once form whose probability is computable in linear time, and
-tags the root of the rewritten circuit so that semirings whose
-algebra is not Boolean-faithful refuse to evaluate it.  The refusal
-raises an explicit error rather than silently producing a wrong
-value:
+When the provenance class ``provsql.provenance`` is ``'boolean'`` (see
+:doc:`probabilities`), hierarchical CQs are rewritten so that their
+probability is computable in linear time, and semirings whose algebra
+is not Boolean-faithful refuse to evaluate the resulting circuit, with
+an explicit error:
 
 .. code-block:: text
 
@@ -516,9 +504,8 @@ rewritten circuits: :sqlfunc:`sr_counting`, :sqlfunc:`sr_how`,
 
 To run a refused semiring, switch
 the provenance class below ``'boolean'`` (in the current session, or for
-the role / database) and re-evaluate; the next provenance circuit
-built for the query is unrewritten and accepts any semiring.
+the role / database) and re-run the query; its new provenance circuit
+accepts any semiring.
 
-ProvSQL Studio's evaluation strip filters the semiring dropdown to
-hide the refusing semirings whenever the root carries the rewrite
-tag.
+ProvSQL Studio's evaluation strip hides the refusing semirings from the
+semiring dropdown on such circuits.

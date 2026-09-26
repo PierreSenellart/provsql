@@ -244,10 +244,8 @@ every result row, so a constant label is enough to read:
     GROUP BY ();
 
 **Click the token to see its circuit.** ``obesity`` appears as a *single*
-gate feeding both branches, not two separate copies: ProvSQL addresses
-every gate by its content, so the shared cause is literally the same node
-everywhere -- and that overlap is exactly what an independence assumption
-ignores. Press :fa:`bolt` **Evaluate** and :fa:`play` **Run**: about
+gate feeding both branches: the shared cause is the same node everywhere,
+and that overlap is exactly what an independence assumption ignores. Press :fa:`bolt` **Evaluate** and :fa:`play` **Run**: about
 **0.44**.
 
 Compare that with the independence estimate, plain arithmetic
@@ -282,8 +280,8 @@ Condition every factor on obesity being present:
 ``obesity`` comes back at **1.0** -- an event given itself is certain -- while
 ``insulin_resistance`` (0.6) and ``high_salt`` (0.7) are **unchanged** from
 their priors: they share no gate with obesity, so conditioning on it tells us
-nothing about them. The same content-addressed circuit that made the
-disjunction correct makes the conditional correct.
+nothing about them. The same shared circuit that made the disjunction
+correct makes the conditional correct.
 
 See what conditioning built. Select one conditioned tuple on its own and
 **click its** ``provsql`` **token**:
@@ -528,7 +526,7 @@ a query describing a forbidden pattern -- and ProvSQL conditions on their
 *non-occurrence* with the event-negation operator ``!``
 (:sqlfunc:`provenance_not`).
 
-An immunization registry merges dose reports from several sources, so each
+An immunisation registry merges dose reports from several sources, so each
 reported dose is only *probably* a real administration. A data-quality rule
 says two doses of the same vaccine must be at least 21 days apart. Here are
 four uncertain dose reports for one patient -- the date each was administered
@@ -553,7 +551,7 @@ ordinary self-join. Materialise it, collapsing all the witnessing pairs into a
 single ``DISTINCT`` row: that one row's *provenance* is the violation event
 ``W``, "the record has a too-close pair". Two pairs qualify -- (Mar 4, Mar 14)
 and (Mar 14, Mar 28) -- and they *share* the Mar 14 dose, so ``W`` is not a
-simple product of independent pairs; ProvSQL tracks the shared gate and gets
+simple product of independent pairs; ProvSQL tracks the shared dose and gets
 the overlap right (the same correlation-awareness as Problem 2). So
 ``provenance()`` over the ``violation`` table is ``W``, and ``!provenance()`` is
 the complementary "valid record" event:
@@ -576,9 +574,8 @@ probability 0.625.
 Now condition each dose on the record being valid -- one row per dose. Prior and
 posterior are the *same* row token, ``provenance()``, evaluated two ways:
 unconditioned, and conditioned on ``!W``. Each row's own provenance stays the
-dose itself; the violation event is pulled in by an inert
-``(SELECT provenance() FROM violation)`` -- naming ``W`` once, without coupling
-it into the row's lineage:
+dose itself; the scalar subquery ``(SELECT provenance() FROM violation)``
+names ``W`` without adding it to the row's lineage:
 
 .. code-block:: postgresql
 
@@ -629,18 +626,17 @@ days: a quarantine window of ten days clears 95% of cases. That is the
 question quantiles answer directly and moments cannot.
 
 The log-normal earns its name through a transform: the ``exp`` of a
-Normal *is* a log-normal, and ProvSQL folds the two forms into the same
-distribution. Building the incubation the long way, as ``exp`` of the
-underlying normal, gives an identical mean:
+Normal *is* a log-normal. Building the incubation the long way, as ``exp``
+of the underlying normal, gives an identical mean:
 
 .. code-block:: postgresql
 
     SELECT expected(exp(normal(1.6, 0.42))) AS mean_via_exp;
 
-**5.41** again -- the simplifier recognised ``exp(normal(μ, σ))`` as
-``lognormal(μ, σ)`` and evaluated the closed form, no sampling. The
-transform functions (``exp``, ``ln``, ``pow``, ``sqrt``) compose with
-the whole surface.
+**5.41** again: ProvSQL recognises ``exp(normal(μ, σ))`` as
+``lognormal(μ, σ)`` and evaluates the closed form, no sampling. The
+transform functions (``exp``, ``ln``, ``pow``, ``sqrt``) combine with all
+the other random-variable operations.
 
 Finally, two strains with different incubation profiles -- which tends
 to keep a contact infectious longer? A wild type at
@@ -664,9 +660,8 @@ Problem 8: How Many, and How Often
 Every continuous variable so far was a *measurement*. But an
 epidemiology desk also counts things -- cases per day, positives in a
 batch -- and counts are discrete. ProvSQL provides the standard discrete
-families as constructors (they enumerate their probability mass into a
-categorical under the hood, so moments, quantiles, and comparisons are
-all exact). Keep ``rv_mc_samples = 0``.
+families as constructors, and moments, quantiles, and comparisons on them
+are all exact. Keep ``rv_mc_samples = 0``.
 
 Daily case counts in a stable outbreak follow a `Poisson
 <https://en.wikipedia.org/wiki/Poisson_distribution>`_ law. At an
@@ -710,8 +705,8 @@ successes and 6 failures) summarises the attack rate:
 
 The point estimate is **0.3**, with a 90% credible interval from about
 **0.10** to **0.55** -- wide, honestly reflecting only eight
-observations. The mean is closed-form; the Beta quantiles are found by
-bisecting its (incomplete-beta) CDF, again exactly and without sampling.
+observations. The mean is closed-form, and the Beta quantiles are also
+computed without sampling.
 
 Problem 9: How Much Did the Data Teach Us?
 ------------------------------------------
@@ -741,8 +736,7 @@ concentrated densities are -- so the update removed about **0.6 nats**
 of uncertainty. And ``kl(posterior, prior)`` returns exactly the same
 **0.598**: against a uniform prior, the divergence *is* the entropy
 drop (:math:`\int p \ln(p/1) = -H(p)`), a textbook identity the
-calculator reproduces from the defining integral, evaluated by
-quadrature on the two Beta densities.
+calculator reproduces from the defining integral.
 
 KL is honest about impossibility, too: collapse the posterior to its
 point estimate and ask for the divergence from it --
@@ -772,8 +766,8 @@ means, and standard deviations straight from the fit):
            variance(titre) AS var_titre
     FROM c;
 
-The mixture decomposes into ProvSQL's existing Bernoulli-mixture
-gates, so the moments are **exact** (``rv_mc_samples = 0``): the mean
+The mixture is built from Bernoulli-mixture gates, so the moments are
+**exact** (``rv_mc_samples = 0``): the mean
 is :math:`0.7 \cdot 15 + 0.3 \cdot 40 = 22.5` and the variance
 :math:`0.7(16 + 225) + 0.3(36 + 1600) - 22.5^2 = 153.25`. The query also
 returns ``titre`` itself: **click its token** and open Circuit mode to
@@ -926,33 +920,32 @@ posterior precision is therefore :math:`\tau_0 + 3/4 = 1/25 + 3/4 =
 average :math:`(20/25 + 69/4)/0.79 = 22.8481`.
 :sqlfunc:`evidence` returns the marginal likelihood
 :math:`P(\text{data})`, here **0.001172** -- exactly the
-multivariate-Normal prior predictive, computed as the product of the
-sequential one-step predictives, and the quantity you would compare
+multivariate-Normal prior predictive, and the quantity you would compare
 across competing models. The same closed-form recognition covers the
 other textbook pairs (a Gamma prior observed through Poisson counts or
-Exponential gaps, a Beta prior through Binomial counts…); a model
-*outside* the recognised table -- say the latent reaching the reading
-through arithmetic -- answers through the general engine instead: each
+Exponential gaps, a Beta prior through Binomial counts…). A model
+*outside* these shapes -- say the latent reaching the reading through
+arithmetic -- is answered by importance sampling instead: each
 ``| (normal(mu, 2) = d)`` reweights the prior draws of ``mu`` by the
-observation's density (importance sampling, no rejection), recovering
-the same posterior to MC tolerance under the sample budget.
+observation's density, giving the same posterior to Monte Carlo tolerance
+under the sample budget.
 
 Recap
 -----
 
 One operator, ``|``, carried the first six problems with a single meaning
 throughout -- conditional probability, :math:`\Pr(A \mid B) = \Pr(A \wedge
-B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3
+B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1--3
 and 6), a continuous ``random_variable`` (Problem 4), and a probabilistic
 aggregate ``agg_token`` (Problem 5). Problems 7 and 8 widened the
 random-variable vocabulary (the log-normal and its transforms, the
-discrete counts, the Beta rate, quantiles throughout), and Problems 9-11
+discrete counts, the Beta rate, quantiles throughout), and Problems 9--11
 layered onto the same surface the information-theoretic readouts
 (:sqlfunc:`entropy`, :sqlfunc:`kl`) and the data-driven constructors
 (:sqlfunc:`gmm`, :sqlfunc:`empirical_samples` /
 :sqlfunc:`empirical_cdf`). Problems 12 and 13 closed the loop into full
 Bayesian inference: a distribution parameter is itself a
-``random_variable`` (a latent prior), and conditioning on the data with
+``random_variable`` (a latent prior). Conditioning on the data with
 ``|`` -- the per-row events folded by :sqlfunc:`and_agg`, their marginal
 likelihood read by :sqlfunc:`evidence` -- updates it into the posterior,
 read straight back with the same :sqlfunc:`expected` /

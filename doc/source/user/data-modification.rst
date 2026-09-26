@@ -44,8 +44,8 @@ row's provenance -- so the insertion as a whole can later be undone:
 DELETE
 -------
 
-Deleting a row does not remove it from the table, but the provenance is changed to mark the deletion, allowing hypothetical reasoning.
-The
+Deleting a row does not remove it from the table: its provenance is
+changed to mark the deletion, allowing hypothetical reasoning. The
 :sqlfunc:`undo` mechanism (see below) relies on this.
 
 .. code-block:: sql
@@ -87,14 +87,13 @@ table; pass its ``provsql`` token to :sqlfunc:`undo` to reverse its effect:
 Transactions
 -------------
 
-Each statement mints an ``update`` gate of its own, and every statement of
-one transaction also names the **transaction's** gate
+Each statement has an ``update`` gate of its own, and all statements of
+one transaction also share the **transaction's** gate
 (:sqlfunc:`transaction_token`): what a statement does to a row is recorded
-as ``times(transaction, statement)``.  So the
-``update_provenance`` table says which statements were one transaction --
-its ``tx_token`` column names the transaction's gate and its ``xid``
-column the PostgreSQL transaction id -- and :sqlfunc:`undo` works at
-either granularity:
+as ``times(transaction, statement)``.  In the ``update_provenance`` table,
+the ``tx_token`` column names the transaction's gate and the ``xid``
+column the PostgreSQL transaction id, and :sqlfunc:`undo` works at either
+granularity:
 
 .. code-block:: sql
 
@@ -109,19 +108,14 @@ either granularity:
     WHERE query_type = 'TRANSACTION'
     ORDER BY ts DESC LIMIT 1;
 
-A transaction's own row has no ``query`` text -- a transaction is not a
-statement -- so looking a statement up by its text finds the statement and
-not the transaction that carried it.  Its validity is the universal range,
-the identity of the temporal semiring: it multiplies into every effect of
-the transaction, so anything narrower would intersect itself into all of
-them.  When the transaction rolls back, nothing of it remains: the log
-rows and the token rewrites are ordinary heap writes.
+A transaction's own row has no ``query`` text, so looking a statement up
+by its text finds the statement, not the transaction that carried it.
+The transaction's validity is the universal range, the identity of the
+temporal semiring.  When the transaction rolls back, nothing of it
+remains, log rows included.
 
 ``ts`` and the start of ``valid_time`` are stamped **at commit**, not when
-the statement ran.  ``CURRENT_TIMESTAMP`` is the transaction's start time,
-so two overlapping transactions could otherwise commit in the opposite
-order of the validity they recorded; a deferred trigger on
-``update_provenance`` moves both to the commit instant.
+the statement ran, so that recorded validity follows commit order.
 
 The two notions of undo remain distinct and consistent: PostgreSQL's
 ``ROLLBACK`` removes a modification *and its record* -- the transaction
@@ -131,15 +125,13 @@ gate and keeps the history: the modification happened and was reversed.
 Limitations
 ------------
 
-Update tracking is still experimental, both in terms of operation support
-and of performance.
+Update tracking is still experimental, both in the operations it
+supports and in performance.
 
-The "deleted rows stay in the table" model is implemented as a physical
-delete followed by a re-insert carrying the ``monus`` token.  Under
-``READ COMMITTED``, a concurrent transaction blocked on the same row
-therefore sees, once the first commits, the original row version gone and
-the re-inserted copy invisible to its snapshot: its own ``DELETE``
-affects zero rows but still fires the statement trigger, logging an
-``update`` gate that touches nothing.  Under ``REPEATABLE READ`` it gets a
-serialization failure instead.  This is ordinary PostgreSQL behaviour for
-a row rewritten under a concurrent reader, but it is worth knowing.
+A deleted row is physically deleted and re-inserted with a ``monus``
+token.  Under ``READ COMMITTED``, a concurrent transaction blocked on the
+same row therefore finds, once the first commits, no version of the row
+visible to its snapshot: its own ``DELETE`` affects zero rows but is
+still logged, as an ``update`` gate that touches nothing.  Under
+``REPEATABLE READ`` it gets a serialization failure instead, as for any
+row rewritten under a concurrent reader.

@@ -58,10 +58,8 @@ Circuit Visualisation
 ----------------------
 
 :sqlfunc:`view_circuit` renders a provenance circuit as an ASCII box-art
-diagram. Internally it writes the circuit in GraphViz DOT format to a
-temporary file and runs ``graph-easy --as=boxart`` on it, returning the
-result as a text value. The ``graph-easy`` executable must be installed and
-accessible in the PostgreSQL server's PATH (or in a directory listed in the
+diagram, returned as a text value and drawn by ``graph-easy``. The
+``graph-easy`` executable must be installed and accessible in the PostgreSQL server's PATH (or in a directory listed in the
 ``provsql.tool_search_path`` GUC; see :doc:`configuration`).
 
 .. code-block:: postgresql
@@ -103,8 +101,7 @@ description of all thresholds.
 Subcircuit Introspection
 -------------------------
 
-For programmatic exploration of a circuit (rather than a flat formula or
-ASCII diagram), :sqlfunc:`circuit_subgraph` returns a BFS expansion of
+For programmatic exploration of a circuit, :sqlfunc:`circuit_subgraph` returns a BFS expansion of
 the DAG rooted at a token, capped at a configurable depth. Each row
 describes one ``(parent, node)`` edge: gate type, ``info1`` / ``info2``
 payload and BFS depth come along on the same row. The root is reported
@@ -155,18 +152,18 @@ types that appear:
 * ``agg`` – aggregation gate (for aggregate provenance).  ``info1`` is
   the OID of the aggregate function and ``info2`` the OID of its result
   type, with the high bit set when the aggregation has no ``GROUP BY``:
-  mask ``info2`` with ``0x7FFFFFFF`` to read the type.  An external
-  consumer needs it, because it is the only record of what a ``value``
-  gate below holds — ``20`` for a ``count``, ``25`` for text, ``701``
-  for ``double precision`` — and guessing from the text of the value
-  reads a text column of numerals as numbers, which orders them
-  numerically where SQL orders them lexicographically.
+  mask ``info2`` with ``0x7FFFFFFF`` to read the type.  It is the only
+  record of what a ``value`` gate below holds (``20`` for a ``count``,
+  ``25`` for text, ``701`` for ``double precision``); guessing the type
+  from the text of the value would read a text column of numerals as
+  numbers, and order them numerically where SQL orders them
+  lexicographically.
 * ``semimod`` – semimodule scalar multiplication (for aggregate provenance)
 * ``value`` – scalar value (for aggregate provenance, or numeric
   constant lifted into a continuous random variable)
 * ``mulinput`` – multivalued input (for Boolean provenance)
-* ``cmp`` – comparison gate (HAVING predicates, and the planner-hook
-  lift of WHERE comparators on ``random_variable`` columns; see
+* ``cmp`` – comparison gate (HAVING predicates, and WHERE comparisons
+  on ``random_variable`` columns; see
   :doc:`continuous-distributions`)
 * ``delta`` – δ-semiring operator :cite:`DBLP:conf/pods/AmsterdamerDT11`
 * ``update`` – update operation gate (data-modification tracking; see
@@ -183,7 +180,7 @@ types that appear:
   ``extra`` label names the assumption (``'boolean'`` or
   ``'absorptive'``) the wrapped sub-circuit was computed under
 * ``annotation`` – transparent single-child wrapper carrying a
-  query-level annotation string (e.g. the inversion-free tractability
+  query-level annotation string (e.g., the inversion-free tractability
   certificate)
 * ``conditioned`` – conditioning marker with children
   ``[target, evidence]``; see :doc:`conditioning`

@@ -4,28 +4,24 @@
 Case Study: City Air-Quality Sensor Network
 ===========================================
 
-This case study demonstrates ProvSQL's continuous-distribution
-surface (see :doc:`the chapter on continuous distributions
+This case study demonstrates ProvSQL's continuous distributions
+(see :doc:`the chapter on continuous distributions
 <continuous-distributions>`) end-to-end through
-ProvSQL Studio (see :doc:`the Studio chapter <studio>`). It is the
-first case study
-driven primarily by Studio rather than ``psql``: random variables
-benefit far more from interactive visualisation – PDFs, CDFs,
-mixture DAG layouts, conditional histograms, simplifier
-before-vs-after – than from text-mode output, and the workflow
-below makes the rewriter, the simplifier, the analytic and
-Monte-Carlo paths, and conditional inference all visible in the
-canvas.
+ProvSQL Studio (see :doc:`the Studio chapter <studio>`). It is
+driven primarily by Studio: random variables benefit far more from
+interactive visualisation -- PDFs, CDFs, mixture DAG layouts,
+conditional histograms, simplifier before-vs-after -- than from
+text-mode output.
 
 The Scenario
 ------------
 
 A municipal observatory operates a small air-quality sensor
 network. Sensors of three different vendors report a
-:math:`\mathit{PM}_{2.5}` concentration (*fine particulate matter*, i.e.
+:math:`\mathit{PM}_{2.5}` concentration (*fine particulate matter*, i.e.,
 airborne particles with aerodynamic diameter at most 2.5 μm,
-expressed in micrograms per cubic metre) on a fixed schedule. The sensors differ in calibration and noise
-characteristics:
+expressed in micrograms per cubic metre) on a fixed schedule. The
+sensors differ in calibration and noise characteristics:
 
 * high-end units report ``normal(μ, σ)`` with small σ;
 * low-cost units report ``uniform[μ−δ, μ+δ]`` over a small window;
@@ -41,17 +37,16 @@ Regulatory categories partition the value axis: *Good* below 12,
 *Moderate* between 12.1 and 35, *Unhealthy* above 35.1 (loosely
 following the US EPA AQI breakpoints for PM2.5 in their pre-2024
 form, simplified to three tiers). Each station has a Bernoulli
-probability of being in calibration on a given day. A separate batch table of *historical* readings carries
-the same shape so cross-batch queries via ``UNION ALL`` are
-meaningful.
+probability of being in calibration on a given day. A separate
+batch table of *historical* readings has the same shape, so
+cross-batch queries via ``UNION ALL`` are meaningful.
 
 Your tasks:
 
-* inspect the per-row distributions and the rewriter's effect on
-  threshold queries;
+* inspect the per-row distributions and what threshold queries
+  produce;
 * compute the probability that each station's reading exceeds an
-  *Unhealthy* threshold, exercising the planner-hook rewrite for
-  ``WHERE reading > 35``;
+  *Unhealthy* threshold (``WHERE reading > 35``);
 * model calibration uncertainty as a Bernoulli mixture and inspect
   the resulting ``gate_mixture`` shape;
 * aggregate per-district readings and watch the simplifier fold
@@ -63,8 +58,8 @@ Your tasks:
   combine today's and yesterday's batches with ``UNION ALL``, and
   compare probability methods (``'independent'`` vs
   ``'monte-carlo'`` vs ``'tree-decomposition'``) side by side;
-* find the *worst* reading per district with the order-statistic
-  surface (``greatest`` and the ``max`` aggregate);
+* find the *worst* reading per district with order statistics
+  (``greatest`` and the ``max`` aggregate);
 * read percentiles and conditional medians off :sqlfunc:`quantile`;
 * clamp the exceedance over a threshold with ``CASE`` and take its
   expectation;
@@ -118,19 +113,19 @@ readings via the constructors documented in :doc:`the chapter on
 continuous distributions <continuous-distributions>`. It is five
 tables:
 
-* ``stations(id, name, district)`` – four monitoring stations
+* ``stations(id, name, district)`` -- four monitoring stations
   across two districts, provenance-tracked.
-* ``readings(station_id, ts, pm25 random_variable)`` – one
+* ``readings(station_id, ts, pm25 random_variable)`` -- one
   ``pm25`` reading per station per timestamp; the
   ``random_variable`` carries the per-station noise model
   (normal, uniform, exponential, erlang, or a deterministic
   lifted from the reference station).
-* ``calibration_status(station_id, p)`` – Bernoulli probability
+* ``calibration_status(station_id, p)`` -- Bernoulli probability
   that each station is in calibration on the day of interest.
-* ``categories(name, lo, hi)`` – three regulatory categories
+* ``categories(name, lo, hi)`` -- three regulatory categories
   (*Good* / *Moderate* / *Unhealthy*) keyed by their interval
   bounds.
-* ``historical_readings(...)`` – same shape as ``readings``,
+* ``historical_readings(...)`` -- same shape as ``readings``,
   populated from yesterday's batch.
 
 .. nb:omit-begin
@@ -152,10 +147,9 @@ four provenance-tracked tables (``stations``,
 carry the purple :sc:`prov` pill, ``categories`` is plain, and
 ``station_mapping`` is tagged :sc:`mapping`. The ``pm25`` column
 on ``readings`` and ``historical_readings`` is flagged with a
-terracotta :sc:`rv` pill: a heads-up that comparison and
-arithmetic operators on this column are intercepted by the
-planner hook and lifted into provenance gates, so a query like
-``pm25 > 35`` produces a circuit rather than a Boolean.
+terracotta :sc:`rv` pill: comparison and arithmetic operators on
+this column build provenance circuits, so a condition like
+``pm25 > 35`` yields an uncertain event, not a Boolean.
 
 .. figure:: /_static/casestudy6/schema-panel.png
    :alt: Studio schema panel listing readings, historical_readings,
@@ -256,10 +250,9 @@ the result is now identical across runs. Toggle the seed back to
 Step 3: The Simplifier in Action
 ---------------------------------
 
-The planner hook emits the comparator as a raw ``gate_cmp``
-regardless of what its operands look like. A *simplifier* pass
+Each comparison is recorded as a ``gate_cmp``. A *simplifier*
 then folds comparators whose answer can be decided from the
-operand support alone, for example, ``U(10, 22) > 35`` is
+operands' support alone: for example, ``U(10, 22) > 35`` is
 universally false because the uniform's upper bound is below the
 threshold. The fold is controlled by ``provsql.simplify_on_load``
 (default on), which the Config panel exposes under *Provenance*.
@@ -273,9 +266,7 @@ GUC off in the Config panel and click the cell again: the canvas
 now shows the raw construction shape, a ``gate_times`` (``⊗``)
 over the row's input token ``ι`` and a ``gate_cmp`` (``>``)
 whose children are the ``U(10, 22)`` leaf and the constant
-``35``. Both views are semantically identical; the simplified
-view is what the semiring evaluators and the Monte-Carlo sampler
-actually consume.
+``35``. Both views are semantically identical.
 
 .. figure:: /_static/casestudy6/simplify-before-after.png
    :alt: Side-by-side: on the left, the raw circuit for row 2's
@@ -323,7 +314,7 @@ the out-of-spec ``N(23.33, 1.667)`` contributes only a small
 left shoulder rather than a visually distinct second mode; the
 panel headline reflects this with a mixture mean slightly below
 28. To see clear bimodality, re-run the query with a larger
-calibration error, e.g. replace ``r.pm25 / 1.2`` with
+calibration error, e.g., replace ``r.pm25 / 1.2`` with
 ``r.pm25 / 2.0`` so the out-of-spec arm folds to ``N(14, 1)``,
 well separated from the in-spec ``N(28, 2)``; the two peaks
 then show up distinctly on the histogram even at the 95%/5%
@@ -358,10 +349,9 @@ Compute average :math:`\mathit{PM}_{2.5}` per district:
     GROUP BY s.district
 
 Click into a row's ``avg_pm25`` cell. Circuit mode shows the
-:sqlfunc:`avg` lowering: a ``gate_arith(DIV, num, denom)``
+:sqlfunc:`avg` circuit: a ``gate_arith(DIV, num, denom)``
 over two ``gate_arith(PLUS, …)`` subtrees, each child a per-row
-``gate_mixture`` produced by ``rv_aggregate_semimod``.
-The right child of the outer division is the count of *included*
+``gate_mixture``. The right child of the outer division is the count of *included*
 rows under their per-row provenance: rows whose provenance is
 false contribute the additive identity to both numerator and
 denominator. Run *Distribution profile* on the root: the panel
@@ -414,10 +404,8 @@ The closed-form truncation table covers every family implementing
 truncated moments -- Normal (Mills ratio), Uniform (intersected
 support), Exponential (memorylessness on a lower bound or
 finite-interval truncation), Log-normal, Weibull, Pareto (tail
-self-similarity), and Beta. For other shapes,
-the joint circuit between ``pm25`` and the row's provenance is
-loaded with shared ``gate_rv`` leaves correctly coupled, and the
-conditional moment is estimated by rejection sampling at budget
+self-similarity), and Beta. For other shapes, the conditional
+moment is estimated by rejection sampling at budget
 ``provsql.rv_mc_samples``.
 
 .. figure:: /_static/casestudy6/condition-on-active.png
@@ -448,7 +436,7 @@ For shapes that fall outside the closed-form table the sampler
 falls back to rejection sampling at the
 ``provsql.rv_mc_samples`` budget; if the conditioning event is
 so unlikely that fewer than ``n`` samples land inside that
-budget, the panel surfaces a hint pointing at the GUC, e.g.
+budget, the panel shows a hint pointing at the GUC, e.g.,
 *MC accepted 47/200. Raise* ``provsql.rv_mc_samples`` *in the
 Config panel to widen the rejection-sampling budget.*
 Re-running with a larger budget (set ``rv_mc_samples = 50000``
@@ -491,10 +479,9 @@ Filter the per-district aggregates from Step 5 by their expected
 average. Because :sqlfunc:`avg` over a ``random_variable`` column
 returns a ``random_variable`` (not an ``agg_token``), and
 :sqlfunc:`expected` collapses it to a plain ``double``, the
-HAVING qual is deterministic from the planner-hook's perspective;
-the rewrite leaves it for PostgreSQL to evaluate natively while
-still adding a ``delta(gate_agg)`` wrapper to each surviving
-group's provenance:
+``HAVING`` condition is an ordinary comparison that PostgreSQL
+evaluates directly; each surviving group's provenance still gets a
+``delta(gate_agg)`` wrapper:
 
 .. code-block:: postgresql
 
@@ -503,13 +490,11 @@ group's provenance:
     GROUP BY s.district
     HAVING expected(avg(r.pm25)) > 20
 
-The inner :sqlfunc:`avg` is recognised as a ``random_variable``
-aggregate (gate_arith DIV over per-row gate_mixture children, as
-in Step 5); :sqlfunc:`expected` collapses the distribution to its
-mean (Monte Carlo here, since the DIV gate has no closed-form
-evaluator); the ``> 20`` is a plain comparison on a ``double``,
-so the row survives iff its expected average exceeds the
-threshold. For the case-study fixture both districts pass
+:sqlfunc:`expected` collapses the inner :sqlfunc:`avg` (the
+division circuit of Step 5) to its mean, by Monte Carlo here since
+the division has no closed-form evaluator; ``> 20`` then compares
+two ``double`` values, so a group survives exactly when its expected
+average exceeds the threshold. For the case-study fixture both districts pass
 (centre at ≈ 25.5, east at ≈ 21.6); clicking either result row's
 ``provsql`` cell shows the ``delta(gate_agg)`` shape, identical
 to the no-HAVING aggregate from Step 5 but filtered to the
@@ -558,7 +543,7 @@ over a ``random_variable`` column builds exactly that:
 The *centre* district's worst reading averages ≈ 40.0 -- its
 ``N(40, 4)`` reading dominates the maximum -- and *east* comes out
 at ≈ 39.2, driven by the heavy right tails of ``Exp(0.04)`` and
-``erlang(3, 0.1)`` even though both means sit near 25–30. Note how
+``erlang(3, 0.1)`` even though both means sit near 25--30. Note how
 the extremum tells a different story from Step 5's averages
 (≈ 25.5 and ≈ 21.6): the east district looks fine on average and
 just as alarming at the extreme. ``worst_mean`` itself is a plain
@@ -571,11 +556,11 @@ order-statistic identity, so it never perturbs the maximum.
 Because the children here are mixtures (not bare leaves), the
 expectation is estimated by Monte Carlo.
 
-The same-row form is ``greatest`` / ``least`` -- the SQL keywords,
-lifted over ``random_variable`` arguments by the planner hook; in a
-query that involves no provenance-tracked relation, reach them
-through the schema-qualified ``provsql.greatest(…)`` /
-``provsql.least(…)`` constructors instead, as Step 15 does:
+The same-row form is ``greatest`` / ``least``: the SQL keywords
+accept ``random_variable`` arguments in a query over a
+provenance-tracked relation; in a query that involves none, use the
+schema-qualified ``provsql.greatest(…)`` / ``provsql.least(…)``
+constructors instead, as Step 15 does:
 
 .. code-block:: postgresql
 
@@ -635,9 +620,8 @@ Step 13: Expected Excess via CASE
 
 *How far* above the threshold does a station land, on average?
 The excess ``max(pm25 − 35, 0)`` is a piecewise transform, written
-as a searched ``CASE`` (which the planner lowers into a
-``gate_case`` guarded selection, see :doc:`the continuous
-distributions chapter <continuous-distributions>`):
+as a searched ``CASE`` (see :doc:`the continuous distributions
+chapter <continuous-distributions>`):
 
 .. code-block:: postgresql
 
@@ -689,11 +673,10 @@ pair shares the ``dust`` leaf: in theory
 ``Cov = Var(dust) = 9`` and
 ``ρ = 9 / √((4+9)·(12+9)) ≈ 0.545``; the readouts land close
 (≈ 9.06 and ≈ 0.544 at seed 42). A shared-leaf cross-moment has
-no closed form, so both statistics come from a single coupled
-Monte-Carlo pass: each iteration draws the plume once, evaluates
-both shifted readings against it, and the sample covariance /
-correlation over those pairs is reported -- which is what keeps
-the estimates tight around the theory values.
+no closed form, so both statistics are estimated by Monte Carlo
+from coupled draws, the plume being drawn once per iteration and
+shared by both readings, which keeps the estimates tight around the
+theoretical values.
 
 Step 15: Drift, Lifetime, and Spikes: More Families
 ----------------------------------------------------
@@ -818,11 +801,9 @@ the group:
     FROM readings r JOIN stations s ON s.id = r.station_id
     GROUP BY s.district
 
-The ``percentile_cont`` gate carries every row's presence
-indicator alongside its value (pin the result node and look for
-the ``p50`` circle in the canvas): per draw, the sampler keeps
-the values whose station is in calibration, sorts them, and
-interpolates. Under dropout the centre district's expected median
+In each Monte-Carlo draw, only the values whose station is in
+calibration are kept, sorted, and interpolated (pin the result node
+and look for the ``p50`` circle in the canvas). Under dropout the centre district's expected median
 lands around 26 -- pulled between the two Normal City-Centre
 readings and the two lower Riverside uniforms that are only
 present 70% of the time.
@@ -835,12 +816,11 @@ single *headline* number per district: if even the weakest
 station's calibration confidence clears 0.8, report the district's
 total confidence weight; otherwise flag the weakest station (the
 crew's target). That is a ``CASE`` whose guards **and** branches
-are aggregates -- the aggregate-carrier ``CASE`` (see :doc:`the
-aggregation chapter <aggregation>`), lowered to an ``agg_case``
-guarded selection. (The exact machinery covers ``sum`` / ``count``
+are aggregates (see :doc:`the aggregation chapter
+<aggregation>`). Its expectation is exact for ``sum`` / ``count``
 / ``min`` / ``max`` guards and branches; an ``avg`` branch inside a
-``CASE`` takes the Monte-Carlo path, its exact arm being
-unconditional-only.) First make the maintenance log itself
+``CASE`` is exact only for an unconditional expectation and is evaluated
+by Monte Carlo otherwise. First make the maintenance log itself
 uncertain (each record is confirmed with a probability) and the
 station registry certain:
 
@@ -873,9 +853,8 @@ The result cells display as ``0.7 (*)`` and ``0.6 (*)`` -- the
 confirmed, both districts have a weak link below the bar, so each
 headlines its worst station), with the ``(*)`` marking a
 probabilistic aggregate whose value is world-dependent.
-The headline's distribution is evaluated *exactly* -- possible-worlds
-decomposition over the first-match regions, no Monte Carlo, correct
-even under ``SET provsql.rv_mc_samples = 0``:
+The headline's distribution is evaluated *exactly*, with no Monte
+Carlo, even under ``SET provsql.rv_mc_samples = 0``:
 
 .. code-block:: postgresql
 
@@ -912,8 +891,7 @@ information-theoretic counterpart -- symmetric, in nats, and zero
     WHERE a.id = 1 AND b.id = 2
 
 ``mi_indep`` is **exactly 0** with no sampling at all: the two
-raw readings have disjoint stochastic-leaf footprints, the same
-structural-independence test the moment evaluators use. The
+raw readings share no random leaf. The
 plume-shifted pair shares the ``dust`` leaf, and the readout
 estimates their mutual information by a 2-D histogram over
 *coupled* joint draws (each iteration draws the shared plume once
@@ -950,9 +928,7 @@ Three things follow, each matching plain SQL:
   it and provenance simply carries the row's token through.
 - **Aggregates skip the offline row.** ``expected(avg(pm25))`` over
   Riverside Park is the same with or without row 9: the NULL reading
-  contributes to neither the sum nor the count. (Internally ``avg``
-  uses a per-row presence indicator that is NULL exactly when the value
-  is, so the offline row drops out of the denominator too.)
+  contributes to neither the sum nor the count.
 
 Delete the placeholder row to return to the running dataset:
 
@@ -965,5 +941,5 @@ that means for the circuits -- are in :doc:`the NULL semantics chapter
 <nulls>`.
 
 See :doc:`the chapter on continuous distributions
-<continuous-distributions>` for the full surface and
+<continuous-distributions>` for the full reference and
 :doc:`the Studio chapter <studio>` for the Studio reference.

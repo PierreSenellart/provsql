@@ -63,6 +63,9 @@ INTERNAL_FUNCTIONS = {
     # jsonb backing function for the tseytin_cnf_mapping SRF; users call
     # tseytin_cnf_mapping (which is in _SQL_FUNC_MAP), not this directly.
     'tseytin_cnf_mapping_json',
+    # C entry point behind the polymorphic quantile dispatcher; users call
+    # quantile.
+    'rv_quantile',
     # gathering / validation helpers behind the rewriter's reachability
     # route (eval_reachability); users never call these directly.
     'gather_reachability_edges', 'gather_reachability_sources',

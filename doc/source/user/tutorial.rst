@@ -174,14 +174,14 @@ name of the witness who made the sighting, using
     DROP TABLE IF EXISTS witness_mapping;
     SELECT create_provenance_mapping('witness_mapping', 's', 'witness');
 
-The mapping is stored as an ordinary table – inspect it with
+The mapping is stored as an ordinary table -- inspect it with
 ``SELECT * FROM witness_mapping;``.
 
 Step 4: Find Contradictions
 ----------------------------
 
 Some witnesses are unreliable: the same person may be reported in two
-different rooms at the same time – an impossibility. Write a query that
+different rooms at the same time -- an impossibility. Write a query that
 identifies all such contradictions.
 
 .. raw:: html
@@ -262,9 +262,8 @@ formula for each tuple.
 
 Look closely at the output: the contradicted sightings are *still
 there*, annotated with monus formulas of the form ``x ⊖ (…)``. This is
-deliberate -- across possible worlds such a row is a real answer
-whenever its contradicting sightings are absent, so ProvSQL keeps it
-rather than spend a provenance evaluation filtering it. When you want
+deliberate: such a row is a real answer in every possible world where
+its contradicting sightings are absent, so ProvSQL keeps it. When you want
 exactly the rows of the vanilla ``EXCEPT`` answer, say so explicitly
 with :sqlfunc:`present`:
 
@@ -367,7 +366,7 @@ the probability of each provenance token using :sqlfunc:`set_prob`.
 Step 10: Find the Murderer
 ---------------------------
 
-The police needs a confidence of at least 0.99 before making an arrest.
+The police need a confidence of at least 0.99 before making an arrest.
 Use :sqlfunc:`probability_evaluate` to compute the probability that each
 suspect was truly present, and identify those above the threshold.
 
@@ -377,7 +376,7 @@ the computation method:
 * ``'possible-worlds'`` – exact, by exhaustive enumeration
 * ``'monte-carlo'`` – approximate sampling (add a sample count as third argument)
 * ``'tree-decomposition'`` – exact, via tree decomposition of the Boolean circuit
-* ``'compilation'`` – d-DNNF compilation (add the tool name, e.g. ``'d4'``, as third argument)
+* ``'compilation'`` – d-DNNF compilation (add the tool name, e.g., ``'d4'``, as third argument)
 
 .. raw:: html
 

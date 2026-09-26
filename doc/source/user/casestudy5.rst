@@ -19,9 +19,9 @@ at four field stations in the Scottish Highlands. Each photo has been
 processed by a species-detection model that draws one or more *bounding
 boxes* around things it thinks are animals, and for each box reports a
 list of candidate species with a confidence score. A box can therefore
-appear with several species candidates (e.g. a partly-occluded shape
+appear with several species candidates (e.g., a partly-occluded shape
 might score 0.40 as red deer and 0.30 as roe deer); a photo can contain
-several boxes of the same species (e.g. three deer in a meadow shot).
+several boxes of the same species (e.g., three deer in a meadow shot).
 
 Your tasks:
 
@@ -66,10 +66,10 @@ and load it into a fresh PostgreSQL database:
 
 This creates three tables:
 
-* ``photo`` – 30 wildlife photographs, each tagged with a station name
+* ``photo`` -- 30 wildlife photographs, each tagged with a station name
   (Loch Torridon, Glen Affric, Rannoch Moor, or Cairngorms) and a date
-* ``species`` – 13 species across mammals, birds, and reptiles
-* ``detection`` – about 60 model-produced (bounding-box, species) candidate
+* ``species`` -- 13 species across mammals, birds, and reptiles
+* ``detection`` -- about 60 model-produced (bounding-box, species) candidate
   rows, each linking a photo and a bounding-box index to a candidate
   species with a confidence score; multiple rows for the same
   (``photo_id``, ``bbox_id``) pair represent the classifier's
@@ -89,7 +89,7 @@ At the start of every session, set the search path:
 
 .. nb:omit-end
 
-Inspect the tables. Note that ``detection`` is *not* keyed on
+Inspect the tables. ``detection`` is *not* keyed on
 (``photo_id``, ``bbox_id``): a single bounding box can appear in
 several rows, one per candidate species the classifier considered.
 
@@ -115,11 +115,10 @@ circuit token that propagates through any downstream query.
 
 To get readable formulas, we want to associate each detection's
 provenance token with its species name. A *provenance mapping* in
-ProvSQL is nothing more than a regular table with two columns named
-``value`` and ``provenance`` (plus, for performance, an index on
-``provenance``). The convenience function :sqlfunc:`create_provenance_mapping`
-builds such a table from one column of a provenance-enabled relation,
-but nothing prevents us from constructing the table by hand:
+ProvSQL is a regular table with two columns named ``value`` and
+``provenance`` (plus, for performance, an index on ``provenance``).
+:sqlfunc:`create_provenance_mapping` builds such a table from one column
+of a provenance-enabled relation; here we construct it by hand:
 
 .. code-block:: postgresql
 
@@ -132,22 +131,20 @@ but nothing prevents us from constructing the table by hand:
     CREATE INDEX ON species_mapping(provenance);
 
 The ``CREATE TABLE AS`` query inherits a ``provsql`` column from
-``detection`` via ProvSQL's planner hook;
-:sqlfunc:`remove_provenance` strips that extra column so only the
-``(value, provenance)`` pair remains. Because the schema is fully
-under our control, we can populate the table from any expression –
-combine columns, filter rows, derive computed values – and any
-semiring-evaluation function (``sr_formula``, ``sr_why``…) will
-happily consume the result.
+``detection``; :sqlfunc:`remove_provenance` strips it so only the
+``(value, provenance)`` pair remains. A mapping can be populated from
+any expression -- combine columns, filter rows, derive computed values --
+and any semiring-evaluation function (``sr_formula``, ``sr_why``…)
+accepts the result.
 
 
 Step 3: Inline Lookup with ``VALUES``
 ---------------------------------------
 
 A ``VALUES`` clause defines an inline relation directly inside a query.
-ProvSQL's planner hook treats it like any other source: rows it produces
-have no provenance of their own, but they carry through joins so that the
-result inherits provenance from the joined provenance-enabled rows.
+ProvSQL treats it like any other source: its rows have no provenance of
+their own, and a join with them inherits provenance from the
+provenance-enabled rows.
 
 Here we use ``VALUES`` to define a small ad-hoc watchlist: a couple of
 species we want to look up by hand together with a human-readable
@@ -168,8 +165,8 @@ generalist predator), and we want to tag the rows accordingly:
 
 Each output row carries the provenance of the underlying ``detection``
 row alone: the formula is a single species token, even though the row
-also references ``photo`` and ``VALUES``. Tables without provenance –
-including the ``VALUES`` rows – contribute no tokens.
+also references ``photo`` and ``VALUES``. Tables without provenance --
+including the ``VALUES`` rows -- contribute no tokens.
 
 
 Step 4: Conjunctive Query (Naive)
@@ -192,21 +189,20 @@ Find photos that contain both Red Deer (``species_id`` 1) and Red Fox
 Look at photo 5: the classifier produced three Red Deer candidate rows
 (in three different bounding boxes) and two Red Fox candidate rows (in
 two more boxes). Its formula is the ⊕-sum of all six (deer, fox) pair
-products – every candidate row is an independent input gate. This
+products -- every candidate row is an independent input. This
 matches the structure of the underlying ``detection`` table but
 mis-models the data: each bounding box can correspond to *at most one
 real animal*, so candidate rows that share a ``(photo_id, bbox_id)``
 pair should be mutually exclusive rather than independent. Nothing in
-the schema enforces that today, and the formula reflects the
-mismatch.
+the schema enforces that, and the formula reflects the mismatch.
 
 
 Step 5: Mutually Exclusive Candidates with ``repair_key``
 ------------------------------------------------------------
 
 :sqlfunc:`repair_key` rewrites the provenance so that rows sharing a key
-become alternatives under a single ``mulinput`` (multivalued input) gate
-– i.e. *exactly one* of them is true. Applied with the key
+become alternatives under a single ``mulinput`` (multivalued input) gate,
+i.e., *exactly one* of them is true. Applied with the key
 ``(photo_id, bbox_id)``, every bounding box becomes one mulinput
 variable whose values are the candidate species the classifier
 considered for that box.
@@ -237,7 +233,7 @@ the old mapping (whose tokens are about to become stale):
 Re-running the conjunctive query from Step 4 with :sqlfunc:`sr_formula`
 would not be illuminating: mutually exclusive events have no meaningful
 representation in the symbolic-formula semiring (each ``mulinput`` just
-collapses to ``𝟙``). To visualize them we use :sqlfunc:`sr_boolexpr`
+collapses to ``𝟙``). To visualise them we use :sqlfunc:`sr_boolexpr`
 instead, which renders the underlying Boolean formula with internal
 variable names and exposes each ``mulinput`` explicitly:
 
@@ -299,8 +295,8 @@ values, value 1 (Red Deer) with probability 0.40 and value 2
 (Roe Deer) with probability 0.30. Probability evaluation gives
 ``0.7000``, the sum of the two confidences, since combining mutually
 exclusive events with ⊕ is just addition. Had we kept the original
-:sqlfunc:`add_provenance` setup with each row as an independent input
-gate, the same query would have given
+:sqlfunc:`add_provenance` setup with each row as an independent input,
+the same query would have given
 ``1 - (1 - 0.40) × (1 - 0.30) = 0.58`` instead. The 0.12 gap is the
 practical effect of telling the engine "these candidates cannot both
 be true at once".
@@ -349,8 +345,7 @@ Step 8: Absence Constraint with ``EXCEPT``
 --------------------------------------------
 
 Find photos that contain a Red Deer but no Domestic Dog (``species_id``
-13). ``EXCEPT`` is implemented in ProvSQL via the ⊖ (monus) operator on
-the provenance circuit:
+13). ProvSQL represents ``EXCEPT`` with the ⊖ (monus) operator:
 
 .. code-block:: postgresql
 
@@ -365,7 +360,7 @@ the provenance circuit:
     GROUP BY p.id, p.station, p.date
     ORDER BY prob DESC, p.id;
 
-Photos that contain a dog still appear in the output – ``EXCEPT`` is
+Photos that contain a dog still appear in the output -- ``EXCEPT`` is
 *not* a hard filter. Photo 9, with a high-confidence dog detection,
 ranks lower because the monus discounts strongly. Photo 14, where the
 dog detection has very low confidence, ranks higher: it is *probably*
@@ -400,10 +395,8 @@ Domestic Dog, ranked by probability. The query has three logical layers
     JOIN photo p ON p.id = t.photo_id
     ORDER BY prob DESC, p.id;
 
-ProvSQL's planner hook fires on the expanded query: CTEs are inlined and
-provenance propagates through them transparently. The same answer can be
-written with nested subqueries; the CTE form is purely a readability
-choice.
+Provenance propagates through CTEs transparently; the same answer can be
+written with nested subqueries.
 
 
 Step 10: Expected Species Counts with :sqlfunc:`expected`
@@ -448,7 +441,7 @@ Step 11: Materialising a Subset with ``INSERT … SELECT``
 Copying provenance-tracked rows into another **provenance-tracked** table
 preserves their lineage: the inserted rows keep their source tokens rather
 than getting fresh ones. Collect the high-confidence detections into a
-``confident_detections`` table – enable provenance on the target *first*,
+``confident_detections`` table -- enable provenance on the target *first*,
 then populate it with ``INSERT … SELECT``:
 
 .. code-block:: postgresql
@@ -467,7 +460,7 @@ then populate it with ``INSERT … SELECT``:
 
 Each inserted row inherits the provenance token of the ``detection`` row it
 came from, so a probability computed over ``confident_detections`` matches the
-one over the original row – the lineage followed the data:
+one over the original row -- the lineage followed the data:
 
 .. code-block:: postgresql
 
@@ -484,7 +477,7 @@ one over the original row – the lineage followed the data:
    ``CREATE TABLE … AS SELECT``, which carries provenance through directly).
 
 
-Step 12: Unidentified Detections – Three Kinds of "Not"
+Step 12: Unidentified Detections -- Three Kinds of "Not"
 --------------------------------------------------------
 
 Two detections in the archive have **no species assignment**: the
@@ -492,7 +485,7 @@ classifier saw an animal but could not identify it, and ``species_id``
 is NULL (photo 5 at Loch Torridon, confidence 0.60, and photo 9 at Glen
 Affric, confidence 0.50). NULLs make the three natural ways of asking
 "species detected at Loch Torridon but *not* at Glen Affric" genuinely
-different questions – in SQL itself, and therefore in the provenance
+different questions -- in SQL itself, and therefore in the provenance
 and probabilities ProvSQL computes. Station names live in the
 *untracked* ``photo`` table; joining it in restricts to a station
 without touching the provenance (an untracked join partner contributes
@@ -522,7 +515,7 @@ The NULL row comes out at probability :math:`0.60 \times (1 - 0.50) =
 Affric unidentified detection is a false positive.
 
 Second, ``NOT IN``. Under SQL's three-valued logic, ``x NOT IN Q`` is
-*unknown* – and therefore not an answer – as soon as ``Q`` contains a
+*unknown* -- and therefore not an answer -- as soon as ``Q`` contains a
 NULL, whatever ``x`` is. A single unidentified sighting at Glen Affric
 poisons the certification of **every** species:
 
@@ -544,8 +537,8 @@ poisons the certification of **every** species:
 Every probability is exactly half its ``NOT EXISTS`` counterpart below:
 each answer now carries the extra factor "the Glen Affric unidentified
 detection is a false positive" (probability 0.50). The NULL row itself
-drops to essentially 0 – a NULL can only pass ``NOT IN`` against an
-empty set, i.e. in the worlds where *no* Glen Affric detection at all
+drops to essentially 0 -- a NULL can only pass ``NOT IN`` against an
+empty set, i.e., in the worlds where *no* Glen Affric detection at all
 is a true positive.
 
 Third, ``NOT EXISTS`` with an explicit equality. ``d2.species_id =
@@ -570,9 +563,9 @@ detection probability (0.60):
     ) t
     ORDER BY species_id NULLS LAST;
 
-Three idioms, three different answers – matching what vanilla SQL
+Three idioms, three different answers -- matching what vanilla SQL
 returns on each query, with possible-worlds-correct probabilities on
-top. The general rules behind this behavior (which comparisons treat
+top. The general rules behind this behaviour (which comparisons treat
 NULLs as unknown, where SQL switches to syntactic matching, and what
 that means for provenance circuits) are spelled out in
 :doc:`the NULL semantics chapter <nulls>`.

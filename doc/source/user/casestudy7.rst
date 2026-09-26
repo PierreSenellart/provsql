@@ -8,10 +8,10 @@ A program chair has a database of uncertain facts about a conference --
 who bid on what, who is expert in what, which papers are assigned -- and
 keeps asking *probability* questions of it: how likely is it that every
 paper is competently covered? that this reviewer is conflicted? Each
-question is a SQL query whose answer carries a probability, and the
-interesting thing is that the same kind of question can be easy or
-:math:`\#P`-hard **depending on its exact shape, the schema's keys, and the
-data** -- and ProvSQL routes each to a different mechanism.
+question is a SQL query whose answer carries a probability. The same kind
+of question can be easy or :math:`\#P`-hard **depending on its exact shape,
+the schema's keys, and the data**, and ProvSQL routes each to a different
+mechanism.
 
 This case study walks that landscape over one reviewing dataset, driven
 through :doc:`ProvSQL Studio <studio>`, organised by *where the
@@ -246,22 +246,21 @@ point.
 Try :guilabel:`Marginal probability` with the toggle on :guilabel:`Boolean`:
 it returns the exact ``0.056923`` with no method named (the chooser routes
 it through the Möbius compiler automatically; once the μ root is rendered you
-can also pick the ``mobius`` method explicitly). Try any circuit
-compiler instead and it blows up: :math:`q_9` provably has no polynomial
+can also pick the ``mobius`` method explicitly). Any circuit compiler
+blows up instead: :math:`q_9` provably has no polynomial
 OBDD / FBDD / decision-DNNF :cite:`DBLP:journals/mst/AmarilliCMS20`.
 
 Why it is nonetheless safe: writing the probability by inclusion-exclusion,
 the one :math:`\#P`-hard term -- the conjunction of all four patterns --
 gets a **zero Möbius coefficient** and cancels, leaving only easy terms.
 ProvSQL's Möbius compiler computes exactly that signed combination. Click the
-existence row's ``provsql`` cell: the circuit is large -- the **μ**
-(Möbius-function) root carries the whole literal lineage as a transparent
-child, so Studio shows a *Circuit too large* card -- choose
-:guilabel:`Render at depth 1` and the root is that single **μ** gate, each
-child edge labelled with its integer coefficient, the hard term among them
-cancelled to zero. (The pool is **dense** on purpose: on sparse data
-Part C's compiler would also handle it and hide the point. Like every Part A
-route, the gate keeps the literal lineage, so ``shapley`` and ``sr_formula``
+existence row's ``provsql`` cell: the circuit also carries the whole literal
+lineage, so Studio shows a *Circuit too large* card. Choose
+:guilabel:`Render at depth 1`: the root is a single **μ** (Möbius-function)
+gate, each child edge labelled with its integer coefficient, the hard term
+among them cancelled to zero. (The pool is **dense** on purpose: on sparse
+data Part C's compiler would also handle it and hide the point. As with every
+Part A route, the literal lineage is kept, so ``shapley`` and ``sr_formula``
 still work on it.)
 
 .. _cs7-route-map:
@@ -397,12 +396,11 @@ two bidding experts?*
     ORDER BY p.id
 
 Compute the probability for ``p1``: it comes back at once, and ProvSQL emits
-a NOTICE that the ``count(*) >= 2`` comparison gate was *shortcut*. The
-``HAVING`` threshold over independent contributors is a `Poisson-binomial
+a NOTICE that the ``count(*) >= 2`` comparison was *shortcut*. The
+``HAVING`` threshold over independent contributors follows a `Poisson-binomial
 <https://en.wikipedia.org/wiki/Poisson_binomial_distribution>`__
-distribution, which :sqlfunc:`probability_evaluate` folds in closed form --
-replacing the whole provenance with one Bernoulli gate before any compiler
-runs, so even ``independent`` answers it.
+distribution, which :sqlfunc:`probability_evaluate` computes in closed form
+before any compiler runs, so even ``independent`` answers it.
 
 Part C: The Data Is Well-Structured
 -----------------------------------
@@ -473,17 +471,16 @@ paper). *Which papers get an assigned reviewer?*
    solid-underlined primary keys.
 
 Try ``independent`` -- it **agrees** with the exact methods (``p1`` ``0.875``,
-``p2`` ``0.75``). The circuit encodes the mutual exclusion as ``mulinput``
-gates sharing a block key, and ``independent``'s evaluator gives mutually
-exclusive siblings special treatment (it *sums* their probabilities within a
-block instead of multiplying). So this kind of block correlation, unlike the
-cycle of Part B, stays tractable with no compiler at all -- because the
-*query* here is safe; only the *inputs* are correlated.
+``p2`` ``0.75``): within a block, ``independent`` *sums* the probabilities
+of mutually exclusive alternatives instead of multiplying them. This kind of
+block correlation, unlike the cycle of Part B, stays tractable with no
+compiler at all, because the *query* here is safe; only the *inputs* are
+correlated.
 
 Hard *and* correlated
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-The joint-width route earns its keep where the two regimes meet. *Is any
+The joint-width route matters most where the two regimes meet. *Is any
 paper covered by its assigned expert reviewer?* -- Part B's hard cyclic shape,
 now over the correlated ``assignment`` table.
 
@@ -499,11 +496,9 @@ exclusive, so the lineage is neither independent nor read-once), and Part A's
 routes do not apply to the cyclic shape. Switch the toggle back to
 :guilabel:`Boolean` and the joint-width route compiles it anyway: the joint
 treewidth -- data graph *plus* the ``repair_key`` exclusion blocks -- is
-bounded, so ProvSQL builds a certified d-D (each block stick-broken into
-shared independent events) that ``independent`` evaluates to the exact
-``0.735868``. This is the
-one cell of the :ref:`tractability table <tractable-cases>` nothing else
-fills: :math:`\#P`-hard *and* correlated, exact and linear in the data.
+bounded, so ProvSQL builds a certified d-D that ``independent`` evaluates
+to the exact ``0.735868``. This is the one cell of the :ref:`tractability
+table <tractable-cases>` nothing else fills: :math:`\#P`-hard *and* correlated, exact and linear in the data.
 
 Recursion: reachability and reliability
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -556,8 +551,7 @@ walk:
 With the toggle on :guilabel:`Semiring` (the default) the fixpoint never
 stabilises -- *"no fixpoint after 1000 rounds (cyclic data?)"* -- because a
 cycle keeps producing new derivations. Switch the toggle to
-:guilabel:`Absorptive` and it
-converges: :math:`1 \oplus a = 1`, so a longer cycle-revisiting path is
+:guilabel:`Absorptive` and it converges: :math:`1 \oplus a = 1`, so a longer cycle-revisiting path is
 absorbed by the shorter one inside it, and the fixpoint is the set of
 minimal paths.
 
@@ -573,9 +567,9 @@ vertex, linear in the edges when the graph has bounded treewidth (see
 :ref:`network-reliability-btw`). That is the case study in miniature: Part B's
 hardness lived in the *query* and needed a compiler; here -- as throughout
 Part C -- it is dissolved by the structure of the *data*, with no external
-tool. (The ``'absorptive'`` marker on these tokens makes
-multiplicity-counting or why-provenance -- genuinely infinite on cycles --
-refuse rather than return an unjustified value.)
+tool. (On these tokens, multiplicity counting and why-provenance, which are
+genuinely infinite on cycles, are refused instead of returning an unjustified
+value.)
 
 .. seealso::
 

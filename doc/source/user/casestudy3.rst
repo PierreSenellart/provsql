@@ -10,7 +10,7 @@ Boolean provenance at scale for wheelchair accessibility reasoning.
 
    Unlike the other case studies, this one is **not available in the ProvSQL
    Playground**: it loads the large Île-de-France GTFS dataset, which is
-   fetched separately rather than bundled (see the :ref:`Playground note
+   not bundled and must be fetched separately (see the :ref:`Playground note
    <playground-note>`). Run it against a local ProvSQL installation.
 
 The Scenario
@@ -56,12 +56,12 @@ and run it from the directory containing the four GTFS files:
 
 This creates four tables:
 
-* ``routes`` – transit lines (RER A, B, M1, bus 91…)
-* ``stops`` – individual stop points with GPS coordinates and a
+* ``routes`` -- transit lines (RER A, B, M1, bus 91…)
+* ``stops`` -- individual stop points with GPS coordinates and a
   ``wheelchair_boarding`` flag
-* ``trips`` – individual scheduled journeys, each with a
+* ``trips`` -- individual scheduled journeys, each with a
   ``wheelchair_accessible`` flag
-* ``stop_times`` – arrival and departure times at each stop for each trip
+* ``stop_times`` -- arrival and departure times at each stop for each trip
 
 The script also adds provenance tracking and creates a combined
 ``wheelchair`` mapping table from both the trip and stop wheelchair columns.
@@ -119,7 +119,7 @@ Step 3: Reachable Stops from Bagneux
 -------------------------------------
 
 Find all stops reachable from Bagneux on the same trip and later in the
-sequence – in other words, stops you can reach by boarding a vehicle at
+sequence -- in other words, stops you can reach by boarding a vehicle at
 Bagneux without changing:
 
 .. code-block:: postgresql
@@ -140,12 +140,12 @@ This returns several dozen distinct (stop, route) pairs covering the reachable
 network (the exact number depends on the GTFS dataset version).
 
 
-Step 4: Boolean Provenance – Full Wheelchair Accessibility
-----------------------------------------------------------
+Step 4: Boolean Provenance -- Full Wheelchair Accessibility
+-----------------------------------------------------------
 
 Add Boolean provenance evaluation to mark which results are fully
 wheelchair-accessible along *every* leg.  Because the query returns one
-row per trip (each with its own provenance circuit), materialize the
+row per trip (each with its own provenance circuit), materialise the
 result first and then aggregate per destination:
 
 .. code-block:: postgresql
@@ -171,11 +171,7 @@ result first and then aggregate per destination:
     GROUP BY stop_name, route_long_name
     ORDER BY route_long_name, stop_name;
 
-The materialized table still carries the ``provsql`` provenance column,
-so :sqlfunc:`remove_provenance` drops tracking first and the
-``bool_or`` aggregation runs outside ProvSQL.
-
-The materialized table still carries the ``provsql`` provenance column,
+The materialised table still carries the ``provsql`` provenance column,
 so :sqlfunc:`remove_provenance` drops tracking first and the
 ``bool_or`` aggregation runs outside ProvSQL.
 
@@ -224,7 +220,7 @@ instances in the join: the Bagneux station record (``stops``, 1), its
 platform record (``stops``, 1), the Paul Bert stop record
 (``stops``, 0), and the trip record (``trips``, 1). The ``0`` on the
 third factor pinpoints the specific Paul Bert stop served by route 391
-as the accessibility barrier. Note that there are several stops named
+as the accessibility barrier. Several stops are named
 ``Paul Bert`` in the dataset; the one served by route 391 has
 ``wheelchair_boarding = 0``, as we can verify:
 
@@ -248,7 +244,7 @@ Step 6: The Next Stop on Each Line (``LATERAL``)
 -------------------------------------------------
 
 Step 3 listed *every* reachable stop. A ``LATERAL`` subquery asks a more
-focused question – for each line through Bagneux, what is the *very next*
+focused question -- for each line through Bagneux, what is the *very next*
 stop after it on that trip:
 
 .. code-block:: postgresql
@@ -275,21 +271,19 @@ stop after it on that trip:
 
 The ``LATERAL`` subquery runs once per outer row and may reference its
 columns (``t1.trip_id``, ``t1.stop_sequence``); the ``ORDER BY … LIMIT
-plain(1)`` keeps only the immediately following stop. Provenance flows through it
-unchanged: ``stops`` and ``trips`` are provenance-tracked (the untracked
-``stop_times`` and ``routes`` contribute *certain* provenance, exactly as in
-an ordinary join), so each ``(line, next stop)`` row carries the lineage of
-the records that produced it. Feeding that row's ``provenance()`` to
-:sqlfunc:`sr_boolean` therefore reports whether the hop to the next stop is
-wheelchair-accessible, just as the per-destination query of Step 4 did.
+plain(1)`` keeps only the immediately following stop. ``stops`` and
+``trips`` are provenance-tracked (the untracked ``stop_times`` and
+``routes`` contribute *certain* provenance, as in an ordinary join), so
+each ``(line, next stop)`` row carries the lineage of the records that
+produced it, and :sqlfunc:`sr_boolean` reports whether the hop to the
+next stop is wheelchair-accessible.
 
 Without ``plain``, ``ORDER BY … LIMIT 1`` would be read in every
-possible world: each later stop would be a candidate, annotated with the
-condition that no stop before it is present, since the tokens could stand
-for the uncertain existence of stops. Here they stand for wheelchair
+possible world: each later stop would be a candidate, conditioned on no
+earlier stop being present. Here the tokens stand for wheelchair
 accessibility and every stop exists, so which stop comes next is a plain
 fact of the timetable: ``LIMIT plain(1)`` keeps the next stop of the
-actual data, and its row carries the provenance it has in the full
-result. ProvSQL emits a ``WARNING`` about this ``LIMIT`` in a subquery,
-since that provenance does not say that the stop is the next one; here,
-the answer means what it says. See :ref:`limit` for the general rule.
+actual data, with the provenance its row has in the full result.
+ProvSQL emits a ``WARNING`` about this ``LIMIT`` in a subquery, since
+that provenance does not say that the stop is the next one; here, the
+answer means what it says. See :ref:`limit` for the general rule.
