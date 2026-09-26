@@ -126,4 +126,25 @@ FROM ro_g ORDER BY g;
 SET provsql.active = on;
 DROP TABLE ro_g;
 
+-- The relation ranked is a VIEW: expanded into a subquery, it keeps the
+-- permission entry of the view, which the subquery counting the rows before
+-- each one must carry with its copy of the view, as it does for a table's
+-- ("invalid perminfoindex", difftest's W16 on SQLShare).  Two rows of 1, one
+-- of 2, each at one half: 1 is first wherever it has a row (0.75), 2 second.
+CREATE TABLE ro_vt(k int);
+INSERT INTO ro_vt VALUES (1), (1), (2);
+SELECT add_provenance('ro_vt');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ro_vt; END $$;
+CREATE VIEW ro_v AS SELECT k, count(*) AS c FROM ro_vt GROUP BY k;
+CREATE TABLE ro_vr AS
+  SELECT k, rank() OVER (ORDER BY c DESC) AS r,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM ro_v;
+SELECT remove_provenance('ro_vr');
+SELECT k, r::text AS r, p FROM ro_vr ORDER BY k;
+DROP TABLE ro_vr;
+DROP VIEW ro_v;
+SELECT remove_provenance('ro_vt');
+DROP TABLE ro_vt;
+
 DROP TABLE ro;

@@ -14929,8 +14929,9 @@ static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
 
 /** @brief Copy an outer-join arm RTE into the range table of subquery @p sub,
  *  @p depth levels below @p outer.
- *  A base relation carries its permission info (PG 16+); a subquery has no
- *  direct permissions (its inner query keeps its own rteperminfos). */
+ *  A base relation carries its permission info (PG 16+), and so does a view
+ *  expanded into a subquery, which keeps it so that reading through the view
+ *  is checked; another subquery has none (its inner query keeps its own). */
 static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
                                   RangeTblEntry *orig, int depth) {
   RangeTblEntry *c = copyObject(orig);
@@ -14945,7 +14946,9 @@ static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
   else if (c->rtekind == RTE_CTE)
     c->ctelevelsup += depth;
 #if PG_VERSION_NUM >= 160000
-  if (orig->rtekind == RTE_RELATION && orig->perminfoindex != 0) {
+  /* A base relation, or a view expanded into a subquery, which keeps the
+   * permission info of the view so that reading through it is checked */
+  if (orig->perminfoindex != 0) {
     RTEPermissionInfo *pi = getRTEPermissionInfo(outer->rteperminfos, orig);
     sub->rteperminfos = lappend(sub->rteperminfos, copyObject(pi));
     c->perminfoindex  = list_length(sub->rteperminfos);
@@ -27835,7 +27838,8 @@ static Expr *make_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf,
     IncrementVarSublevelsUp((Node *)rte->subquery, 1, 1);
   sub->rtable = list_make1(rte);
 #if PG_VERSION_NUM >= 160000
-  if (ranked->rtekind == RTE_RELATION && ranked->perminfoindex != 0) {
+  /* A view expanded into a subquery keeps its permission info too */
+  if (ranked->perminfoindex != 0) {
     RTEPermissionInfo *pi = getRTEPermissionInfo(ctx->q->rteperminfos, ranked);
     sub->rteperminfos = list_make1(copyObject(pi));
     rte->perminfoindex = 1;
@@ -28058,7 +28062,8 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
     IncrementVarSublevelsUp((Node *)vals_rte->subquery, 2, 1);
   vals->rtable = list_make1(vals_rte);
 #if PG_VERSION_NUM >= 160000
-  if (ranked->rtekind == RTE_RELATION && ranked->perminfoindex != 0) {
+  /* A view expanded into a subquery keeps its permission info too */
+  if (ranked->perminfoindex != 0) {
     RTEPermissionInfo *pi = getRTEPermissionInfo(ctx->q->rteperminfos, ranked);
     vals->rteperminfos = list_make1(copyObject(pi));
     vals_rte->perminfoindex = 1;
