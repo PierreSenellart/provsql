@@ -12103,6 +12103,12 @@ static Query *union_all_of_arms(Query *q, List *arms) {
     }
   }
   setop->jointree = makeFromExpr(NIL, NULL);
+  /* The arms sit below the outer query, and below the set operation when
+   * there are several: what they read from an enclosing query (a LATERAL
+   * subquery's outer row) is that much further up. */
+  foreach (lc, arms)
+    IncrementVarSublevelsUp((Node *)lfirst(lc), IsA(tree, RangeTblRef) ? 1 : 2,
+                            1);
   if (IsA(tree, RangeTblRef)) {
     /* A single set: the branch itself */
     setop = (Query *)linitial(arms);
@@ -19879,7 +19885,152 @@ static Node *oj_replace_sublink_mut(Node *node, void *cx) {
 }
 
 /**
- * @brief Decorrelate scalar subqueries into a LEFT JOIN with grouping.
+ * @brief The @c LATERAL subquery standing for a scalar subquery's body.
+ *
+ * It returns exactly one row per outer row, as the scalar subquery gives one
+ * value:
+ * - a single bare aggregate: the body itself;
+ * - @c ORDER @c BY … @c LIMIT @c 1 of a value: @c choose(val @c ORDER @c BY
+ *   key), the first value in that order;
+ * - a value: @c choose(val), with @c HAVING @c count(*) @c <= @c 1, the
+ *   at-most-one-row rule (@c count(DISTINCT @c val) for a @c DISTINCT body).
+ *
+ * Its references to the outer query keep their level: a @c LATERAL item reads
+ * the query it is in, as the subquery did.
+ *
+ * @return the body, or @c NULL for a body of any other shape.
+ */
+static Query *oj_lateral_body(const constants_t *constants, Query *sub) {
+  Query *L;
+  TargetEntry *vte;
+  Expr *val;
+  int nreal = 0;
+  ListCell *lc;
+
+  if (sub->commandType != CMD_SELECT || sub->groupClause ||
+      sub->groupingSets || sub->setOperations || sub->hasWindowFuncs ||
+      sub->hasSubLinks || sub->limitOffset || sub->cteList ||
+      sub->havingQual || sub->hasDistinctOn || sub->jointree == NULL ||
+      sub->jointree->fromlist == NIL)
+    return NULL;
+  foreach (lc, sub->targetList)
+    if (!((TargetEntry *)lfirst(lc))->resjunk)
+      ++nreal;
+  vte = (TargetEntry *)linitial(sub->targetList);
+  if (nreal != 1 || vte->resjunk)
+    return NULL;
+
+  if (sub->hasAggs) {
+    if (!IsA(vte->expr, Aggref) || sub->distinctClause || sub->limitCount)
+      return NULL;
+    return (Query *)copyObject(sub);
+  }
+
+  L = (Query *)copyObject(sub);
+  vte = (TargetEntry *)linitial(L->targetList);
+  val = vte->expr;
+  if (L->limitCount) {
+    Aggref *agg;
+    if (!L->sortClause || L->distinctClause ||
+        !oj_limit_count_is_one(L->limitCount))
+      return NULL;
+    agg = makeNode(Aggref);
+    agg->aggfnoid = constants->OID_FUNCTION_CHOOSE;
+    agg->aggtype = exprType((Node *)val);
+    agg->aggtranstype = InvalidOid;
+    agg->aggargtypes = list_make1_oid(exprType((Node *)val));
+    agg->args = L->targetList;
+    agg->aggorder = L->sortClause;
+    agg->aggkind = AGGKIND_NORMAL;
+    agg->aggsplit = AGGSPLIT_SIMPLE;
+    agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+    agg->aggno = agg->aggtransno = -1;
+#endif
+    L->targetList = list_make1(makeTargetEntry((Expr *)agg, 1,
+                                               vte->resname, false));
+    L->sortClause = NIL;
+    L->limitCount = NULL;
+  } else {
+    Node *atmost;
+    if (L->distinctClause)
+      atmost = (Node *)oj_count_distinct_cmp((Expr *)copyObject(val), "<=", 1);
+    else
+      atmost = (Node *)oj_count_const_cmp(
+        OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID),
+        InvalidOid, oj_make_count_star(),
+        (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                          Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+    L->targetList = list_make1(makeTargetEntry(
+      (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                             exprType((Node *)val), exprType((Node *)val),
+                             val),
+      1, vte->resname, false));
+    L->havingQual = atmost;
+    L->distinctClause = NIL;
+    L->sortClause = NIL;
+  }
+  L->hasAggs = true;
+  return L;
+}
+
+/** @brief Context for @c reads_outer_aggregate_walker. */
+typedef struct reads_outer_agg_ctx {
+  const constants_t *constants;
+  Query *outer; /* the query the body's level-1 references read */
+  int depth;    /* how many query levels below the body the walk is */
+} reads_outer_agg_ctx;
+
+/** @brief Walker: does the body read a column of the outer query that is an
+ *  aggregate result? */
+static bool reads_outer_aggregate_walker(Node *node, void *cx) {
+  reads_outer_agg_ctx *c = (reads_outer_agg_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->depth + 1) {
+      Var *local = (Var *)copyObject(v);
+      local->varlevelsup = 0;
+      return expr_is_aggregate_result(c->constants, c->outer, (Node *)local);
+    }
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool res;
+    c->depth++;
+    res = query_tree_walker((Query *)node, reads_outer_aggregate_walker, cx, 0);
+    c->depth--;
+    return res;
+  }
+  return expression_tree_walker(node, reads_outer_aggregate_walker, cx);
+}
+
+/** @brief Add @p L to @p q's FROM as a @c LATERAL subquery, and return the
+ *  Var reading its one column. */
+static Var *oj_add_lateral(Query *q, Query *L) {
+  RangeTblEntry *rte = oj_make_subquery_rte(L);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  Expr *val = ((TargetEntry *)linitial(L->targetList))->expr;
+
+  rte->lateral = true;
+  q->rtable = lappend(q->rtable, rte);
+  rtr->rtindex = list_length(q->rtable);
+  q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+  return makeVar(rtr->rtindex, 1, exprType((Node *)val),
+                 exprTypmod((Node *)val), exprCollation((Node *)val), 0);
+}
+
+/**
+ * @brief Decorrelate scalar subqueries into LATERAL subqueries, or into a
+ *        LEFT JOIN with grouping.
+ *
+ * A body over tracked relations becomes a @c LATERAL subquery giving its
+ * value once per outer row (@c oj_lateral_body), so duplicate outer rows stay
+ * apart; a WHERE comparison on the value moves into its HAVING.  A body
+ * comparing with an aggregate of the outer query goes through the LEFT JOIN
+ * grouped by the outer rows described below, which brings both aggregates to
+ * one level.
  *
  * Accepted, in a @c CMD_SELECT:
  * - one @c EXPR_SUBLINK that is a target-list entry, or sits in a target-list
@@ -20085,6 +20236,105 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   is_agg_body = sub->hasAggs;
   if (!sub->jointree || sub->jointree->fromlist == NIL)
     return false;
+
+  /* Each scalar subquery becomes a LATERAL subquery giving its value, one row
+   * per outer row: the outer rows are not grouped, so duplicate ones stay
+   * apart, each with the value of its own subquery. */
+  if (!oj_body_has_tracked_relation(constants, sub))
+    return false;
+  /* A body comparing with an aggregate of the outer query (the rank of a
+   * group, counting the groups before it) goes through the join below, which
+   * brings both aggregates to one level: a LATERAL subquery would read the
+   * outer one as a plain value. */
+  {
+    reads_outer_agg_ctx rc;
+    rc.constants = constants;
+    rc.outer = q;
+    rc.depth = 0;
+    if (query_tree_walker(sub, reads_outer_aggregate_walker, &rc, 0))
+      goto join;
+  }
+  if (coalesce) {
+    List *bodies = NIL;
+    ListCell *la, *lb;
+    foreach (la, co_sls) {
+      Query *L = oj_lateral_body(constants,
+                                 (Query *)((SubLink *)lfirst(la))->subselect);
+      if (L == NULL)
+        return false;
+      bodies = lappend(bodies, L);
+    }
+    forboth(la, bodies, lb, co_tes)
+      ((TargetEntry *)lfirst(lb))->expr =
+        (Expr *)oj_add_lateral(q, (Query *)lfirst(la));
+    return true;
+  }
+  {
+    Query *L = oj_lateral_body(constants, sub);
+    oj_replace_sublink_ctx rc;
+    if (L == NULL)
+      return false;
+    if (in_where) {
+      /* The comparison moves into the subquery's HAVING, over its own value:
+       * the subquery then gives no row where the comparison cannot hold, and
+       * the outer row is not there either, rather than there with provenance
+       * zero. */
+      Node *quals = q->jointree->quals;
+      List *conjs = (IsA(quals, BoolExpr) &&
+                     ((BoolExpr *)quals)->boolop == AND_EXPR)
+                      ? ((BoolExpr *)quals)->args
+                      : list_make1(quals);
+      List *kept = NIL;
+      Node *pred = NULL;
+      Const *hole = makeNullConst(BOOLOID, -1, InvalidOid);
+      foreach (lc, conjs) {
+        Node *c = (Node *)lfirst(lc);
+        if (pred == NULL && oj_contains_sublink_walker(c, sl)) {
+          rc.target = sl;
+          rc.repl = (Node *)hole;
+          pred = oj_replace_sublink_mut(c, &rc);
+        } else
+          kept = lappend(kept, c);
+      }
+      if (pred == NULL)
+        return false;
+      IncrementVarSublevelsUp(pred, 1, 0);
+      rc.target = (SubLink *)hole;
+      rc.repl = copyObject((Node *)((TargetEntry *)linitial(L->targetList))->expr);
+      pred = oj_replace_sublink_mut(pred, &rc);
+      L->havingQual = L->havingQual == NULL
+                        ? pred
+                        : (Node *)makeBoolExpr(AND_EXPR,
+                                               list_make2(L->havingQual, pred),
+                                               -1);
+      q->jointree->quals =
+        kept == NIL ? NULL
+                    : (list_length(kept) == 1
+                         ? (Node *)linitial(kept)
+                         : (Node *)makeBoolExpr(AND_EXPR, kept, -1));
+      (void)oj_add_lateral(q, L);
+    } else {
+      /* The whole select-list expression moves into the subquery, over its
+       * value, and the entry reads the result: an expression over the value
+       * (EXISTS, rewritten into "count >= 1", arithmetic, a CASE) is then one
+       * over an aggregate of the subquery's own, which reads it in every
+       * world. */
+      Const *hole = makeNullConst(BOOLOID, -1, InvalidOid);
+      TargetEntry *lte = (TargetEntry *)linitial(L->targetList);
+      Node *e;
+      rc.target = sl;
+      rc.repl = (Node *)hole;
+      e = oj_replace_sublink_mut((Node *)sl_te->expr, &rc);
+      IncrementVarSublevelsUp(e, 1, 0);
+      rc.target = (SubLink *)hole;
+      rc.repl = (Node *)lte->expr;
+      lte->expr = (Expr *)oj_replace_sublink_mut(e, &rc);
+      sl_te->expr = (Expr *)oj_add_lateral(q, L);
+    }
+    return true;
+  }
+
+join:
   /* A multi-table body (Q1, Q2, … in FROM) is collapsed into a single derived
    * cross-product subquery D, after which the body is "SELECT val FROM D WHERE
    * W" -- the single-Q path below handles D exactly as it handles a subquery R. */

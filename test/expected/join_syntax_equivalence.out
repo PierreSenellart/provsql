@@ -118,7 +118,7 @@ remove_provenance
 (1 row)
 a|f|p
 1|r1|0.9000
-2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+2|r2 ⊗ (𝟙 ⊖ (s20 ⊕ s21))|0.2250
 3|r3|0.9000
 (3 rows)
 remove_provenance
@@ -126,7 +126,7 @@ remove_provenance
 (1 row)
 a|f|p
 1|r1|0.9000
-2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+2|r2 ⊗ (𝟙 ⊖ (s20 ⊕ s21))|0.2250
 3|r3|0.9000
 (3 rows)
 remove_provenance
@@ -134,7 +134,7 @@ remove_provenance
 (1 row)
 a|f|p
 1|r1|0.9000
-2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+2|r2 ⊗ (𝟙 ⊖ (s20 ⊕ s21))|0.2250
 3|r3|0.9000
 (3 rows)
 remove_provenance

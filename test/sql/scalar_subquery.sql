@@ -1006,7 +1006,7 @@ CREATE TABLE mp1 AS
   SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM mp_r WHERE mp_r.a NOT IN (SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 SELECT remove_provenance('mp1');
-SELECT a, p FROM mp1 ORDER BY a;
+SELECT a, p FROM mp1 ORDER BY a, p;
 DROP TABLE mp1;
 
 -- IN is the exact complement: a=2 -> 0.25, a=1,3 -> 0.
@@ -1014,7 +1014,7 @@ CREATE TABLE mp2 AS
   SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM mp_r WHERE mp_r.a IN (SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 SELECT remove_provenance('mp2');
-SELECT a, p FROM mp2 ORDER BY a;
+SELECT a, p FROM mp2 ORDER BY a, p;
 DROP TABLE mp2;
 
 -- NOT EXISTS with the membership expressed as correlation: same antijoin.
@@ -1023,7 +1023,7 @@ CREATE TABLE mp3 AS
   FROM mp_r WHERE NOT EXISTS
     (SELECT 1 FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k AND mp_q1.a = mp_r.a);
 SELECT remove_provenance('mp3');
-SELECT a, p FROM mp3 ORDER BY a;
+SELECT a, p FROM mp3 ORDER BY a, p;
 DROP TABLE mp3;
 
 -- The EXCEPT form computes the same probabilities (an equivalent formulation).
@@ -1032,7 +1032,7 @@ CREATE TABLE mp4 AS
   FROM (SELECT a FROM mp_r EXCEPT
         SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k) e;
 SELECT remove_provenance('mp4');
-SELECT a, p FROM mp4 ORDER BY a;
+SELECT a, p FROM mp4 ORDER BY a, p;
 DROP TABLE mp4;
 
 -- Multi-column (row-wise) NOT IN over the multi-relation body: the testexpr
@@ -1043,7 +1043,7 @@ CREATE TABLE mp5 AS
   FROM mp_r WHERE (mp_r.a, mp_r.k) NOT IN
     (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 SELECT remove_provenance('mp5');
-SELECT a, p FROM mp5 ORDER BY a;
+SELECT a, p FROM mp5 ORDER BY a, p;
 DROP TABLE mp5;
 
 -- The same condition spelled "<> ALL": PostgreSQL builds its testexpr as an OR
@@ -1062,14 +1062,14 @@ CREATE TABLE mp6 AS
   FROM mp_r WHERE (mp_r.a, mp_r.k) <> ALL
     (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 SELECT remove_provenance('mp6');
-SELECT a, p FROM mp6 ORDER BY a;
+SELECT a, p FROM mp6 ORDER BY a, p;
 DROP TABLE mp6;
 CREATE TABLE mp6 AS
   SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM mp_r WHERE (mp_r.a, mp_r.k) NOT IN
     (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 SELECT remove_provenance('mp6');
-SELECT a, p FROM mp6 ORDER BY a;
+SELECT a, p FROM mp6 ORDER BY a, p;
 DROP TABLE mp6;
 SELECT mp_r.a FROM mp_r WHERE (mp_r.a, mp_r.k) = ALL
   (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
@@ -1514,9 +1514,56 @@ CREATE TABLE sst_r AS
 SELECT remove_provenance('sst_r');
 SELECT id, s::text AS s, m::text AS m FROM sst_r ORDER BY id;
 DROP TABLE sst_r;
--- A correlation inside a FROM subquery of the body (a top-k per outer row)
--- is no join: refused.
-SELECT a.id, (SELECT sum(t) FROM (SELECT t FROM ssv WHERE ssv.pid = a.id
-                                  ORDER BY t LIMIT 1) v) AS s
-FROM sst a;
+-- A correlation inside a FROM subquery of the body (a top-k per outer row):
+-- the body is read per outer row, as a LATERAL subquery, so each row gets the
+-- sum of its own smallest t, 10 and 4, and none for the rows without one.
+CREATE TABLE sst_r AS
+  SELECT a.id, (SELECT sum(t) FROM (SELECT t FROM ssv WHERE ssv.pid = a.id
+                                    ORDER BY t LIMIT 1) v) AS s
+  FROM sst a;
+SELECT remove_provenance('sst_r');
+SELECT id, s::text AS s FROM sst_r ORDER BY id;
+DROP TABLE sst_r;
 DROP TABLE sst, ssv;
+
+-- Duplicate outer rows stay apart, each with its own subquery: dsr holds the
+-- certain row of 1 twice, and each copy counts the two rows of 1 in dss, not
+-- four (the outer rows used to be grouped, the copies merged into one row
+-- whose count read each match once per copy).  Each copy expects 0.5 + 0.5 =
+-- 1 match; EXISTS keeps each copy with probability 1 - 0.5^2 = 0.75; the
+-- plain value is the one match of 2 above 6; and grouping the outer rows
+-- afterwards counts per group what plain SQL counts, 2 and not 4.
+CREATE TABLE dsr(k int);
+INSERT INTO dsr VALUES (1), (1), (2);
+CREATE TABLE dss(k int, v int);
+INSERT INTO dss VALUES (1, 5), (1, 6), (2, 7);
+SELECT add_provenance('dsr');
+SELECT add_provenance('dss');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM dss; END $$;
+CREATE TABLE dsr_r AS
+  SELECT k, round(expected(c)::numeric, 4) AS e
+  FROM (SELECT k, (SELECT count(*) FROM dss WHERE dss.k = dsr.k) AS c
+        FROM dsr) z;
+SELECT remove_provenance('dsr_r');
+SELECT k, e FROM dsr_r ORDER BY k;
+DROP TABLE dsr_r;
+CREATE TABLE dsr_r AS
+  SELECT k, (SELECT v FROM dss WHERE dss.k = dsr.k AND v > 6) AS v FROM dsr;
+SELECT remove_provenance('dsr_r');
+SELECT k, v::text AS v FROM dsr_r ORDER BY k;
+DROP TABLE dsr_r;
+CREATE TABLE dsr_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM dsr WHERE EXISTS (SELECT 1 FROM dss WHERE dss.k = dsr.k);
+SELECT remove_provenance('dsr_r');
+SELECT k, p FROM dsr_r ORDER BY k, p;
+DROP TABLE dsr_r;
+CREATE TABLE dsr_r AS
+  SELECT k, (SELECT count(*) FROM dss WHERE dss.k = x.k) AS c
+  FROM (SELECT k FROM dsr) x GROUP BY k;
+SELECT remove_provenance('dsr_r');
+SELECT k, c::text AS c FROM dsr_r ORDER BY k;
+DROP TABLE dsr_r;
+SELECT remove_provenance('dsr');
+SELECT remove_provenance('dss');
+DROP TABLE dsr, dss;

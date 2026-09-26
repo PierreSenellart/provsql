@@ -54,12 +54,17 @@ SELECT (SELECT count(*) FROM snr_t) AS a, (SELECT count(*) FROM snr_u) AS b;
 
 -- Declined, and evaluated by plain SQL with the warning, as before: a body
 -- that READS the provenance column, which is a fetch of tokens and not of
--- data; and a constant left side, whose rows the decorrelation does not group
--- by (the lift leaves the sublink behind, so the block stays as it was rather
--- than reaching a refusal).
+-- data.  A constant left side is answered: each of its rows reads the count
+-- of its own matches, as a LATERAL subquery, so 4 is there in the worlds
+-- without the row of 4, and 5 and 6 are certain.
 SELECT (SELECT count(*) FROM snr_t WHERE provsql IS NOT NULL) AS reads_token;
-SELECT * FROM (VALUES (4),(5),(6)) AS v(id)
-WHERE NOT EXISTS (SELECT * FROM snr_u u WHERE u.id = v.id) ORDER BY 1;
+CREATE TABLE snr_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (VALUES (4),(5),(6)) AS v(id)
+  WHERE NOT EXISTS (SELECT * FROM snr_u u WHERE u.id = v.id);
+SELECT remove_provenance('snr_r');
+SELECT id, p FROM snr_r ORDER BY id;
+DROP TABLE snr_r;
 
 -- A WITH read only inside such a sublink.  has_provenance is true of the block
 -- (it walks the WITH), so the lift used to be skipped, and the block answered

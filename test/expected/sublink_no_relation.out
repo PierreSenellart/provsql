@@ -24,12 +24,14 @@ DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
 reads_token
 2
 (1 row)
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
-id
-5
-6
-(2 rows)
+remove_provenance
+
+(1 row)
+id|p
+4|0.500000
+5|1.000000
+6|1.000000
+(3 rows)
 remove_provenance
 
 (1 row)
