@@ -81,3 +81,14 @@ source_table|nb_columns
 agents|6
 agents|6
 (2 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5400
+Nairobi|0.7400
+Paris|0.4100
+(3 rows)
+saved_prob
+0.2600
+(1 row)

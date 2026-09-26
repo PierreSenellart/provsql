@@ -477,13 +477,13 @@ one over the original row -- the lineage followed the data:
    ``CREATE TABLE … AS SELECT``, which carries provenance through directly).
 
 
-Step 12: Unidentified Detections -- Three Kinds of "Not"
---------------------------------------------------------
+Step 12: Unidentified Detections -- Four Kinds of "Not"
+-------------------------------------------------------
 
 Two detections in the archive have **no species assignment**: the
 classifier saw an animal but could not identify it, and ``species_id``
 is NULL (photo 5 at Loch Torridon, confidence 0.60, and photo 9 at Glen
-Affric, confidence 0.50). NULLs make the three natural ways of asking
+Affric, confidence 0.50). NULLs make the natural ways of asking
 "species detected at Loch Torridon but *not* at Glen Affric" genuinely
 different questions -- in SQL itself, and therefore in the provenance
 and probabilities ProvSQL computes. Station names live in the
@@ -563,9 +563,81 @@ detection probability (0.60):
     ) t
     ORDER BY species_id NULLS LAST;
 
-Three idioms, three different answers -- matching what vanilla SQL
+Fourth, an outer join. Keeping the Loch Torridon sightings that find
+no Glen Affric partner (``LEFT JOIN`` … ``IS NULL``) is the same
+question as ``NOT EXISTS``: the join condition is an equality, which never
+matches a NULL. The padded rows carry the provenance of the *absence* of a
+match, and the probabilities are those of ``NOT EXISTS``, row for row:
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT DISTINCT d.species_id
+      FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+        LEFT JOIN (SELECT d2.species_id FROM detection d2
+                     JOIN photo p2 ON d2.photo_id = p2.id
+                   WHERE p2.station = 'Glen Affric') g
+          ON g.species_id = d.species_id
+      WHERE p.station = 'Loch Torridon' AND g.species_id IS NULL
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+Four idioms, three different answers -- matching what vanilla SQL
 returns on each query, with possible-worlds-correct probabilities on
 top. The general rules behind this behaviour (which comparisons treat
 NULLs as unknown, where SQL switches to syntactic matching, and what
 that means for provenance circuits) are spelled out in
 :doc:`the NULL semantics chapter <nulls>`.
+
+
+Step 13: Species Seen at Both Stations
+--------------------------------------
+
+The positive question -- species detected at *both* Loch Torridon and
+Glen Affric -- has the same two readings. ``INTERSECT`` matches tuples
+syntactically, NULL included:
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT species_id FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+      WHERE p.station = 'Loch Torridon'
+      INTERSECT
+      SELECT species_id FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+      WHERE p.station = 'Glen Affric'
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+The unidentified row comes out at :math:`0.60 \times 0.50 = 0.30`: both
+unidentified sightings are true positives. A quantified comparison,
+``= ANY``, compares values instead, and a NULL equals nothing:
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT DISTINCT d.species_id
+      FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+      WHERE p.station = 'Loch Torridon'
+        AND d.species_id = ANY (SELECT d2.species_id FROM detection d2
+                                  JOIN photo p2 ON d2.photo_id = p2.id
+                                WHERE p2.station = 'Glen Affric')
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+The species rows are the same, and the unidentified row is gone. The
+probabilities are consistent across queries: a species seen at Loch
+Torridon is seen either at both stations or only there, so its
+``INTERSECT`` probability here and its ``EXCEPT`` probability in Step 12
+add up to the probability that it is seen at Loch Torridon at all -- for
+the Red Deer, 0.9909 + 0.0091 = 1, and for the unidentified row,
+0.30 + 0.30 = 0.60.

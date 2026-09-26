@@ -386,6 +386,55 @@ SELECT species_id, prob FROM result_cs5_null_notexists
 ORDER BY species_id NULLS LAST;
 DROP TABLE result_cs5_null_notexists;
 
+-- (d) LEFT JOIN ... IS NULL: the outer-join anti-join is the same question as
+-- NOT EXISTS (an equality never matches a NULL), so the probabilities are
+-- those of (c), row for row, the NULL row included (0.60).
+CREATE TABLE result_cs5_null_leftjoin AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT DISTINCT d.species_id
+  FROM detection d
+    LEFT JOIN (SELECT d2.species_id FROM detection d2
+               WHERE d2.photo_id BETWEEN 9 AND 15) g
+      ON g.species_id = d.species_id
+  WHERE d.photo_id BETWEEN 1 AND 8 AND g.species_id IS NULL
+) t;
+SELECT remove_provenance('result_cs5_null_leftjoin');
+SELECT species_id, prob FROM result_cs5_null_leftjoin
+ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_null_leftjoin;
+
+-- Step 13: species seen at both stations.  INTERSECT matches NULL with NULL,
+-- so the unidentified row is there at 0.60 * 0.50 = 0.30; = ANY compares
+-- values, so it is not.  The species rows agree, and each INTERSECT
+-- probability plus the EXCEPT one of (a) is the probability that the species
+-- is seen at Loch Torridon (Red Deer: 0.9909 + 0.0091 = 1).
+CREATE TABLE result_cs5_both AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT species_id FROM detection WHERE photo_id BETWEEN 1 AND 8
+  INTERSECT
+  SELECT species_id FROM detection WHERE photo_id BETWEEN 9 AND 15
+) t;
+SELECT remove_provenance('result_cs5_both');
+SELECT species_id, prob FROM result_cs5_both ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_both;
+
+CREATE TABLE result_cs5_both_any AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT DISTINCT d.species_id FROM detection d
+  WHERE d.photo_id BETWEEN 1 AND 8
+    AND d.species_id = ANY (SELECT d2.species_id FROM detection d2
+                            WHERE d2.photo_id BETWEEN 9 AND 15)
+) t;
+SELECT remove_provenance('result_cs5_both_any');
+SELECT species_id, prob FROM result_cs5_both_any ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_both_any;
+
 -- Clean up
 DROP TABLE species_mapping;
 DROP TABLE detection;

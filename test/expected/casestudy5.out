@@ -152,3 +152,37 @@ species_id|prob
 9|0.8300
 |0.6000
 (8 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.0091
+2|0.7060
+3|0.0629
+5|0.2106
+6|0.2090
+7|0.1274
+9|0.8300
+|0.6000
+(8 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.9909
+3|0.9106
+5|0.5994
+6|0.3410
+7|0.7826
+|0.3000
+(6 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.9909
+3|0.9106
+5|0.5994
+6|0.3410
+7|0.7826
+(5 rows)

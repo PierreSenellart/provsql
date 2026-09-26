@@ -38,7 +38,8 @@ What each case study covers
     **where-provenance**, **circuit export**, and the **full probability-method
     line-up** side by side (possible-worlds, Monte-Carlo, tree-decomposition,
     and knowledge compilation through ``d4`` / ``c2d`` / ``dsharp`` /
-    ``minic2d``). Start here for a panoramic view.
+    ``minic2d``), ending on **revising a probability** already used with
+    :sqlfunc:`replace_input`. Start here for a panoramic view.
 
 :doc:`Case study 2 -- Open Science Database <casestudy2>`
     Evidence synthesis over a fictional biomedical corpus -- single-source
@@ -65,9 +66,10 @@ What each case study covers
     candidate species per bounding box. It contrasts **probabilistic ranking**
     against naive confidence thresholding, computes **expected species
     counts** with :sqlfunc:`expected`, and closes on **NULL semantics**:
-    ``EXCEPT``, ``NOT IN``, and ``NOT EXISTS`` giving three genuinely
-    different -- and possible-worlds-correct -- answers over unidentified
-    detections.
+    ``EXCEPT``, ``NOT IN``, ``NOT EXISTS`` and an outer join giving three
+    genuinely different -- and possible-worlds-correct -- answers over
+    unidentified detections, and ``INTERSECT`` against ``= ANY`` for the
+    positive question.
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
     **Continuous distributions** end to end: ``random_variable``
@@ -177,12 +179,12 @@ Supported SQL constructs
    "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓"
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
-   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "", "", "", ""
+   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", ""
    "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", ""
    "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", ""
-   "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "", "", "", ""
+   "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "✓", "", "", ""
    "Scalar subquery", "", "", "", "", "", "", "✓", "", "✓"
-   "``INTERSECT``", "", "", "", "", "", "", "", "", ""
+   "``INTERSECT``", "", "", "", "", "", "✓", "", "", ""
    "``DISTINCT ON``", "", "", "", "", "", "", "", "", ""
    "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", ""
    "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", ""
@@ -335,7 +337,7 @@ Probabilities
    "``provsql.rv_mc_samples`` GUC", "", "", "", "", "", "", "✓", "", "✓"
    "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", ""
    "``probability_is_set``", "", "", "", "", "", "", "", "", ""
-   "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "", "", "", "", "", "", "", ""
+   "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "✓", "", "", "", "", "", "", ""
    "``provsql.last_eval_method`` GUC", "", "", "", "", "", "", "", "", ""
 
 Continuous random variables

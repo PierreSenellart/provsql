@@ -188,6 +188,27 @@ FROM nairobi_token,
      unnest(get_children((get_children(prov))[1])) AS child
 ORDER BY 1, 2;
 
+-- Step 16: revising a probability.  set_prob writes a probability once;
+-- replace_input gives Juma's row a fresh input gate at 0.9, so Nairobi's
+-- single-agent probability becomes 0.9 * 0.8 + 0.1 * 0.2 = 0.74, while the
+-- token saved above, built from the old gate, still evaluates to 0.26.
+UPDATE agents SET provsql = replace_input(provsql, 0.9) WHERE name = 'Juma';
+CREATE TABLE result_cs1_revised AS
+SELECT city,
+    ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+      JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t;
+SELECT remove_provenance('result_cs1_revised');
+SELECT city, prob FROM result_cs1_revised ORDER BY city;
+DROP TABLE result_cs1_revised;
+SELECT ROUND(probability_evaluate(prov)::numeric, 4) AS saved_prob
+FROM nairobi_token;
+
 DROP TABLE nairobi_token;
 
 -- Clean up

@@ -590,3 +590,46 @@ returning the table and column count for an input token:
 Both leaves resolve to ``(personnel, 6)``: the ``personnel`` table with
 its six non-provenance columns (``id``, ``name``, ``position``, ``city``,
 ``classification``, and the ``probability`` column added in Step 7).
+
+
+Step 16: Revising a Probability
+-------------------------------
+
+New intelligence says Juma is almost certainly a real agent: his
+probability should be 0.9, not 0.1. A probability is written once:
+:sqlfunc:`set_prob` refuses a different value for a token that already has
+one, and its error message points to :sqlfunc:`replace_input`, which gives
+the row a fresh input gate with the new probability:
+
+.. code-block:: postgresql
+
+    UPDATE personnel SET provsql = replace_input(provsql, 0.9)
+    WHERE name = 'Juma';
+
+Queries from now on see the new value. Rerunning the query of Step 8,
+Nairobi's single-agent probability becomes
+``0.9 × 0.8 + 0.1 × 0.2 = 0.74``, and the other cities are unchanged:
+
+.. code-block:: postgresql
+
+    SELECT city,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+        SELECT DISTINCT city FROM personnel
+      EXCEPT
+        SELECT p1.city
+        FROM personnel p1
+        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
+        GROUP BY p1.city
+    ) t
+    ORDER BY city;
+
+A result computed before the change keeps the old probability: the token
+saved in Step 15 was built from Juma's old input gate, which is still in
+the circuit, and it still evaluates to ``0.26``:
+
+.. code-block:: postgresql
+
+    SELECT ROUND(probability_evaluate(prov)::numeric, 4) AS prob
+    FROM nairobi_token;
+
