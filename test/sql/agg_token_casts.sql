@@ -213,5 +213,13 @@ SET provsql.active = on;
 SELECT ARRAY[c, s] AS arr, c IN (1, 3) AS in_list,
        c IS DISTINCT FROM 3 AS distinct_from
 FROM (SELECT count(*) AS c, sum(a) AS s FROM atc_arr) z;
+
+-- A cast through I/O of arithmetic on a COUNT(DISTINCT), whose aggregate
+-- comes back as a subquery's column: it read the token's display text,
+-- (count(DISTINCT a) * 2)::text giving '6 (*)'.  The value, as plain SQL's.
+SELECT (count(DISTINCT a) * 2)::text AS t,
+       CAST(CAST(count(DISTINCT a) * 2.0 AS DECIMAL(5, 2)) AS VARCHAR(6))
+         || '%' AS pct
+FROM atc_arr;
 SELECT remove_provenance('atc_arr');
 DROP TABLE atc_arr;

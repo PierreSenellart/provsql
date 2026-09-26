@@ -21775,6 +21775,22 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     cast_agg_token_args(((NullIfExpr *)node)->args, ctx, InvalidOid);
     return node;
   }
+  if (IsA(node, CoerceViaIO) &&
+      exprType((Node *)((CoerceViaIO *)node)->arg) ==
+        ctx->constants->OID_TYPE_AGG_TOKEN &&
+      ((CoerceViaIO *)node)->resulttype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+    /* (cnt * 2)::text, where cnt is a subquery's aggregate column: the
+     * conversion reads the value, not the text of the agg_token, which
+     * would print "6 (*)". */
+    CoerceViaIO *io = (CoerceViaIO *)node;
+    if (IsA(io->arg, Var))
+      io->arg = (Expr *)cast_agg_token_node((Node *)io->arg, io->resulttype,
+                                            ctx);
+    else
+      return cast_agg_token_to_type((Node *)io->arg, io->resulttype,
+                                    ctx->constants);
+    return node;
+  }
 
   return node;
 }
