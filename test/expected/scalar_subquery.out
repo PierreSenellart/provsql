@@ -1011,3 +1011,18 @@ k|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.250000
+2|0.250000
+3|0.250000
+4|0.250000
+(4 rows)
+remove_provenance
+
+(1 row)

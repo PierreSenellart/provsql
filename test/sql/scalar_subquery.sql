@@ -1627,3 +1627,22 @@ SELECT k, p FROM qh_r ORDER BY k;
 DROP TABLE qh_r;
 SELECT remove_provenance('qh');
 DROP TABLE qh;
+
+-- Two uncorrelated IN tests, one over a WITH holding a join (TPC-DS 95): each
+-- read as a join against its deduplicated body.  The first one lowered into a
+-- count used to leave the second beside a subquery it declined.  Five rows at
+-- one half; the probabilities are those of the enumeration of the 32 worlds.
+CREATE TABLE qi(id int, k int, x int);
+INSERT INTO qi VALUES (1, 1, 1), (2, 1, 2), (3, 2, 2), (4, 2, 5), (5, 3, 3);
+SELECT add_provenance('qi');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM qi; END $$;
+CREATE TABLE qi_r AS
+  WITH w AS (SELECT b.k FROM qi b, qi c WHERE b.k = c.k AND b.x <> c.x)
+  SELECT a.id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM qi a
+  WHERE a.k IN (SELECT k FROM w) AND a.k IN (SELECT k FROM qi d WHERE d.x > 1);
+SELECT remove_provenance('qi_r');
+SELECT id, p FROM qi_r ORDER BY id;
+DROP TABLE qi_r;
+SELECT remove_provenance('qi');
+DROP TABLE qi;

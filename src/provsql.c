@@ -19632,14 +19632,15 @@ static bool wrap_untracked_from_for_sublink(const constants_t *constants,
 
 /**
  * @brief Read every uncorrelated membership test of @p q as a join against the
- *        deduplicated body, where the block's own FROM holds something that is
- *        not a base relation.
+ *        deduplicated body, where the ordinary route would decline.
  *
  * Runs BEFORE the predicate-sublink lowering: that one turns @c "x IN (body)"
  * into @c "(SELECT count(*) FROM body WHERE body.k = x) >= 1", which makes the
  * body correlated and hands the result to a decorrelation that wants to group
- * the block by base relations -- and declines beside a subquery in the FROM.
- * Taken as a join first, the condition never becomes a count at all.
+ * the block by base relations -- and declines beside a subquery in the FROM,
+ * or beside a second subquery condition (two IN tests over a WITH holding a
+ * join, TPC-DS 95).  Taken as a join first, the condition never becomes a
+ * count at all.
  *
  * @return  Whether anything moved.
  */
@@ -19649,16 +19650,24 @@ static bool rewrite_uncorrelated_membership(const constants_t *constants,
   ListCell *lc;
   bool moved = false;
 
+  int nsublinks = 0;
+
   if (q->commandType != CMD_SELECT || !q->hasSubLinks || q->jointree == NULL ||
       q->jointree->quals == NULL)
-    return false;
-  if (!unc_from_has_non_relation(q))
     return false;
 
   conjs = (IsA(q->jointree->quals, BoolExpr) &&
            ((BoolExpr *)q->jointree->quals)->boolop == AND_EXPR)
             ? ((BoolExpr *)q->jointree->quals)->args
             : list_make1(q->jointree->quals);
+  foreach (lc, conjs)
+    if (checkExprHasSubLink((Node *)lfirst(lc)))
+      ++nsublinks;
+  /* Where the ordinary route declines: beside a non-relation in the FROM,
+   * or with a second subquery condition, the first one lowered leaving the
+   * block with one */
+  if (!unc_from_has_non_relation(q) && nsublinks < 2)
+    return false;
   foreach (lc, conjs) {
     Node *c = (Node *)lfirst(lc);
     Node *repl = unc_membership_to_join(constants, q, c);
