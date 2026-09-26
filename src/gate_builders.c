@@ -142,7 +142,11 @@ static int filtered_tokens(ArrayType *arr, const pg_uuid_t *neutral,
   return kept;
 }
 
-/** @brief The canonical address, @c "<prefix>{sorted children}". */
+/** @brief The canonical address, @c "<prefix>{sorted children}".
+ *
+ *  Sorting identifies a product with every reordering of its factors, which
+ *  requires a commutative @f$\otimes@f$, as in every semiring ProvSQL
+ *  evaluates. */
 static pg_uuid_t canonical_address(const char *canonical_prefix,
                                    const pg_uuid_t *children, int n) {
   StringInfoData buf;
