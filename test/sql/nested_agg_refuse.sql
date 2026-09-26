@@ -128,6 +128,32 @@ SELECT remove_provenance('result_f2');
 SELECT * FROM result_f2;
 DROP TABLE result_f2;
 
+-- An aggregate of an EXPRESSION over a subquery's count (a CASE, a product),
+-- whose value is then grouped on: each row's contribution recorded the token
+-- as its display text, "2 (*)", and listing the values the sum can take
+-- failed parsing it as a number (difftest's sede/3b6946dfde).  The inner
+-- counts are read as plain SQL, as the warning says, so the values listed are
+-- those of the database as it is, each group's own; the rows below are the
+-- distinct ones among them.
+SET client_min_messages = error;
+CREATE TABLE result_w19 AS
+  SELECT s FROM (SELECT id, sum(CASE WHEN c > 1 THEN c ELSE 0 END) AS s
+                 FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t
+                 GROUP BY id) u
+  GROUP BY s;
+RESET client_min_messages;
+SELECT remove_provenance('result_w19');
+SELECT s::text AS s FROM result_w19 ORDER BY 1;
+DROP TABLE result_w19;
+SET client_min_messages = error;
+SET provsql.active = off;
+SELECT s::text AS s FROM (SELECT id, sum(CASE WHEN c > 1 THEN c ELSE 0 END) AS s
+                          FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t
+                          GROUP BY id) u
+GROUP BY s ORDER BY 1;
+SET provsql.active = on;
+RESET client_min_messages;
+
 SELECT remove_provenance('l_nested');
 SELECT remove_provenance('r_nested');
 DROP TABLE l_nested;

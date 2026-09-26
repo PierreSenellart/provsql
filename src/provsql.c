@@ -21922,6 +21922,22 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
       if (swapped != NULL)
         return swapped;
     }
+    /* The value a row contributes to an aggregate, when it is an expression
+     * over a subquery's aggregate (sum(c * 2), sum(CASE WHEN c > 1 THEN c
+     * ELSE 0 END)): the aggregate reads its value as plain SQL, as the
+     * statement reports, and so must the contribution, which would otherwise
+     * record the token's display text, "4 (*)", read by no evaluator as a
+     * number.  Its parameter is polymorphic, so the rule below keeps it. */
+    if (fe->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_SEMIMOD &&
+        list_length(fe->args) == 2 &&
+        exprType((Node *)linitial(fe->args)) ==
+          ctx->constants->OID_TYPE_AGG_TOKEN) {
+      Node *value = plain_agg_value((Node *)linitial(fe->args), TEXTOID,
+                                    ctx->constants);
+      if (value != NULL)
+        linitial(fe->args) = value;
+      return node;
+    }
     if (fe->funcid != ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       cast_agg_token_func_args(fe->args, fe->funcid, ctx);
     return node;

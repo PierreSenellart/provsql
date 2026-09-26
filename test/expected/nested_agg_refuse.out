@@ -67,6 +67,15 @@ e_times|e_sum
 remove_provenance
 
 (1 row)
+s
+4
+(1 row)
+s
+4
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
