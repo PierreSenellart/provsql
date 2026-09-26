@@ -170,8 +170,7 @@ limit it is:
       through a subquery) is the filter of a rank, and is reported as a
       ``gap`` instead;
     * a window function whose value is an offset into the partition
-      (``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``), a
-      bucket of ranks (``ntile``) or an
+      (``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``) or an
       aggregate over a frame counted in rows or groups without spanning the
       partition, all decided by which rows are present;
     * a recursion outside the shape the fixpoint is defined for.

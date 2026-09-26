@@ -109,6 +109,17 @@ SELECT * FROM wa_report('percent_rank, first of its partition',
   'percent_rank() OVER (PARTITION BY g ORDER BY x)', 'v = 0');
 SELECT * FROM wa_report('percent_rank, whole table, descending',
   'percent_rank() OVER (ORDER BY x DESC)', 'v >= 0.5');
+
+-- ntile(n) is SQL's integer arithmetic over N and the row number k:
+-- GREATEST((k-1)/(q+1), (k-1-r)/(GREATEST(N, n)/n)) + 1, with q = N/n and
+-- r = N - n*q, the first r buckets holding one row more.  Ordered on (x, id),
+-- no two rows tie, and the row number is SQL's own in every world.
+SELECT * FROM wa_report('ntile(2) over a partition',
+  'ntile(2) OVER (PARTITION BY g ORDER BY x, id)', 'v = 2');
+SELECT * FROM wa_report('ntile(4), whole table',
+  'ntile(4) OVER (ORDER BY x, id)', 'v >= 3');
+SELECT * FROM wa_report('ntile(3), more buckets than rows in a partition',
+  'ntile(3) OVER (PARTITION BY g ORDER BY x DESC, id)', 'v = 1');
 SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',
@@ -161,12 +172,11 @@ SELECT remove_provenance('wa_sorted');
 SELECT * FROM wa_sorted;
 
 -- Not tracked, with a warning: each row keeps its token, the value is an
--- opaque scalar.  Offset functions, ntile, positional frames, and windows over
+-- opaque scalar.  Offset functions, positional frames, and windows over
 -- the groups of an aggregation.
 CREATE TABLE wa_untracked AS
   SELECT id,
          lag(x) OVER (PARTITION BY g ORDER BY x, id) AS prev,
-         ntile(2) OVER (PARTITION BY g ORDER BY x, id) AS half,
          sum(x) OVER (PARTITION BY g ORDER BY x, id ROWS 1 PRECEDING) AS last2
   FROM wa;
 SELECT remove_provenance('wa_untracked');

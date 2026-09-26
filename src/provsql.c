@@ -5852,6 +5852,16 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
     return agg_arith_strict_null_gate(((OpExpr *)node)->args,
                                       agg_token_division_args(node, constants),
                                       constants, want_null);
+  /* Arithmetic over agg_tokens not swapped onto its agg_token operator yet
+   * (a GREATEST or a CASE is lowered before the target list swaps the
+   * arithmetic below it: count(*) + GREATEST(sum(x), 2) inside another
+   * GREATEST): read as the swap would make it, as for a function above. */
+  if (IsA(node, OpExpr)) {
+    Node *swapped = try_swap_agg_arith((OpExpr *)copyObject(node), constants);
+
+    if (swapped != NULL && exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+      return agg_expr_null_gate(swapped, constants, want_null);
+  }
   return NULL;
 }
 
@@ -7744,6 +7754,37 @@ static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants
   return ce;
 }
 
+/** @brief An arm of a GREATEST / LEAST, a COALESCE, a NULLIF or a CASE
+ *  branch that is arithmetic over aggregates, swapped onto its agg_token
+ *  operator where it is not yet: the target list swaps arithmetic after
+ *  these are lowered, so without this an arm such as
+ *  @c "count(*) + GREATEST(sum(x), 2)" would look like a plain value to the
+ *  lowering of the GREATEST around it, which would then be frozen. */
+static Node *swap_agg_arith_arm(Node *n, const constants_t *constants) {
+  if (n != NULL && IsA(n, OpExpr) &&
+      exprType(n) != constants->OID_TYPE_AGG_TOKEN) {
+    OpExpr *op = (OpExpr *)copyObject(n);
+    Node *swapped;
+    ListCell *lc;
+    /* Bottom up: an operand that is itself arithmetic over aggregates
+     * ((b - r) / (GREATEST(n, 2) / 2)) is swapped first, or the swap of its
+     * parent would read it as a plain value. */
+    foreach (lc, op->args)
+      lfirst(lc) = swap_agg_arith_arm((Node *)lfirst(lc), constants);
+    swapped = try_swap_agg_arith(op, constants);
+    if (swapped != NULL && exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+      return swapped;
+  }
+  return n;
+}
+
+/** @brief @c swap_agg_arith_arm over each element of @p args. */
+static void swap_agg_arith_arms(List *args, const constants_t *constants) {
+  ListCell *lc;
+  foreach (lc, args)
+    lfirst(lc) = swap_agg_arith_arm((Node *)lfirst(lc), constants);
+}
+
 /* Target-list mutator: lower each aggregate-carrier searched CASE into an
  * agg_case gate_case.  Sub-expressions are mutated first so a CASE nested in a
  * branch value lowers before its parent wraps it. */
@@ -7754,33 +7795,51 @@ rewrite_agg_case_mutator(Node *node, void *context)
 
   if (node == NULL)
     return NULL;
-  if (IsA(node, CaseExpr) && case_is_agg_carrier((CaseExpr *)node, constants)) {
+  if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg == NULL) {
     CaseExpr *ce = (CaseExpr *)expression_tree_mutator(
       node, rewrite_agg_case_mutator, context);
-    Node *lowered = build_agg_case(ce, constants);
+    ListCell *lc;
+    Node *lowered;
+    foreach (lc, ce->args) {
+      CaseWhen *cw = (CaseWhen *)lfirst(lc);
+      cw->result = (Expr *)swap_agg_arith_arm((Node *)cw->result, constants);
+    }
+    ce->defresult = (Expr *)swap_agg_arith_arm((Node *)ce->defresult, constants);
+    if (!case_is_agg_carrier(ce, constants))
+      return (Node *)ce;
+    lowered = build_agg_case(ce, constants);
     return lowered != NULL ? lowered : (Node *)ce;
   }
   if (IsA(node, MinMaxExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     MinMaxExpr *mm = (MinMaxExpr *)expression_tree_mutator(
       node, rewrite_agg_case_mutator, context);
-    CaseExpr *ce = minmax_agg_to_case(mm, constants);
-    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+    CaseExpr *ce;
+    Node *lowered;
+    swap_agg_arith_arms(mm->args, constants);
+    ce = minmax_agg_to_case(mm, constants);
+    lowered = ce != NULL && case_is_agg_carrier(ce, constants)
       ? build_agg_case(ce, constants) : NULL;
     return lowered != NULL ? lowered : (Node *)mm;
   }
   if (IsA(node, NullIfExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     NullIfExpr *ni = (NullIfExpr *)expression_tree_mutator(
       node, rewrite_agg_case_mutator, context);
-    CaseExpr *ce = nullif_agg_to_case(ni, constants);
-    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+    CaseExpr *ce;
+    Node *lowered;
+    swap_agg_arith_arms(ni->args, constants);
+    ce = nullif_agg_to_case(ni, constants);
+    lowered = ce != NULL && case_is_agg_carrier(ce, constants)
       ? build_agg_case(ce, constants) : NULL;
     return lowered != NULL ? lowered : (Node *)ni;
   }
   if (IsA(node, CoalesceExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     CoalesceExpr *co = (CoalesceExpr *)expression_tree_mutator(
       node, rewrite_agg_case_mutator, context);
-    CaseExpr *ce = coalesce_agg_to_case(co, constants);
-    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+    CaseExpr *ce;
+    Node *lowered;
+    swap_agg_arith_arms(co->args, constants);
+    ce = coalesce_agg_to_case(co, constants);
+    lowered = ce != NULL && case_is_agg_carrier(ce, constants)
       ? build_agg_case(ce, constants) : NULL;
     return lowered != NULL ? lowered : (Node *)co;
   }
@@ -27590,6 +27649,80 @@ static Node *cume_dist_mutator(Node *node, void *cx) {
     ce->location = -1;
     ctx->rewritten = true;
     return (Node *)ce;
+  }
+  /* ntile(n) with k - 1 the rows strictly before the current row's peers,
+   * q = N / n and r = N - n * q (the first r buckets hold q + 1 rows):
+   *   GREATEST((k - 1) / (q + 1), (k - 1 - r) / (GREATEST(N, n) / n)) + 1
+   * which is SQL's bucket, written without a condition of its own: the second
+   * term decides past the r larger buckets, where q >= 1 and the divisor is q;
+   * before them, or where N < n and the divisor is 1, it is the smaller.
+   * Peers, which SQL numbers in no particular order, share the bucket of
+   * their rank, as row_number() is read. */
+  if (IsA(node, WindowFunc) && ((WindowFunc *)node)->winfnoid == F_NTILE) {
+    WindowFunc *wf = (WindowFunc *)node;
+    WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+    Node *narg;
+    Const *nc;
+    int64 n;
+    Node *before, *N, *q, *r, *t1, *t2, *res;
+    MinMaxExpr *inner, *outer;
+    Index w0, w1;
+
+    if (wc == NULL || (wc->frameOptions & FRAMEOPTION_NONDEFAULT) != 0 ||
+        list_length(wf->args) != 1) {
+      ctx->declined = true;
+      return node;
+    }
+    narg = strip_implicit_coercions((Node *)linitial(wf->args));
+    if (!IsA(narg, Const) || ((Const *)narg)->constisnull ||
+        exprType(narg) != INT4OID) {
+      ctx->declined = true;
+      return node;
+    }
+    nc = (Const *)narg;
+    n = DatumGetInt32(nc->constvalue);
+    if (n <= 0) {               /* SQL's error, left to SQL */
+      ctx->declined = true;
+      return node;
+    }
+    w0 = partition_only_winref(ctx->q, wc);
+    w1 = before_peers_winref(ctx->q, wc);
+#define PROVSQL_I8(v) ((Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64), \
+                                         Int64GetDatum(v), false, FLOAT8PASSBYVAL))
+    before = (Node *)window_count_star(w1);
+    N = (Node *)window_count_star(w0);
+    q = build_binop("/", copyObject(N), PROVSQL_I8(n));
+    r = build_binop("-", copyObject(N),
+                    build_binop("*", PROVSQL_I8(n), copyObject(q)));
+    t1 = build_binop("/", copyObject(before),
+                     build_binop("+", copyObject(q), PROVSQL_I8(1)));
+    inner = makeNode(MinMaxExpr);
+    inner->minmaxtype = INT8OID;
+    inner->minmaxcollid = InvalidOid;
+    inner->inputcollid = InvalidOid;
+    inner->op = IS_GREATEST;
+    inner->args = list_make2(copyObject(N), PROVSQL_I8(n));
+    inner->location = -1;
+    t2 = build_binop("/", build_binop("-", copyObject(before), r),
+                     build_binop("/", (Node *)inner, PROVSQL_I8(n)));
+    outer = makeNode(MinMaxExpr);
+    outer->minmaxtype = INT8OID;
+    outer->minmaxcollid = InvalidOid;
+    outer->inputcollid = InvalidOid;
+    outer->op = IS_GREATEST;
+    outer->args = list_make2(t1, t2);
+    outer->location = -1;
+    res = build_binop("+", (Node *)outer, PROVSQL_I8(1));
+#undef PROVSQL_I8
+    /* ntile answers in integer */
+    res = coerce_to_target_type(NULL, res, INT8OID, INT4OID, -1,
+                                COERCION_EXPLICIT, COERCE_EXPLICIT_CAST, -1);
+    if (res == NULL) {
+      ctx->declined = true;
+      return node;
+    }
+    ctx->rewritten = true;
+    return res;
   }
 #endif
   return expression_tree_mutator(node, cume_dist_mutator, cx);

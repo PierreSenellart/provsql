@@ -63,6 +63,15 @@ q|exact|probabilities
 percent_rank, whole table, descending|t|{0.143120000,0.027040000,0.057120000,0.000000000,0.595680000,0.835200000}
 (1 row)
 q|exact|probabilities
+ntile(2) over a partition|t|{0.000000000,0.018000000,0.280000000,0.352000000,0.000000000,0.540000000}
+(1 row)
+q|exact|probabilities
+ntile(4), whole table|t|{0.048600000,0.224640000,0.557200000,0.371040000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+ntile(3), more buckets than rows in a partition|t|{0.018000000,0.328000000,0.210000000,0.400000000,0.060000000,0.900000000}
+(1 row)
+q|exact|probabilities
 share of the partition|t|{0.078000000,0.360000000,0.560000000,0.400000000,0.600000000,0.900000000}
 (1 row)
 q|exact|probabilities
@@ -123,13 +132,13 @@ DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 remove_provenance
 
 (1 row)
-id|prev|half|last2
-1||1|10
-2|10|1|30
-3|20|2|40
-4|20|2|50
-5||1|5
-6|5|2|12
+id|prev|last2
+1||10
+2|10|30
+3|20|40
+4|20|50
+5||5
+6|5|12
 (6 rows)
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-not-tracked; scope: gap

@@ -450,6 +450,21 @@ void resolveToPlus(gate_t g, std::vector<gate_t> w) {
 }
 
 /**
+ * @brief Rewrite a gate as the @c gate_case over @p w (guards and values,
+ *        then the default).
+ *
+ * Used by @c CaseCmpExpander to hoist a guarded selection out of the
+ * arithmetic a comparison reads.  Clears infos and extra (an arithmetic
+ * gate's recorded value no longer applies) and installs the new wires.
+ */
+void resolveToCase(gate_t g, std::vector<gate_t> w) {
+  setGateType(g, gate_case);
+  getWires(g) = std::move(w);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Allocate a fresh @c gate_input gate carrying probability
  *        @p p, with a unique synthetic UUID so subsequent
  *        @c BooleanCircuit conversion does not collide multiple

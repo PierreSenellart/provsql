@@ -885,3 +885,32 @@ SET provsql.active = on;
 DROP TABLE agg_nz_r;
 SELECT remove_provenance('agg_nz');
 DROP TABLE agg_nz;
+
+-- A GREATEST nested in arithmetic inside another GREATEST: the arithmetic
+-- below the outer one is read as the agg_token arithmetic it becomes, so the
+-- outer GREATEST is tracked, and a comparison on it is read with the inner
+-- selection brought out of the arithmetic.  Group 1 holds v = 1 and 2, group 2
+-- v = 3, each row at one half: count + GREATEST(sum, 2) is 3 with one row of
+-- group 1, 5 with both, and 4 for group 2.
+CREATE TABLE agg_ng(g int, v int);
+INSERT INTO agg_ng VALUES (1, 1), (1, 2), (2, 3);
+SELECT add_provenance('agg_ng');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_ng; END $$;
+CREATE TABLE agg_ng_r AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 6) AS p_gt3
+  FROM (SELECT g, GREATEST(count(*) + GREATEST(sum(v), 2), 0) AS x
+        FROM agg_ng GROUP BY g) z
+  WHERE x > 3;
+SELECT remove_provenance('agg_ng_r');
+SELECT * FROM agg_ng_r ORDER BY g;
+DROP TABLE agg_ng_r;
+CREATE TABLE agg_ng_r AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 6) AS p_eq3
+  FROM (SELECT g, GREATEST(count(*) + GREATEST(sum(v), 2), 0) AS x
+        FROM agg_ng GROUP BY g) z
+  WHERE x = 3;
+SELECT remove_provenance('agg_ng_r');
+SELECT * FROM agg_ng_r ORDER BY g;
+DROP TABLE agg_ng_r;
+SELECT remove_provenance('agg_ng');
+DROP TABLE agg_ng;
