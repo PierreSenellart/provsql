@@ -12520,6 +12520,10 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
 
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery = q;
+  /* The set operation is now one level below the query that deduplicates it:
+   * what its arms read from an enclosing query (the outer row of a LATERAL
+   * subquery, of a correlated body) is that much further up. */
+  IncrementVarSublevelsUp((Node *)q, 1, 1);
   /* The columns of the set operation, as its target list has them now: the
    * provsql columns of its branches are already removed from it, wherever
    * they were, so the names and positions are no longer those of the

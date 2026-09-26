@@ -112,6 +112,18 @@ DROP TABLE na_r;
 SELECT r.rname FROM ncr r, ncc c
  WHERE NOT EXISTS (SELECT pizza FROM ncs WHERE rname = r.rname
                    EXCEPT ALL SELECT pizza FROM ncl WHERE cname = c.cname);
+-- The same emptiness asked of a count in a LATERAL subquery: the EXCEPT is
+-- deduplicated one level further down, and the arms' correlation follows it.
+-- Same answer as the NOT EXISTS above.
+CREATE TABLE na_r AS SELECT r.rname, c.cname, probability(provenance()) AS p
+  FROM ncr r, ncc c,
+       LATERAL (SELECT count(*) AS n
+                  FROM (SELECT pizza FROM ncs WHERE rname = r.rname
+                        EXCEPT SELECT pizza FROM ncl WHERE cname = c.cname) s) l
+ WHERE l.n = 0;
+SELECT remove_provenance('na_r');
+SELECT rname, cname, round(p::numeric, 6) AS p FROM na_r ORDER BY rname, cname;
+DROP TABLE na_r;
 DROP TABLE ncr, ncc, ncs, ncl;
 DROP TABLE nau, nap, nac, nbu, nbp, nbc;
 DROP SCHEMA nested_antijoin_test CASCADE;
