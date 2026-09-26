@@ -684,8 +684,9 @@ aggregates.
 Reading the truth of a comparison
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A comparison of an aggregate against a constant has one truth value per
-world in the same way, so reading one in the select list, or as the
+A comparison of an aggregate against a constant, or against a column of
+its group (a target to meet), has one truth value per world in the same
+way, so reading one in the select list, or as the
 condition of a ``CASE`` whose branches are not aggregates, explodes each
 row into the truth values it takes:
 
@@ -717,12 +718,13 @@ zero, which no operand's nullness tells.
 No value of the aggregate has to be enumerated, so unlike grouping by the
 value, this works for a ``sum()`` over any column and for an ``avg()``. It
 applies to ``count``, ``sum``, ``avg``, ``min``, ``max`` and
-:sqlfunc:`choose` compared against a constant, with or without a ``GROUP
-BY``. An aggregation without one has its row even in the world where the
+:sqlfunc:`choose` compared against a constant or an expression over the
+grouping columns, with or without a ``GROUP BY``; a column can be ``NULL``,
+and then the comparison is unknown, in the row of its own. An aggregation without one has its row even in the world where the
 table is empty, in the row of the truth value the comparison has there
 (``count(*) > 1`` is false over no row, ``sum(x) > 1`` unknown).  The
 following are read as plain values instead, with a warning: a comparison
-between two aggregates, one against a column, one over an aggregate whose
+between two aggregates, one over an aggregate whose
 ``NULL`` means something other than "no value" (``stddev``, ``NULL`` over
 a single row), and one in a query that also computes a window function.
 None of this applies in a ``HAVING`` condition, which is already the

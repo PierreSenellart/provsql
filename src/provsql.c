@@ -22948,10 +22948,11 @@ static List *agg_values_read_as_data(const constants_t *constants, Query *q,
  * survive with their annotation.  A group whose comparison can hold in no
  * world keeps only its false copy (having_possible prunes the other).
  *
- * Only a comparison against a constant, and only in the select list: a
- * comparison between two aggregates has no such two-row reading (the value of
- * each side would have to be enumerated), and one in HAVING is already the
- * provenance of the group.  A comparison inside a numeric CASE whose branches
+ * Only a comparison against something one value per group, the same in every
+ * world -- a constant, or an expression over the grouping columns, such as a
+ * target to meet -- and only in the select list: a comparison between two
+ * aggregates is not taken yet, though the HAVING lowering reads one, and one
+ * in HAVING is already the provenance of the group.  A comparison inside a numeric CASE whose branches
  * are aggregates is left to the agg_case lowering, which keeps one row.
  * ------------------------------------------------------------------------- */
 
@@ -22985,10 +22986,30 @@ static bool node_varies_walker(Node *n, void *ctx) {
  *                 group that exists, so that the explosion needs its third,
  *                 unknown row.
  */
+/**
+ * @brief Walker: what makes an expression vary within a group, or between
+ *        the worlds of one: an aggregate, a window, a subquery, a parameter, a
+ *        reference to an outer query, a volatile function.
+ *
+ * The columns of the block itself are allowed: outside an aggregate, SQL
+ * lets a grouped block read only its grouping columns (or what depends on
+ * them), which are one value per group, the same in every world.
+ */
+static bool varies_in_group_walker(Node *n, void *ctx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, Aggref) || IsA(n, GroupingFunc) || IsA(n, WindowFunc) ||
+      IsA(n, SubLink) || IsA(n, Param))
+    return true;
+  if (IsA(n, Var))
+    return ((Var *)n)->varlevelsup != 0;
+  return expression_tree_walker(n, varies_in_group_walker, ctx);
+}
+
 static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
-                                     bool *nullable) {
+                                     bool *nullable, Node **other_out) {
   OpExpr *op;
-  Node *l, *r, *agg_side;
+  Node *l, *r, *agg_side, *other;
   bool l_agg, r_agg;
   Aggref *ar;
 
@@ -23005,9 +23026,11 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
   r_agg = contain_aggs_of_level(r, 0);
   if (l_agg == r_agg)  /* two aggregates, or none */
     return false;
-  /* The other side must be the same in every world: a constant, not a
-   * grouping column (whose comparison is data already) and not a subquery. */
-  if (node_varies_walker(l_agg ? r : l, NULL))
+  /* The other side must be one value per group, the same in every world: a
+   * constant, or an expression over the grouping columns (a target to meet),
+   * but no subquery, parameter or volatile function. */
+  other = l_agg ? r : l;
+  if (varies_in_group_walker(other, NULL) || contain_volatile_functions(other))
     return false;
 
   agg_side = peel_agg_casts(l_agg ? l : r);
@@ -23032,10 +23055,16 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
     }
     if (!ok)
       return false;
+    /* A column of the group can be NULL, which makes the comparison unknown
+     * whatever the aggregate: the unknown row is needed then too. */
+    if (contain_vars_of_level(other, 0))
+      can_be_null = true;
     if (agg_out != NULL)
       *agg_out = ar;
     if (nullable != NULL)
       *nullable = can_be_null;
+    if (other_out != NULL)
+      *other_out = other;
   }
   return true;
 }
@@ -23044,9 +23073,32 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
 typedef struct agg_cmp_truth_ctx {
   Node *found;       /**< The comparison, once found. */
   Aggref *agg;       /**< The aggregate it compares. */
-  bool nullable;     /**< Whether that aggregate can have no value. */
+  bool nullable;     /**< Whether the comparison can be unknown. */
   const constants_t *constants; /**< To recognise @c plain(). */
+  Node *other;       /**< What the aggregate is compared with. */
 } agg_cmp_truth_ctx;
+
+/**
+ * @brief The condition of the unknown row of a comparison's truth: the
+ *        aggregate has no value, or what it is compared with is NULL (a
+ *        column of the group; a constant never is).
+ */
+static Node *agg_cmp_unknown_condition(const agg_cmp_truth_ctx *found) {
+  NullTest *anull = makeNode(NullTest);
+  anull->arg = (Expr *)copyObject(found->agg);
+  anull->nulltesttype = IS_NULL;
+  anull->argisrow = false;
+  anull->location = -1;
+  if (found->other != NULL && contain_vars_of_level(found->other, 0)) {
+    NullTest *onull = makeNode(NullTest);
+    onull->arg = (Expr *)copyObject(found->other);
+    onull->nulltesttype = IS_NULL;
+    onull->argisrow = false;
+    onull->location = -1;
+    return (Node *)makeBoolExpr(OR_EXPR, list_make2(anull, onull), -1);
+  }
+  return (Node *)anull;
+}
 
 /**
  * @brief Find the first comparison of an aggregate against a constant.
@@ -23087,7 +23139,7 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
         return false;
     }
   }
-  if (agg_cmp_against_constant(n, &ctx->agg, &ctx->nullable)) {
+  if (agg_cmp_against_constant(n, &ctx->agg, &ctx->nullable, &ctx->other)) {
     ctx->found = n;
     return true;
   }
@@ -23106,6 +23158,7 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
     ctx->found = n;
     ctx->agg = NULL;
     ctx->nullable = false;
+    ctx->other = NULL;
     return true;
   }
   return expression_tree_walker(n, agg_cmp_truth_walker, (void *)ctx);
@@ -23136,7 +23189,7 @@ static Node *agg_cmp_subst_mutator(Node *n, void *context) {
  */
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL};
   agg_cmp_subst_ctx subst;
   ListCell *lc;
   RangeTblEntry *rte;
@@ -23261,23 +23314,19 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
                makeBoolExpr(NOT_EXPR, list_make1(copyObject(b)), -1)), -1);
   pos = (Node *)makeBoolExpr(OR_EXPR, list_make2(pos, neg), -1);
   if (found.nullable) {
-    /* The unknown row: the aggregate has no value, which is the only way the
-     * comparison is neither true nor false, the constant never being NULL. */
+    /* The unknown row: the comparison is neither true nor false. */
     NullTest *bnull = makeNode(NullTest);
-    NullTest *anull = makeNode(NullTest);
 
     bnull->arg = (Expr *)copyObject(b);
     bnull->nulltesttype = IS_NULL;
     bnull->argisrow = false;
     bnull->location = -1;
-    anull->arg = (Expr *)copyObject(found.agg);
-    anull->nulltesttype = IS_NULL;
-    anull->argisrow = false;
-    anull->location = -1;
     pos = (Node *)makeBoolExpr(
       OR_EXPR,
       list_make2(pos, makeBoolExpr(AND_EXPR,
-                                   list_make2(bnull, anull), -1)), -1);
+                                   list_make2(bnull,
+                                              agg_cmp_unknown_condition(&found)),
+                                   -1)), -1);
   }
   q->havingQual = q->havingQual == NULL
     ? pos
@@ -23312,7 +23361,7 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
  */
 static Query *rewrite_explode_scalar_agg_cmp_truth(
   Query *q, const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL};
   List *arms = NIL;
   ListCell *lc;
   Node *cmp;
@@ -23341,8 +23390,8 @@ static Query *rewrite_explode_scalar_agg_cmp_truth(
     ListCell *lct;
 
     /* The truth this copy stands for, and the condition of its row: the
-     * comparison, its negation, or -- the only way it is neither -- the
-     * aggregate without a value, the constant never being NULL. */
+     * comparison, its negation, or what makes it neither (the aggregate
+     * without a value, or a column of the group NULL). */
     if (i == 0) {
       subst.truth = (Node *)makeBoolConst(true, false);
       cond = (Node *)copyObject(cmp);
@@ -23350,13 +23399,8 @@ static Query *rewrite_explode_scalar_agg_cmp_truth(
       subst.truth = (Node *)makeBoolConst(false, false);
       cond = (Node *)makeBoolExpr(NOT_EXPR, list_make1(copyObject(cmp)), -1);
     } else {
-      NullTest *anull = makeNode(NullTest);
-      anull->arg = (Expr *)copyObject(found.agg);
-      anull->nulltesttype = IS_NULL;
-      anull->argisrow = false;
-      anull->location = -1;
       subst.truth = (Node *)makeBoolConst(false, true);
-      cond = (Node *)anull;
+      cond = agg_cmp_unknown_condition(&found);
     }
     subst.found = cmp;
 

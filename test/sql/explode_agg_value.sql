@@ -371,18 +371,29 @@ SELECT remove_provenance('ect_case');
 SELECT g, lbl, round(p::numeric, 6) AS p FROM ect_case ORDER BY g, lbl;
 DROP TABLE ect_case;
 -- Declined, and the value read as plain SQL reads it (one row per group, no
--- (*) marker): two aggregates compared with each other, an aggregate whose
--- NULL-ness is not the reading of "no value" (stddev over a single row), and a
--- comparison against a column.
+-- (*) marker): two aggregates compared with each other, and an aggregate whose
+-- NULL-ness is not the reading of "no value" (stddev over a single row).
 SET client_min_messages = error;
 CREATE TABLE ect_no AS
-  SELECT g, count(v) > sum(v) AS f1, stddev(v) > 1 AS f2, count(v) > g AS f3
+  SELECT g, count(v) > sum(v) AS f1, stddev(v) > 1 AS f2
   FROM ect GROUP BY g;
 RESET client_min_messages;
 SELECT remove_provenance('ect_no');
-SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2,
-       coalesce(f3::text,'NULL') AS f3 FROM ect_no ORDER BY g;
+SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2
+FROM ect_no ORDER BY g;
 DROP TABLE ect_no;
+-- A comparison against a grouping column is one value per group, the same in
+-- every world, as a constant is: exploded like one.  count(v) > g holds only
+-- for group 1 with both its rows (0.25); it is false for group 1 otherwise
+-- (0.5), for group 2, whose count is always 0 (0.75), and for group 3 (0.5).
+-- The unknown row -- the column NULL -- holds in no world here.
+CREATE TABLE ect_col AS
+  SELECT g, count(v) > g AS f, probability(provenance()) AS p
+  FROM ect GROUP BY g;
+SELECT remove_provenance('ect_col');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_col ORDER BY g, f;
+DROP TABLE ect_col;
 -- A scalar aggregation, whose single row exists in every world -- including
 -- the one where no row of the table is -- cannot take the truth as a grouping
 -- key, which would lose that world's row: it is exploded into one copy of the
