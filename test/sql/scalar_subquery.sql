@@ -1587,3 +1587,43 @@ SELECT id, p FROM qe_r ORDER BY id;
 DROP TABLE qe_r;
 SELECT remove_provenance('qe');
 DROP TABLE qe;
+
+-- A comparison of an aggregate column of the outer query with a scalar
+-- subquery (TPC-H Q15: the supplier whose total revenue is the largest).  The
+-- comparison stays in the outer WHERE, over the subquery's value: moved into
+-- the subquery it would read the outer total as a plain value, and it did,
+-- answering every group with probability 0.  Five rows at one half; the
+-- probabilities are those of the enumeration of the 32 worlds.
+CREATE TABLE qm(id int, k int, x int);
+INSERT INTO qm VALUES (1, 1, 5), (2, 1, 3), (3, 2, 7), (4, 3, 2), (5, 3, 6);
+SELECT add_provenance('qm');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM qm; END $$;
+CREATE TABLE qm_r AS
+  SELECT v.k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT k, sum(x) AS tot FROM qm GROUP BY k) v
+  WHERE v.tot = (SELECT max(tot)
+                 FROM (SELECT k, sum(x) AS tot FROM qm GROUP BY k) v2);
+SELECT remove_provenance('qm_r');
+SELECT k, p FROM qm_r ORDER BY k;
+DROP TABLE qm_r;
+SELECT remove_provenance('qm');
+DROP TABLE qm;
+
+-- A HAVING comparing with an uncorrelated scalar subquery (TPC-H Q11: the
+-- parts whose value is above a fraction of the total): the aggregation moves
+-- to a subquery and the comparison to the WHERE over it, an aggregate column
+-- against the subquery's one-row aggregation.  Five rows at one half; the
+-- probabilities are those of the enumeration of the 32 worlds.
+CREATE TABLE qh(id int, k int, x int);
+INSERT INTO qh VALUES (1, 1, 5), (2, 1, 3), (3, 2, 7), (4, 3, 2), (5, 3, 6);
+SELECT add_provenance('qh');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM qh; END $$;
+CREATE TABLE qh_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT k FROM qh GROUP BY k
+        HAVING sum(x) > (SELECT sum(x) * 0.3 FROM qh)) z;
+SELECT remove_provenance('qh_r');
+SELECT k, p FROM qh_r ORDER BY k;
+DROP TABLE qh_r;
+SELECT remove_provenance('qh');
+DROP TABLE qh;

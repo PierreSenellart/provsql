@@ -20102,6 +20102,24 @@ static bool reads_outer_aggregate_walker(Node *node, void *cx) {
   return expression_tree_walker(node, reads_outer_aggregate_walker, cx);
 }
 
+/** @brief Context for @c reads_own_aggregate_walker. */
+typedef struct reads_own_agg_ctx {
+  const constants_t *constants;
+  Query *q;
+  SubLink *skip; /* the subquery being moved, not read here */
+} reads_own_agg_ctx;
+
+/** @brief Walker: does the expression read a column of @c q that is an
+ *  aggregate result (outside the subquery @c skip)? */
+static bool reads_own_aggregate_walker(Node *node, void *cx) {
+  reads_own_agg_ctx *c = (reads_own_agg_ctx *)cx;
+  if (node == NULL || node == (Node *)c->skip)
+    return false;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0)
+    return expr_is_aggregate_result(c->constants, c->q, node);
+  return expression_tree_walker(node, reads_own_aggregate_walker, cx);
+}
+
 /** @brief Add @p L to @p q's FROM as a @c LATERAL subquery, and return the
  *  Var reading its one column. */
 static Var *oj_add_lateral(Query *q, Query *L) {
@@ -20400,6 +20418,27 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       }
       if (pred == NULL)
         return false;
+      {
+        /* A comparison that reads an aggregate column of this level (a
+         * group's total against the largest total, TPC-H Q15) cannot move
+         * into the subquery, where that column would be a plain value: it
+         * stays here, over the subquery's value, two aggregates at one
+         * level. */
+        reads_own_agg_ctx oc;
+        oc.constants = constants;
+        oc.q = q;
+        oc.skip = (SubLink *)hole;
+        if (reads_own_aggregate_walker(pred, &oc)) {
+          rc.target = (SubLink *)hole;
+          rc.repl = (Node *)oj_add_lateral(q, L);
+          pred = oj_replace_sublink_mut(pred, &rc);
+          kept = lappend(kept, pred);
+          q->jointree->quals =
+            list_length(kept) == 1 ? (Node *)linitial(kept)
+                                   : (Node *)makeBoolExpr(AND_EXPR, kept, -1);
+          return true;
+        }
+      }
       IncrementVarSublevelsUp(pred, 1, 0);
       rc.target = (SubLink *)hole;
       rc.repl = copyObject((Node *)((TargetEntry *)linitial(L->targetList))->expr);
@@ -20424,6 +20463,18 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       Const *hole = makeNullConst(BOOLOID, -1, InvalidOid);
       TargetEntry *lte = (TargetEntry *)linitial(L->targetList);
       Node *e;
+      reads_own_agg_ctx oc;
+      oc.constants = constants;
+      oc.q = q;
+      oc.skip = sl;
+      /* An expression reading an aggregate column of this level stays here,
+       * over the subquery's value, as a comparison in WHERE does above. */
+      if (reads_own_aggregate_walker((Node *)sl_te->expr, &oc)) {
+        rc.target = sl;
+        rc.repl = (Node *)oj_add_lateral(q, L);
+        sl_te->expr = (Expr *)oj_replace_sublink_mut((Node *)sl_te->expr, &rc);
+        return true;
+      }
       rc.target = sl;
       rc.repl = (Node *)hole;
       e = oj_replace_sublink_mut((Node *)sl_te->expr, &rc);
@@ -27793,6 +27844,89 @@ static Query *rewrite_cume_dist(const constants_t *constants, Query *q) {
   return q;
 }
 
+/** @brief Walker: does the expression hold a SubLink whose body reads the
+ *  query it is in (a correlated one)? */
+static bool correlated_sublink_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        reads_outside_walker(sl->subselect, 0))
+      return true;
+    return correlated_sublink_walker((Node *)sl->testexpr, cx);
+  }
+  return expression_tree_walker(node, correlated_sublink_walker, cx);
+}
+
+/**
+ * @brief Compute the aggregation of @p q in a subquery when its @c HAVING
+ *        compares with an uncorrelated subquery, the comparison moving to
+ *        the @c WHERE of @p q over the subquery's columns.
+ *
+ * @c "GROUP BY k HAVING sum(x) > (SELECT sum(x) * 0.0001 FROM …)" (TPC-H Q11)
+ * is the grouped relation filtered by a comparison with a one-row
+ * aggregation: once the grouping is a subquery, the comparison is a
+ * condition of the query over it, an aggregate column against an
+ * uncorrelated scalar subquery, which the rewriting of @c WHERE reads.  The
+ * other conditions of the @c HAVING stay with the grouping.  A correlated
+ * subquery, whose references to the grouping would have to follow it, is
+ * left alone.
+ *
+ * @return @p q rewritten, or @c NULL leaving it alone.
+ */
+static Query *split_having_sublinks(const constants_t *constants, Query *q) {
+  List *conjs, *inner_conds = NIL, *outer_conds = NIL;
+  ListCell *lc;
+  int nbefore, i;
+  Query *split;
+
+  (void)constants;
+  if (q->commandType != CMD_SELECT || q->havingQual == NULL ||
+      !(q->hasAggs || q->groupClause != NIL) || q->groupingSets != NIL ||
+      q->setOperations != NULL || q->cteList != NIL || q->hasWindowFuncs ||
+      q->distinctClause != NIL || q->rowMarks != NIL || q->jointree == NULL ||
+      !checkExprHasSubLink(q->havingQual))
+    return NULL;
+  conjs = make_ands_implicit((Expr *)copyObject(q->havingQual));
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    if (checkExprHasSubLink(c)) {
+      if (correlated_sublink_walker(c, NULL))
+        return NULL;
+      outer_conds = lappend(outer_conds, c);
+    } else
+      inner_conds = lappend(inner_conds, c);
+  }
+  /* The conditions ride along as junk entries of the target list, which the
+   * split maps onto the subquery's columns, and come back as the WHERE. */
+  nbefore = list_length(q->targetList);
+  q->havingQual = inner_conds == NIL
+    ? NULL : (Node *)make_ands_explicit(inner_conds);
+  i = nbefore;
+  foreach (lc, outer_conds)
+    q->targetList = lappend(q->targetList,
+                            makeTargetEntry((Expr *)lfirst(lc), ++i, NULL,
+                                            true));
+  split = split_aggregation_into_subquery(q);
+  if (split == NULL)
+    return NULL;
+  {
+    List *quals = NIL, *tl = NIL;
+    i = 0;
+    foreach (lc, split->targetList) {
+      if (i++ < nbefore)
+        tl = lappend(tl, lfirst(lc));
+      else
+        quals = lappend(quals, ((TargetEntry *)lfirst(lc))->expr);
+    }
+    split->targetList = tl;
+    split->jointree->quals = (Node *)make_ands_explicit(quals);
+    split->hasSubLinks = true;
+  }
+  return split;
+}
+
 static Query *split_window_over_aggregates(const constants_t *constants,
                                            Query *q) {
   if (!q->hasWindowFuncs || q->commandType != CMD_SELECT ||
@@ -28931,6 +29065,14 @@ static Query *process_query(const constants_t *constants, Query *q,
   }
   /* A DISTINCT over the aggregates of this level: the aggregation moves to a
    * subquery, the DISTINCT deduplicates the values it takes. */
+  /* A HAVING comparing with an uncorrelated subquery: the aggregation
+   * moves to a subquery, the comparison to the WHERE over it. */
+  if (provsql_active && has_provenance(constants, q)) {
+    Query *split = split_having_sublinks(constants, q);
+    if (split)
+      return process_query(constants, split, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
   if (provsql_active && has_provenance(constants, q)) {
     Query *split = split_distinct_over_aggregates(constants, q);
     if (split)
