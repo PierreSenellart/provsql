@@ -5290,6 +5290,27 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     Aggref *arr = (Aggref *)list_nth(pa->args, 3);
     TargetEntry *te;
     FuncExpr *sm;
+    /* An aggregate over a window frame (replace_window_aggregations): its row
+     * is there whenever the frame's current row is, so a count, never NULL,
+     * is NOT NULL in every world where the row is -- which is what a GREATEST
+     * over it asks.  Any other aggregate's NULL-ness depends on which rows of
+     * its frame are there, which this reading does not follow: declined. */
+    if (IsA(arr, WindowFunc)) {
+      Oid fn = (Oid)DatumGetInt32(((Const *)linitial(pa->args))->constvalue);
+      NullTestType wntt = nt->nulltesttype;
+      FuncExpr *c;
+      if (fn != F_COUNT_ && fn != F_COUNT_ANY)
+        return NULL;
+      if (negated)
+        wntt = (wntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
+      c = makeNode(FuncExpr);
+      c->funcid = wntt == IS_NULL ? constants->OID_FUNCTION_GATE_ZERO
+                                 : constants->OID_FUNCTION_GATE_ONE;
+      c->funcresulttype = constants->OID_TYPE_UUID;
+      c->args = NIL;
+      c->location = -1;
+      return c;
+    }
     /* The semimod is the first argument; an ordered aggregate carries its sort
      * keys as further (junk) arguments. */
     if (!IsA(arr, Aggref) || arr->args == NIL)
@@ -27396,6 +27417,47 @@ static Index partition_only_winref(Query *q, WindowClause *wc) {
   return w0->winref;
 }
 
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+/**
+ * @brief The window with the partition and ordering of @p wc whose frame is
+ *        the rows strictly before the current row's peers, creating it where
+ *        the query has none: what @c percent_rank counts.
+ *
+ * @c RANGE @c BETWEEN @c UNBOUNDED @c PRECEDING @c AND @c CURRENT @c ROW
+ * @c EXCLUDE @c GROUP: the default frame of an ordered window, which ends
+ * with the current row's last peer, less the current row and its peers.
+ */
+static Index before_peers_winref(Query *q, WindowClause *wc) {
+  const int fo = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
+                 FRAMEOPTION_BETWEEN |
+                 FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+                 FRAMEOPTION_END_CURRENT_ROW | FRAMEOPTION_EXCLUDE_GROUP;
+  ListCell *lc;
+  WindowClause *w1;
+  Index maxref = 0;
+
+  foreach (lc, q->windowClause) {
+    WindowClause *c = (WindowClause *)lfirst(lc);
+    if (c->frameOptions == fo &&
+        equal(c->partitionClause, wc->partitionClause) &&
+        equal(c->orderClause, wc->orderClause))
+      return c->winref;
+    if (c->winref > maxref)
+      maxref = c->winref;
+  }
+  w1 = (WindowClause *)copyObject(wc);
+  w1->name = NULL;
+  w1->refname = NULL;
+  w1->copiedOrder = false;
+  w1->frameOptions = fo;
+  w1->startOffset = NULL;
+  w1->endOffset = NULL;
+  w1->winref = maxref + 1;
+  q->windowClause = lappend(q->windowClause, w1);
+  return w1->winref;
+}
+#endif
+
 /** @brief @c count(*) over the window @p winref. */
 static WindowFunc *window_count_star(Index winref) {
   WindowFunc *wf = makeNode(WindowFunc);
@@ -27464,6 +27526,72 @@ static Node *cume_dist_mutator(Node *node, void *cx) {
     return (Node *)make_opclause(divop, FLOAT8OID, false, (Expr *)num,
                                  (Expr *)den, InvalidOid, InvalidOid);
   }
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  /* percent_rank() is (rank - 1) / (N - 1), and 0 where N = 1:
+   *   CASE WHEN N = 1 THEN 0 ELSE before / (N - 1) END
+   * with before the rows strictly before the current row's peers, counted
+   * over the frame that excludes them, and N the rows of the partition.  The
+   * condition is outermost, so that a comparison on the value is read branch
+   * by branch: a constant, and a ratio of two counts as cume_dist is. */
+  if (IsA(node, WindowFunc) &&
+      ((WindowFunc *)node)->winfnoid == F_PERCENT_RANK_) {
+    WindowFunc *wf = (WindowFunc *)node;
+    WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+    Index w0, w1;
+    Node *num, *den;
+    Oid divop, minusop, eqop;
+    Const *one;
+    CaseExpr *ce;
+    CaseWhen *cw;
+
+    if (wc == NULL || (wc->frameOptions & FRAMEOPTION_NONDEFAULT) != 0) {
+      ctx->declined = true;
+      return node;
+    }
+    divop = OpernameGetOprid(list_make1(makeString("/")), FLOAT8OID, FLOAT8OID);
+    minusop = OpernameGetOprid(list_make1(makeString("-")), INT8OID, INT8OID);
+    eqop = OpernameGetOprid(list_make1(makeString("=")), INT8OID, INT8OID);
+    if (!OidIsValid(divop) || !OidIsValid(minusop) || !OidIsValid(eqop)) {
+      ctx->declined = true;
+      return node;
+    }
+    w0 = partition_only_winref(ctx->q, wc);
+    w1 = before_peers_winref(ctx->q, wc);
+    one = makeConst(INT8OID, -1, InvalidOid, sizeof(int64), Int64GetDatum(1),
+                    false, FLOAT8PASSBYVAL);
+    num = coerce_to_target_type(NULL, (Node *)window_count_star(w1), INT8OID,
+                                FLOAT8OID, -1, COERCION_EXPLICIT,
+                                COERCE_EXPLICIT_CAST, -1);
+    den = coerce_to_target_type(
+      NULL,
+      (Node *)make_opclause(minusop, INT8OID, false,
+                            (Expr *)window_count_star(w0),
+                            (Expr *)copyObject(one), InvalidOid, InvalidOid),
+      INT8OID, FLOAT8OID, -1, COERCION_EXPLICIT, COERCE_EXPLICIT_CAST, -1);
+    if (num == NULL || den == NULL) {
+      ctx->declined = true;
+      return node;
+    }
+    cw = makeNode(CaseWhen);
+    cw->expr = make_opclause(eqop, BOOLOID, false,
+                             (Expr *)window_count_star(w0), (Expr *)one,
+                             InvalidOid, InvalidOid);
+    cw->result = (Expr *)makeConst(FLOAT8OID, -1, InvalidOid, sizeof(float8),
+                                   Float8GetDatum(0.0), false,
+                                   FLOAT8PASSBYVAL);
+    cw->location = -1;
+    ce = makeNode(CaseExpr);
+    ce->casetype = FLOAT8OID;
+    ce->casecollid = InvalidOid;
+    ce->arg = NULL;
+    ce->args = list_make1(cw);
+    ce->defresult = make_opclause(divop, FLOAT8OID, false, (Expr *)num,
+                                  (Expr *)den, InvalidOid, InvalidOid);
+    ce->location = -1;
+    ctx->rewritten = true;
+    return (Node *)ce;
+  }
+#endif
   return expression_tree_mutator(node, cume_dist_mutator, cx);
 }
 
@@ -29063,6 +29191,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (supported) {
       Expr *provenance;
       Expr *per_row;
+  bool windows_replaced = false; /* window aggregates lowered to agg_tokens */
       List *rv_cmps;
 
       /* Single unified pass over WHERE: each top-level conjunct is
@@ -29117,7 +29246,8 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (q->hasWindowFuncs &&
           (q->hasAggs || q->groupClause != NIL || q->groupingSets != NIL ||
            has_union || has_difference ||
-           !replace_window_aggregations(constants, q, prov_atts)))
+           !(windows_replaced =
+               replace_window_aggregations(constants, q, prov_atts))))
         if (unmarked_window_walker((Node *)q->targetList, (void *)constants)) {
           /* Reported per kind rather than per query: a query can hold a lag,
            * whose value no world but the actual one has, beside a window over
@@ -29144,6 +29274,11 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "evaluated as plain SQL, not tracked; provenance is "
                           "tracked per input row only", NULL);
         }
+
+      /* A GREATEST, CASE, COALESCE or NULLIF over the window aggregates just
+       * lowered: an agg_case, as over the aggregates of a GROUP BY above. */
+      if (windows_replaced)
+        rewrite_agg_cases(constants, q);
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */

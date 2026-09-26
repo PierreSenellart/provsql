@@ -171,7 +171,7 @@ limit it is:
       ``gap`` instead;
     * a window function whose value is an offset into the partition
       (``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``), a
-      ratio of ranks (``ntile``, ``percent_rank``) or an
+      bucket of ranks (``ntile``) or an
       aggregate over a frame counted in rows or groups without spanning the
       partition, all decided by which rows are present;
     * a recursion outside the shape the fixpoint is defined for.

@@ -474,13 +474,15 @@ which it equals when the ``ORDER BY`` of the window leaves no ties;
 with ties, which SQL itself does not order, the value shown and tracked
 is the rank, and a ``WARNING`` says so.
 
-``cume_dist()`` is tracked as well, as the ratio of two counts: the rows up
-to the current row's peers, over the rows of the partition. Its value is
-read in every world, and prints as SQL prints it.
+``cume_dist()`` and ``percent_rank()`` are tracked as well, as ratios of
+counts: for ``cume_dist``, the rows up to the current row's peers over the
+rows of the partition; for ``percent_rank``, the rows before the current
+row's peers over the other rows of the partition (0 in a partition of one
+row). Their values are read in every world.
 
 The other window functions still run, with a ``WARNING``: each row
 keeps the provenance of its input row, and the value is an opaque
-scalar. These are ``ntile``, ``percent_rank``, the offset
+scalar. These are ``ntile``, the offset
 functions (``lag``, ``lead``, ``first_value``, ``last_value``,
 ``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and the
 windows over aggregate results other than the ranks below (an aggregate

@@ -191,5 +191,11 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_CUME_DIST_ 3104
 #endif
 
+#ifndef F_PERCENT_RANK_
+/** @brief OID of the @c percent_rank() window function (pre-PG 14, where
+ *  @c fmgroids.h names it @c F_WINDOW_PERCENT_RANK). */
+#define F_PERCENT_RANK_ 3103
+#endif
+
 
 #endif /* COMPATIBILITY_H */

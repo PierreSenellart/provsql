@@ -201,7 +201,7 @@ Supported SQL constructs
    "``DISTINCT ON``", "", "", "", "", "", "", "", "", "", "✓"
    "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", "", "✓"
    "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", "", "✓"
-   "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist``)", "", "", "", "", "", "", "", "", "", "✓"
+   "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist`` / ``percent_rank``)", "", "", "", "", "", "", "", "", "", "✓"
    "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", "", ""
    "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", "", "✓"
 

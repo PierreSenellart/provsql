@@ -98,6 +98,17 @@ SELECT * FROM wa_report('cume_dist, whole table',
   'cume_dist() OVER (ORDER BY x)', 'v >= 0.5');
 SELECT * FROM wa_report('cume_dist, descending',
   'cume_dist() OVER (PARTITION BY g ORDER BY x DESC)', 'v = 1');
+
+-- percent_rank() is (rank - 1) / (N - 1), 0 where N = 1: the rows strictly
+-- before the current row's peers, counted over the frame that excludes them,
+-- over GREATEST(N, 2) - 1.  Rows 2 and 3 are peers, and a partition can be
+-- down to one row in a world, where the value is 0 and no world divides by 0.
+SELECT * FROM wa_report('percent_rank over a partition',
+  'percent_rank() OVER (PARTITION BY g ORDER BY x)', 'v > 0.4');
+SELECT * FROM wa_report('percent_rank, first of its partition',
+  'percent_rank() OVER (PARTITION BY g ORDER BY x)', 'v = 0');
+SELECT * FROM wa_report('percent_rank, whole table, descending',
+  'percent_rank() OVER (ORDER BY x DESC)', 'v >= 0.5');
 SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',
@@ -150,13 +161,12 @@ SELECT remove_provenance('wa_sorted');
 SELECT * FROM wa_sorted;
 
 -- Not tracked, with a warning: each row keeps its token, the value is an
--- opaque scalar.  Offset and distribution functions, positional frames, and
--- windows over the groups of an aggregation.
+-- opaque scalar.  Offset functions, ntile, positional frames, and windows over
+-- the groups of an aggregation.
 CREATE TABLE wa_untracked AS
   SELECT id,
          lag(x) OVER (PARTITION BY g ORDER BY x, id) AS prev,
          ntile(2) OVER (PARTITION BY g ORDER BY x, id) AS half,
-         round(percent_rank() OVER (PARTITION BY g ORDER BY x)::numeric, 4) AS pr,
          sum(x) OVER (PARTITION BY g ORDER BY x, id ROWS 1 PRECEDING) AS last2
   FROM wa;
 SELECT remove_provenance('wa_untracked');
