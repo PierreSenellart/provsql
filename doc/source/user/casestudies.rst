@@ -107,13 +107,22 @@ What each case study covers
     updated from data by likelihood weighting (``observe`` / ``and_agg`` /
     ``evidence``).
 
+:doc:`Case study 9 -- A Sales Forecast Dashboard <casestudy9>`
+    **Aggregates over uncertain data**, the queries of an ordinary
+    dashboard over deals that close with some probability: expected
+    revenue with and without the regions that close nothing, ``ROLLUP``
+    subtotals, shares of a total, the leading region and each region's
+    rank, comparisons with a target, a ``NULLIF`` percentage, aggregates of
+    aggregates, grouping by an aggregate's value, ``DISTINCT ON``, and
+    :sqlfunc:`plain` for a value meant as plain SQL.
+
 .. _case-study-coverage:
 
 Feature coverage matrix
 -----------------------
 
 The tables below cross-reference every user-facing feature documented
-under the User Guide against the tutorial and the eight case studies.
+under the User Guide against the tutorial and the nine case studies.
 
 Columns:
 
@@ -126,9 +135,13 @@ Columns:
 - **6** -- :doc:`Case study 6 <casestudy6>` (*City Air-Quality Sensor Network*)
 - **7** -- :doc:`Case study 7 <casestudy7>` (*Peer-Review Assignment and Knowledge Compilation*)
 - **8** -- :doc:`Case study 8 <casestudy8>` (*ProvSQL as a Probability Calculator*)
+- **9** -- :doc:`Case study 9 <casestudy9>` (*A Sales Forecast Dashboard*)
 
 Cells: ``✓`` the feature is exercised; ``(✓)`` it is mentioned in
-passing but not actually executed; empty means it is not covered.
+passing but not actually executed; empty means it is not covered. The
+administration and tuning features (the circuit store, replication, the
+cache and limit settings) are shown in their reference pages, not in a case
+study.
 
 .. raw:: html
 
@@ -142,325 +155,325 @@ Setup and basics
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``add_provenance``", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
-   "``remove_provenance``", "", "", "✓", "✓", "", "✓", "", "", ""
-   "``provenance()`` (SELECT-list)", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
-   "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓", ""
-   "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", ""
-   "Hand-built mapping table", "", "", "", "", "", "✓", "", "", ""
-   "``setup_search_path``", "(✓)", "", "", "", "", "", "", "", ""
-   "``provsql.active`` GUC", "", "", "", "", "", "", "", "", ""
-   "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", "", ""
+   "``add_provenance``", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
+   "``remove_provenance``", "", "", "✓", "✓", "", "✓", "", "", "", ""
+   "``provenance()`` (SELECT-list)", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
+   "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓", "", ""
+   "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", "", ""
+   "Hand-built mapping table", "", "", "", "", "", "✓", "", "", "", ""
+   "``setup_search_path``", "(✓)", "", "", "", "", "", "", "", "", ""
+   "``provsql.active`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", "", "", ""
 
 Supported SQL constructs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "SELECT-FROM-WHERE / inner JOIN", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", ""
-   "Self-join", "✓", "✓", "", "✓", "", "✓", "", "✓", ""
-   "Subqueries in FROM / nested", "", "✓", "✓", "", "", "✓", "", "", ""
-   "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
-   "SELECT DISTINCT", "✓", "✓", "", "✓", "", "✓", "", "✓", ""
-   "EXCEPT (monus)", "✓", "✓", "", "", "", "✓", "", "", ""
-   "UNION / UNION ALL", "", "", "✓", "", "", "", "✓", "✓", ""
-   "HAVING", "", "", "✓", "", "", "", "✓", "✓", ""
-   "VALUES", "", "", "", "", "", "✓", "", "", ""
-   "CTE (WITH)", "", "", "", "", "", "✓", "", "✓", "✓"
-   "WITH RECURSIVE", "", "", "", "", "", "", "", "✓", ""
-   "LATERAL", "", "", "", "✓", "", "", "✓", "", ""
-   "FILTER clause on aggregates", "", "", "✓", "", "", "", "", "", ""
-   "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓"
-   "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
-   "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
-   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", ""
-   "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", ""
-   "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", ""
-   "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "✓", "", "", ""
-   "Scalar subquery", "", "", "", "", "", "", "✓", "", "✓"
-   "``INTERSECT``", "", "", "", "", "", "✓", "", "", ""
-   "``DISTINCT ON``", "", "", "", "", "", "", "", "", ""
-   "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", ""
-   "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", ""
-   "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist``)", "", "", "", "", "", "", "", "", ""
-   "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", ""
-   "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", ""
+   "SELECT-FROM-WHERE / inner JOIN", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "", "✓"
+   "Self-join", "✓", "✓", "", "✓", "", "✓", "", "✓", "", ""
+   "Subqueries in FROM / nested", "", "✓", "✓", "", "", "✓", "", "", "", "✓"
+   "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
+   "SELECT DISTINCT", "✓", "✓", "", "✓", "", "✓", "", "✓", "", ""
+   "EXCEPT (monus)", "✓", "✓", "", "", "", "✓", "", "", "", ""
+   "UNION / UNION ALL", "", "", "✓", "", "", "", "✓", "✓", "", ""
+   "HAVING", "", "", "✓", "", "", "", "✓", "✓", "", ""
+   "VALUES", "", "", "", "", "", "✓", "", "", "", ""
+   "CTE (WITH)", "", "", "", "", "", "✓", "", "✓", "✓", ""
+   "WITH RECURSIVE", "", "", "", "", "", "", "", "✓", "", ""
+   "LATERAL", "", "", "", "✓", "", "", "✓", "", "", ""
+   "FILTER clause on aggregates", "", "", "✓", "", "", "", "", "", "", "✓"
+   "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓", ""
+   "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", "", ""
+   "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", "", ""
+   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", "", ""
+   "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", "", ""
+   "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", "", ""
+   "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "✓", "", "", "", ""
+   "Scalar subquery", "", "", "", "", "", "", "✓", "", "✓", "✓"
+   "``INTERSECT``", "", "", "", "", "", "✓", "", "", "", ""
+   "``DISTINCT ON``", "", "", "", "", "", "", "", "", "", "✓"
+   "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", "", "✓"
+   "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", "", "✓"
+   "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist``)", "", "", "", "", "", "", "", "", "", "✓"
+   "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", "", ""
+   "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", "", "✓"
 
 NULL values and zero-annotated rows
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``present`` (drop zero-annotated rows)", "✓", "", "", "", "", "", "", "", ""
-   "``nonzero`` (semiring-parameterised zero test)", "(✓)", "", "", "", "", "", "", "", ""
-   "NULL-discriminating idioms (``EXCEPT`` vs ``NOT IN`` vs ``NOT EXISTS``)", "", "", "", "", "", "✓", "", "", ""
-   "NULL ``random_variable`` values (unknown comparisons, aggregate skipping)", "", "", "", "", "", "", "✓", "", ""
+   "``present`` (drop zero-annotated rows)", "✓", "", "", "", "", "", "", "", "", ""
+   "``nonzero`` (semiring-parameterised zero test)", "(✓)", "", "", "", "", "", "", "", "", ""
+   "NULL-discriminating idioms (``EXCEPT`` vs ``NOT IN`` vs ``NOT EXISTS``)", "", "", "", "", "", "✓", "", "", "", ""
+   "NULL ``random_variable`` values (unknown comparisons, aggregate skipping)", "", "", "", "", "", "", "✓", "", "", ""
 
 Aggregation
 ~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "COUNT / SUM / MIN / MAX / AVG", "", "", "✓", "✓", "", "✓", "", "✓", "✓"
-   "``sum`` / ``avg`` / ``product`` over ``random_variable``", "", "", "", "", "", "", "✓", "", ""
-   "Statistic aggregates over ``random_variable`` (``covar_pop`` / ``corr`` / ``stddev_pop`` / ``percentile_cont``…)", "", "", "", "", "", "", "✓", "", ""
-   "``string_agg`` / ``array_agg``", "", "", "✓", "", "", "", "", "", ""
-   "``COUNT(DISTINCT …)``", "", "", "✓", "", "", "", "", "", ""
-   "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", ""
-   "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", ""
-   "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "✓", "", ""
-   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
-   "``choose`` aggregate", "", "", "", "", "", "", "", "", ""
-   "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", ""
-   "``stddev`` / ``variance`` over tracked rows", "", "", "", "", "", "", "", "", ""
-   "``bool_and`` / ``bool_or``", "", "", "", "✓", "", "", "", "", ""
-   "Functions of an aggregate result (``round`` / ``abs`` / ``power``…)", "", "", "", "", "", "", "", "", ""
-   "``COALESCE`` / ``NULLIF`` / ``GREATEST`` over aggregates", "", "", "", "", "", "", "", "", ""
-   "Aggregate of an aggregate result (``avg`` of a ``count``…)", "", "", "", "", "", "", "", "", ""
-   "``GROUP BY`` / ``DISTINCT`` on an aggregate value", "", "", "", "", "", "", "", "", ""
-   "Comparison over an aggregate in the ``SELECT`` list", "", "", "", "", "", "", "", "", ""
-   "Ranking groups by an aggregate (``rank() OVER (ORDER BY count(*))``)", "", "", "", "", "", "", "", "", ""
+   "COUNT / SUM / MIN / MAX / AVG", "", "", "✓", "✓", "", "✓", "", "✓", "✓", "✓"
+   "``sum`` / ``avg`` / ``product`` over ``random_variable``", "", "", "", "", "", "", "✓", "", "", ""
+   "Statistic aggregates over ``random_variable`` (``covar_pop`` / ``corr`` / ``stddev_pop`` / ``percentile_cont``…)", "", "", "", "", "", "", "✓", "", "", ""
+   "``string_agg`` / ``array_agg``", "", "", "✓", "", "", "", "", "", "", ""
+   "``COUNT(DISTINCT …)``", "", "", "✓", "", "", "", "", "", "", ""
+   "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", "", "✓"
+   "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", "", ""
+   "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "✓", "", "", ""
+   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``choose`` aggregate", "", "", "", "", "", "", "", "", "", ""
+   "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", "", ""
+   "``stddev`` / ``variance`` over tracked rows", "", "", "", "", "", "", "", "", "", "✓"
+   "``bool_and`` / ``bool_or``", "", "", "", "✓", "", "", "", "", "", ""
+   "Functions of an aggregate result (``round`` / ``abs`` / ``power``…)", "", "", "", "", "", "", "", "", "", "✓"
+   "``COALESCE`` / ``NULLIF`` / ``GREATEST`` over aggregates", "", "", "", "", "", "", "", "", "", "✓"
+   "Aggregate of an aggregate result (``avg`` of a ``count``…)", "", "", "", "", "", "", "", "", "", "✓"
+   "``GROUP BY`` / ``DISTINCT`` on an aggregate value", "", "", "", "", "", "", "", "", "", "✓"
+   "Comparison over an aggregate in the ``SELECT`` list", "", "", "", "", "", "", "", "", "", "✓"
+   "Ranking groups by an aggregate (``rank() OVER (ORDER BY count(*))``)", "", "", "", "", "", "", "", "", "", "✓"
 
 Circuit inspection
 ~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``get_gate_type``", "", "✓", "", "", "", "", "✓", "", ""
-   "``get_children``", "", "✓", "", "", "", "", "", "", ""
-   "``identify_token``", "", "✓", "", "", "", "", "", "", ""
-   "``get_nb_gates``", "", "✓", "", "", "", "", "", "", ""
-   "``get_infos``", "", "", "", "", "", "", "✓", "", ""
-   "``get_extra``", "", "", "", "", "", "", "✓", "", ""
-   "``circuit_subgraph`` / ``resolve_input`` (Studio circuit mode)", "", "", "", "", "", "", "✓", "✓", ""
-   "``simplified_circuit_subgraph``", "", "", "", "", "", "", "(✓)", "✓", ""
-   "``provenance_plus`` / ``provenance_times`` / ``provenance_not`` (circuits built by hand)", "", "", "", "", "", "", "", "", ""
+   "``get_gate_type``", "", "✓", "", "", "", "", "✓", "", "", ""
+   "``get_children``", "", "✓", "", "", "", "", "", "", "", ""
+   "``identify_token``", "", "✓", "", "", "", "", "", "", "", ""
+   "``get_nb_gates``", "", "✓", "", "", "", "", "", "", "", ""
+   "``get_infos``", "", "", "", "", "", "", "✓", "", "", ""
+   "``get_extra``", "", "", "", "", "", "", "✓", "", "", ""
+   "``circuit_subgraph`` / ``resolve_input`` (Studio circuit mode)", "", "", "", "", "", "", "✓", "✓", "", ""
+   "``simplified_circuit_subgraph``", "", "", "", "", "", "", "(✓)", "✓", "", ""
+   "``provenance_plus`` / ``provenance_times`` / ``provenance_not`` (circuits built by hand)", "", "", "", "", "", "", "", "", "", ""
 
 Knowledge compilation and safe queries
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``provsql.provenance = 'boolean'``", "", "", "", "", "", "", "", "✓", ""
-   "``provsql.provenance = 'absorptive'`` (cyclic recursion)", "", "", "", "", "", "", "", "✓", ""
-   "Bounded-treewidth network reliability (recursive reachability)", "", "", "", "", "", "", "", "✓", ""
-   "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓", ""
-   "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓", ""
-   "Joint-width UCQ compiler (bounded joint treewidth)", "", "", "", "", "", "", "", "✓", ""
-   "Möbius-inversion route (safe-by-cancellation UCQ)", "", "", "", "", "", "", "", "✓", ""
-   "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓", ""
-   "``tseytin_cnf`` / ``tseytin_cnf_mapping``", "", "", "", "", "", "", "", "✓", ""
-   "``ddnnf_stats``", "", "", "", "", "", "", "", "✓", ""
-   "``compile_to_ddnnf`` / ``compile_to_ddnnf_dot``", "", "", "", "", "", "", "", "✓", ""
-   "``tree_decomposition_dot``", "", "", "", "", "", "", "", "✓", ""
-   "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓", ""
-   "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓", ""
-   "Inversion-free certificate (``annotate`` / ``inversion_free_key`` / Studio IF badge)", "", "", "", "", "", "", "", "✓", ""
-   "External-tool registry (``provsql.tools``, ``register_tool``, ``set_tool_preference``, ``set_tool_enabled``, ``unregister_tool``)", "", "", "", "", "", "", "", "(✓)", ""
-   "``provsql.fallback_compiler`` GUC", "", "", "", "", "", "", "", "", ""
-   "``provsql.tool_search_path`` GUC", "", "", "", "", "", "", "", "", ""
-   "``provsql.kcmcp_server`` GUC (managed KCMCP server)", "", "", "", "", "", "", "", "", ""
-   "``provsql.joint_max_states`` / ``provsql.joint_max_treewidth`` GUCs", "", "", "", "", "", "", "", "", ""
-   "``provsql.mobius_max_cnf`` / ``provsql.mobius_max_gates`` GUCs", "", "", "", "", "", "", "", "", ""
+   "``provsql.provenance = 'boolean'``", "", "", "", "", "", "", "", "✓", "", ""
+   "``provsql.provenance = 'absorptive'`` (cyclic recursion)", "", "", "", "", "", "", "", "✓", "", ""
+   "Bounded-treewidth network reliability (recursive reachability)", "", "", "", "", "", "", "", "✓", "", ""
+   "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓", "", ""
+   "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓", "", ""
+   "Joint-width UCQ compiler (bounded joint treewidth)", "", "", "", "", "", "", "", "✓", "", ""
+   "Möbius-inversion route (safe-by-cancellation UCQ)", "", "", "", "", "", "", "", "✓", "", ""
+   "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓", "", ""
+   "``tseytin_cnf`` / ``tseytin_cnf_mapping``", "", "", "", "", "", "", "", "✓", "", ""
+   "``ddnnf_stats``", "", "", "", "", "", "", "", "✓", "", ""
+   "``compile_to_ddnnf`` / ``compile_to_ddnnf_dot``", "", "", "", "", "", "", "", "✓", "", ""
+   "``tree_decomposition_dot``", "", "", "", "", "", "", "", "✓", "", ""
+   "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓", "", ""
+   "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓", "", ""
+   "Inversion-free certificate (``annotate`` / ``inversion_free_key`` / Studio IF badge)", "", "", "", "", "", "", "", "✓", "", ""
+   "External-tool registry (``provsql.tools``, ``register_tool``, ``set_tool_preference``, ``set_tool_enabled``, ``unregister_tool``)", "", "", "", "", "", "", "", "(✓)", "", ""
+   "``provsql.fallback_compiler`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.tool_search_path`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.kcmcp_server`` GUC (managed KCMCP server)", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.joint_max_states`` / ``provsql.joint_max_treewidth`` GUCs", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.mobius_max_cnf`` / ``provsql.mobius_max_gates`` GUCs", "", "", "", "", "", "", "", "", "", ""
 
 Semiring evaluation
 ~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``sr_boolean``", "", "", "", "✓", "", "", "", "", ""
-   "``sr_boolexpr``", "", "✓", "", "", "", "✓", "", "", ""
-   "``sr_formula``", "✓", "✓", "✓", "✓", "", "✓", "", "✓", ""
-   "``sr_counting``", "✓", "", "✓", "", "", "", "", "", ""
-   "``sr_why``", "", "", "✓", "", "", "", "", "(✓)", ""
-   "``sr_how``", "", "", "", "", "", "", "", "(✓)", ""
-   "``sr_which``", "", "", "", "", "", "", "", "", ""
-   "``sr_tropical``", "", "", "", "", "", "", "", "", ""
-   "``sr_viterbi``", "", "", "", "", "", "", "", "", ""
-   "``sr_lukasiewicz``", "", "", "", "", "", "", "", "", ""
-   "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", ""
-   "``sr_temporal`` / ``sr_interval_num`` / ``sr_interval_int``", "", "", "", "", "✓", "", "", "", ""
-   "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", "", ""
+   "``sr_boolean``", "", "", "", "✓", "", "", "", "", "", ""
+   "``sr_boolexpr``", "", "✓", "", "", "", "✓", "", "", "", ""
+   "``sr_formula``", "✓", "✓", "✓", "✓", "", "✓", "", "✓", "", ""
+   "``sr_counting``", "✓", "", "✓", "", "", "", "", "", "", ""
+   "``sr_why``", "", "", "✓", "", "", "", "", "(✓)", "", ""
+   "``sr_how``", "", "", "", "", "", "", "", "(✓)", "", ""
+   "``sr_which``", "", "", "", "", "", "", "", "", "", ""
+   "``sr_tropical``", "", "", "", "", "", "", "", "", "", ""
+   "``sr_viterbi``", "", "", "", "", "", "", "", "", "", ""
+   "``sr_lukasiewicz``", "", "", "", "", "", "", "", "", "", ""
+   "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", "", ""
+   "``sr_temporal`` / ``sr_interval_num`` / ``sr_interval_int``", "", "", "", "", "✓", "", "", "", "", ""
+   "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", "", "", ""
 
 Probabilities
 ~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``set_prob``", "✓", "✓", "✓", "", "", "✓", "", "✓", "✓"
-   "``get_prob``", "", "", "", "", "", "", "✓", "✓", ""
-   "``probability_evaluate`` (default fallback)", "", "✓", "✓", "", "", "✓", "", "✓", "✓"
-   "Conditioning operator ``|`` / ``cond`` / ``given``", "", "", "", "", "", "", "", "", "✓"
-   "``P(A | B)`` conditional probability", "", "", "", "", "", "", "", "", "✓"
-   "``expected(X | C)`` / ``variance(X | C)`` (conditional moments)", "", "", "", "", "", "", "", "", "✓"
-   "``'independent'`` method", "", "(✓)", "", "", "", "", "✓", "✓", "✓"
-   "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", "", "✓"
-   "``'monte-carlo'`` method", "(✓)", "✓", "", "", "", "", "✓", "✓", "✓"
-   "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓", ""
-   "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓", ""
-   "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓", ""
-   "``'wmc'`` counters", "", "", "", "", "", "", "", "✓", ""
-   "``'d-tree'`` method (certified anytime bounds)", "", "", "", "", "", "", "", "", ""
-   "``'sieve'`` method (inclusion-exclusion)", "", "", "", "", "", "", "", "", ""
-   "``'karp-luby'`` method (relative FPRAS)", "", "", "", "", "", "", "", "", ""
-   "``'stopping-rule'`` method (additive FPRAS)", "", "", "", "", "", "", "", "", ""
-   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "", "", "", "", "", ""
-   "``probability_bounds`` (cheap lower / upper marginals)", "", "", "", "", "", "", "", "", ""
-   "Studio benchmark panel", "", "", "", "", "", "", "", "✓", ""
-   "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", "", "✓"
-   "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓", "✓"
-   "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.rv_mc_samples`` GUC", "", "", "", "", "", "", "✓", "", "✓"
-   "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", ""
-   "``probability_is_set``", "", "", "", "", "", "", "", "", ""
-   "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "✓", "", "", "", "", "", "", ""
-   "``provsql.last_eval_method`` GUC", "", "", "", "", "", "", "", "", ""
+   "``set_prob``", "✓", "✓", "✓", "", "", "✓", "", "✓", "✓", "✓"
+   "``get_prob``", "", "", "", "", "", "", "✓", "✓", "", ""
+   "``probability_evaluate`` (default fallback)", "", "✓", "✓", "", "", "✓", "", "✓", "✓", "✓"
+   "Conditioning operator ``|`` / ``cond`` / ``given``", "", "", "", "", "", "", "", "", "✓", ""
+   "``P(A | B)`` conditional probability", "", "", "", "", "", "", "", "", "✓", ""
+   "``expected(X | C)`` / ``variance(X | C)`` (conditional moments)", "", "", "", "", "", "", "", "", "✓", ""
+   "``'independent'`` method", "", "(✓)", "", "", "", "", "✓", "✓", "✓", ""
+   "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", "", "✓", ""
+   "``'monte-carlo'`` method", "(✓)", "✓", "", "", "", "", "✓", "✓", "✓", ""
+   "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓", "", ""
+   "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓", "", ""
+   "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓", "", ""
+   "``'wmc'`` counters", "", "", "", "", "", "", "", "✓", "", ""
+   "``'d-tree'`` method (certified anytime bounds)", "", "", "", "", "", "", "", "", "", ""
+   "``'sieve'`` method (inclusion-exclusion)", "", "", "", "", "", "", "", "", "", ""
+   "``'karp-luby'`` method (relative FPRAS)", "", "", "", "", "", "", "", "", "", ""
+   "``'stopping-rule'`` method (additive FPRAS)", "", "", "", "", "", "", "", "", "", ""
+   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "", "", "", "", "", "", ""
+   "``probability_bounds`` (cheap lower / upper marginals)", "", "", "", "", "", "", "", "", "", ""
+   "Studio benchmark panel", "", "", "", "", "", "", "", "✓", "", ""
+   "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", "", "✓", "✓"
+   "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓", "✓", ""
+   "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.rv_mc_samples`` GUC", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", "", ""
+   "``probability_is_set``", "", "", "", "", "", "", "", "", "", ""
+   "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "✓", "", "", "", "", "", "", "", ""
+   "``provsql.last_eval_method`` GUC", "", "", "", "", "", "", "", "", "", ""
 
 Continuous random variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 44, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 44, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``random_variable`` type / ``provsql.normal``", "", "", "", "", "", "", "✓", "", "✓"
-   "``provsql.uniform`` / ``provsql.exponential``", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.erlang`` / ``provsql.categorical``", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.beta``", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian`` (``wald``)", "", "", "", "", "", "", "", "", ""
-   "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
-   "Latent (``random_variable``) distribution parameters, e.g., ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
-   "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""
-   "Order statistics (``greatest`` / ``least``, ``max`` / ``min`` aggregate)", "", "", "", "", "", "", "✓", "", ""
-   "Transforms ``^`` / ``pow`` / ``ln`` / ``exp`` / ``sqrt``", "", "", "", "", "", "", "", "", "✓"
-   "``CASE`` over ``random_variable`` (``rv_case`` / abs / ReLU / clamp)", "", "", "", "", "", "", "✓", "", ""
-   "Comparison ``< <= = <> >= >`` (planner-hook rewrite, incl. mixed-family quadrature)", "", "", "", "", "", "", "✓", "", "✓"
-   "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓"
-   "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓"
-   "``covariance`` / ``correlation`` / ``stddev`` (same-row)", "", "", "", "", "", "", "✓", "", ""
-   "``entropy`` / ``kl`` / ``mutual_information``", "", "", "", "", "", "", "✓", "", "✓"
-   "``gmm`` (Gaussian-mixture constructor)", "", "", "", "", "", "", "", "", "✓"
-   "``empirical_samples`` / ``empirical_cdf`` (data-driven loaders)", "", "", "", "", "", "", "", "", "✓"
-   "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
-   "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓"
-   "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "✓"
-   "Likelihood-weighting posterior (``observe`` / ``and_agg`` / ``evidence``)", "", "", "", "", "", "", "", "", "✓"
-   "``probability((A) | (B))`` over two comparison events", "", "", "", "", "", "", "", "", "✓"
-   "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
-   "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""
-   "``categorical_from_log_pmf``", "", "", "", "", "", "", "", "", ""
-   "``rv_families`` (list of the distribution families)", "", "", "", "", "", "", "", "", ""
-   "``provsql.ess_warn_fraction`` GUC", "", "", "", "", "", "", "", "", ""
+   "``random_variable`` type / ``provsql.normal``", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``provsql.uniform`` / ``provsql.exponential``", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.erlang`` / ``provsql.categorical``", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓", ""
+   "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.beta``", "", "", "", "", "", "", "", "", "✓", ""
+   "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian`` (``wald``)", "", "", "", "", "", "", "", "", "", ""
+   "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓", ""
+   "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", "", ""
+   "Latent (``random_variable``) distribution parameters, e.g., ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓", ""
+   "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", "", ""
+   "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", "", ""
+   "Order statistics (``greatest`` / ``least``, ``max`` / ``min`` aggregate)", "", "", "", "", "", "", "✓", "", "", ""
+   "Transforms ``^`` / ``pow`` / ``ln`` / ``exp`` / ``sqrt``", "", "", "", "", "", "", "", "", "✓", ""
+   "``CASE`` over ``random_variable`` (``rv_case`` / abs / ReLU / clamp)", "", "", "", "", "", "", "✓", "", "", ""
+   "Comparison ``< <= = <> >= >`` (planner-hook rewrite, incl. mixed-family quadrature)", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``covariance`` / ``correlation`` / ``stddev`` (same-row)", "", "", "", "", "", "", "✓", "", "", ""
+   "``entropy`` / ``kl`` / ``mutual_information``", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``gmm`` (Gaussian-mixture constructor)", "", "", "", "", "", "", "", "", "✓", ""
+   "``empirical_samples`` / ``empirical_cdf`` (data-driven loaders)", "", "", "", "", "", "", "", "", "✓", ""
+   "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓", ""
+   "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓", ""
+   "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "✓", ""
+   "Likelihood-weighting posterior (``observe`` / ``and_agg`` / ``evidence``)", "", "", "", "", "", "", "", "", "✓", ""
+   "``probability((A) | (B))`` over two comparison events", "", "", "", "", "", "", "", "", "✓", ""
+   "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", "", ""
+   "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", "", ""
+   "``categorical_from_log_pmf``", "", "", "", "", "", "", "", "", "", ""
+   "``rv_families`` (list of the distribution families)", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.ess_warn_fraction`` GUC", "", "", "", "", "", "", "", "", "", ""
 
 Shapley and Banzhaf values
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``shapley``", "", "", "✓", "", "", "", "", "", ""
-   "``shapley_all_vars``", "", "", "✓", "", "", "", "", "", ""
-   "``shapley_observe`` (attribution under likelihood-weighting evidence)", "", "", "", "", "", "", "", "", ""
-   "``banzhaf``", "", "", "✓", "", "", "", "", "", ""
-   "``banzhaf_all_vars``", "", "", "✓", "", "", "", "", "", ""
+   "``shapley``", "", "", "✓", "", "", "", "", "", "", ""
+   "``shapley_all_vars``", "", "", "✓", "", "", "", "", "", "", ""
+   "``shapley_observe`` (attribution under likelihood-weighting evidence)", "", "", "", "", "", "", "", "", "", ""
+   "``banzhaf``", "", "", "✓", "", "", "", "", "", "", ""
+   "``banzhaf_all_vars``", "", "", "✓", "", "", "", "", "", "", ""
 
 Where-provenance
 ~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``provsql.provenance = 'where'``", "", "✓", "✓", "", "", "", "", "", ""
-   "``where_provenance(col)``", "", "✓", "✓", "", "", "", "", "", ""
+   "``provsql.provenance = 'where'``", "", "✓", "✓", "", "", "", "", "", "", ""
+   "``where_provenance(col)``", "", "✓", "✓", "", "", "", "", "", "", ""
 
 Data-modification tracking
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``provsql.update_provenance`` GUC", "", "", "", "", "✓", "", "", "", ""
-   "INSERT / UPDATE / DELETE tracked", "", "", "", "", "✓", "", "", "", ""
-   "``update_provenance`` log table", "", "", "", "", "✓", "", "", "", ""
-   "``undo``", "", "", "", "", "✓", "", "", "", ""
-   "``transaction_token``", "", "", "", "", "", "", "", "", ""
+   "``provsql.update_provenance`` GUC", "", "", "", "", "✓", "", "", "", "", ""
+   "INSERT / UPDATE / DELETE tracked", "", "", "", "", "✓", "", "", "", "", ""
+   "``update_provenance`` log table", "", "", "", "", "✓", "", "", "", "", ""
+   "``undo``", "", "", "", "", "✓", "", "", "", "", ""
+   "``transaction_token``", "", "", "", "", "", "", "", "", "", ""
 
 Temporal features
 ~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``union_tstzintervals``", "", "", "", "", "", "", "", "", ""
-   "``timeslice``", "", "", "", "", "✓", "", "", "", ""
-   "``timetravel``", "", "", "", "", "✓", "", "", "", ""
-   "``history``", "", "", "", "", "✓", "", "", "", ""
-   "``time_validity_view`` extension", "", "", "", "", "✓", "", "", "", ""
-   "``get_valid_time``", "", "", "", "", "", "", "", "", ""
+   "``union_tstzintervals``", "", "", "", "", "", "", "", "", "", ""
+   "``timeslice``", "", "", "", "", "✓", "", "", "", "", ""
+   "``timetravel``", "", "", "", "", "✓", "", "", "", "", ""
+   "``history``", "", "", "", "", "✓", "", "", "", "", ""
+   "``time_validity_view`` extension", "", "", "", "", "✓", "", "", "", "", ""
+   "``get_valid_time``", "", "", "", "", "", "", "", "", "", ""
 
 Persistence and administration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``check_store``", "", "", "", "", "", "", "", "", ""
-   "``circuit_cleanup``", "", "", "", "", "", "", "", "", ""
-   "``migrate_table_info``", "", "", "", "", "", "", "", "", ""
-   "``provsql.gate_cache_size`` GUC", "", "", "", "", "", "", "", "", ""
-   "``provsql.synchronous_commit`` / ``provsql.wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", ""
-   "``provsql.implicit_freeze`` GUC", "", "", "", "", "", "", "", "", ""
+   "``check_store``", "", "", "", "", "", "", "", "", "", ""
+   "``circuit_cleanup``", "", "", "", "", "", "", "", "", "", ""
+   "``migrate_table_info``", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.gate_cache_size`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.synchronous_commit`` / ``provsql.wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.implicit_freeze`` GUC", "", "", "", "", "", "", "", "", "", ""
 
 Export and visualisation
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. csv-table::
    :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``to_provxml``", "", "✓", "", "", "", "", "", "", ""
-   "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", "", ""
-   "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)", ""
-   "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓", ""
-   "ProvSQL Studio (Contributions mode)", "", "", "✓", "", "", "", "", "", ""
+   "``to_provxml``", "", "✓", "", "", "", "", "", "", "", ""
+   "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", "", "", ""
+   "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)", "", ""
+   "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓", "", ""
+   "ProvSQL Studio (Contributions mode)", "", "", "✓", "", "", "", "", "", "", ""

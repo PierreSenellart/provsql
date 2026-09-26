@@ -1,0 +1,46 @@
+-- Case Study 9: A Sales Forecast Dashboard
+-- Setup script – load into a fresh PostgreSQL database:
+--   psql -d mydb -f setup.sql
+
+SET client_encoding = 'UTF8';
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
+
+SET search_path TO public, provsql;
+
+DROP TABLE IF EXISTS deal CASCADE;
+DROP TABLE IF EXISTS region CASCADE;
+
+CREATE TABLE region (
+    name   text PRIMARY KEY,
+    target integer NOT NULL     -- revenue target, thousands of euros
+);
+
+CREATE TABLE deal (
+    id       integer PRIMARY KEY,
+    customer text NOT NULL,
+    region   text NOT NULL REFERENCES region(name),
+    quarter  text NOT NULL,
+    amount   integer NOT NULL,          -- thousands of euros
+    win_prob double precision NOT NULL  -- probability that the deal closes
+);
+
+INSERT INTO region (name, target) VALUES
+    ('North', 150),
+    ('South', 120),
+    ('West',  100);
+
+INSERT INTO deal (id, customer, region, quarter, amount, win_prob) VALUES
+    ( 1, 'Arctis',    'North', 'Q1',  80, 0.9),
+    ( 2, 'Borealis',  'North', 'Q1',  45, 0.5),
+    ( 3, 'Fjordline', 'North', 'Q2', 120, 0.3),
+    ( 4, 'Glacier',   'North', 'Q2',  30, 0.8),
+    ( 5, 'Meridian',  'South', 'Q1',  60, 0.7),
+    ( 6, 'Solstice',  'South', 'Q1',  25, 0.9),
+    ( 7, 'Tropica',   'South', 'Q2',  90, 0.4),
+    ( 8, 'Zenith',    'South', 'Q2',  40, 0.6),
+    ( 9, 'Canyon',    'West',  'Q1',  70, 0.5),
+    (10, 'Horizon',   'West',  'Q1',  35, 0.8),
+    (11, 'Mesa',      'West',  'Q2',  55, 0.6),
+    (12, 'Sierra',    'West',  'Q2', 150, 0.2);

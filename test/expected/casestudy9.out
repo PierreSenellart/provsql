@@ -1,0 +1,134 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+region|if_any_closes|forecast
+North|155.59|154.50
+South|125.40|124.50
+West|130.17|126.00
+(3 rows)
+remove_provenance
+
+(1 row)
+region|quarter|forecast
+North|Q1|94.50
+North|Q2|60.00
+North||154.50
+South|Q1|64.50
+South|Q2|60.00
+South||124.50
+West|Q1|63.00
+West|Q2|63.00
+West||126.00
+||405.00
+(10 rows)
+remove_provenance
+
+(1 row)
+region|share
+North|0.3891
+South|0.3144
+West|0.3115
+(3 rows)
+remove_provenance
+
+(1 row)
+region|p_top
+North|0.4516
+South|0.2790
+West|0.2960
+(3 rows)
+remove_provenance
+
+(1 row)
+region|expected_rank
+North|1.7398
+South|2.0766
+West|2.0925
+(3 rows)
+remove_provenance
+
+(1 row)
+region|on_target|p
+North|false|0.4440
+North|true|0.5490
+North|unknown|0.0000
+South|false|0.4140
+South|true|0.5788
+South|unknown|0.0000
+West|false|0.4000
+West|true|0.5680
+West|unknown|0.0000
+(9 rows)
+remove_provenance
+
+(1 row)
+region|pct_big
+North|49.35
+South|40.03
+West|30.10
+(3 rows)
+remove_provenance
+
+(1 row)
+best_region|average_region
+194.73|137.14
+(1 row)
+remove_provenance
+
+(1 row)
+deals_closed|p
+1|0.3637
+2|0.7629
+3|0.7458
+4|0.2792
+(4 rows)
+remove_provenance
+
+(1 row)
+region|customer|amount|p
+North|Fjordline|120|0.3000
+North|Arctis|80|0.6300
+North|Borealis|45|0.0350
+North|Glacier|30|0.0280
+South|Tropica|90|0.4000
+South|Meridian|60|0.4200
+South|Zenith|40|0.1080
+South|Solstice|25|0.0648
+West|Sierra|150|0.2000
+West|Canyon|70|0.4000
+West|Mesa|55|0.2400
+West|Horizon|35|0.1280
+(12 rows)
+remove_provenance
+
+(1 row)
+region|expected_sd
+North|33.31
+South|24.28
+West|28.58
+(3 rows)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cs9_deal; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+remove_provenance
+
+(1 row)
+region|label
+North|275 k€
+South|215 k€
+West|310 k€
+(3 rows)
+remove_provenance
+
+(1 row)
+region|label
+North|275 k€
+South|215 k€
+West|310 k€
+(3 rows)
+remove_provenance
+
+(1 row)

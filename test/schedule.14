@@ -21,3 +21,6 @@ test: sr_interval_num sr_interval_int
 
 # Case Study 4: Government Ministers Over Time (Temporal)
 test: casestudy4
+
+# Case Study 9: A Sales Forecast Dashboard (FETCH ... WITH TIES: PG 13+)
+test: casestudy9
