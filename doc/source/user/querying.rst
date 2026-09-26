@@ -86,6 +86,11 @@ The following SQL constructs are supported with full provenance tracking:
   (``(a, b) < ANY (…)``) is not.  An aggregate body can be compared against a
   constant or an outer column, including through ``IN``/``NOT IN``
   (the single-row aggregate body makes these scalar comparisons).
+  The body of a membership test (``IN``, ``= ANY``) may be a set operation.
+  A correlated one is read through its arms where the condition splits into
+  conditions on them: ``NOT EXISTS`` over a ``UNION``, ``IN`` over an
+  ``INTERSECT`` or an ``EXCEPT``, and ``NOT EXISTS`` over an ``EXCEPT``
+  (every row of the first arm is one of the second).
   A block that reads tracked relations only through its subqueries (a
   ``FROM``-less ``SELECT`` whose condition is an ``EXISTS``, a constant or
   untracked left side filtered by a ``NOT EXISTS``) is tracked as well: the

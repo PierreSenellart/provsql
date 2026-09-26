@@ -18439,6 +18439,240 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Collect the leaves of a set-operation tree built with @p op alone.
+ *
+ * @return  Whether every inner node is @p op (with or without @c ALL, as
+ *          @p all_ok allows) and every leaf a @c RangeTblRef.
+ */
+static bool setop_leaves_of_op(Node *n, SetOperation op, bool all_ok,
+                               List **leaves) {
+  SetOperationStmt *so;
+  if (IsA(n, RangeTblRef)) {
+    *leaves = lappend(*leaves, n);
+    return true;
+  }
+  if (!IsA(n, SetOperationStmt))
+    return false;
+  so = (SetOperationStmt *)n;
+  if (so->op != op || (so->all && !all_ok))
+    return false;
+  return setop_leaves_of_op(so->larg, op, all_ok, leaves) &&
+         setop_leaves_of_op(so->rarg, op, all_ok, leaves);
+}
+
+/**
+ * @brief The arm @p leaf of the set-operation body @p sub, as a body of its
+ *        own at @p sub's level, or @c NULL.
+ *
+ * An arm sits one level below the set operation, so what it reads of the
+ * queries around comes up one level.  Its output columns must be of the set
+ * operation's types: an arm the set operation coerces would compare
+ * differently on its own.
+ */
+static Query *setop_arm_as_body(Query *sub, RangeTblRef *leaf) {
+  SetOperationStmt *so = (SetOperationStmt *)sub->setOperations;
+  RangeTblEntry *rte = rt_fetch(leaf->rtindex, sub->rtable);
+  Query *a;
+  ListCell *lc, *lt = list_head(so->colTypes);
+
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return NULL;
+  a = (Query *)copyObject(rte->subquery);
+  foreach (lc, a->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (lt == NULL || exprType((Node *)te->expr) != lfirst_oid(lt))
+      return NULL;
+    lt = my_lnext(so->colTypes, lt);
+  }
+  if (lt != NULL)
+    return NULL;
+  IncrementVarSublevelsUp((Node *)a, -1, 2);
+  return a;
+}
+
+/** @brief Context for @c replace_sublink_params_mutator. */
+typedef struct replace_sublink_params_ctx {
+  List *exprs; ///< The expression standing for each output column, in order
+} replace_sublink_params_ctx;
+
+/** @brief Replace the @c PARAM_SUBLINK of a sublink's test expression by the
+ *  expression of the output column it stands for. */
+static Node *replace_sublink_params_mutator(Node *node, void *cx) {
+  replace_sublink_params_ctx *ctx = (replace_sublink_params_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Param) && ((Param *)node)->paramkind == PARAM_SUBLINK &&
+      ((Param *)node)->paramid >= 1 &&
+      ((Param *)node)->paramid <= list_length(ctx->exprs))
+    return copyObject(list_nth(ctx->exprs, ((Param *)node)->paramid - 1));
+  return expression_tree_mutator(node, replace_sublink_params_mutator, cx);
+}
+
+/** @brief A sublink of @p type over @p body, with the test expression and
+ *  operator names of @p like when it is given. */
+static SubLink *sublink_over(SubLinkType type, Query *body, SubLink *like) {
+  SubLink *sl = makeNode(SubLink);
+  sl->subLinkType = type;
+  sl->subselect = (Node *)body;
+  sl->testexpr = like ? copyObject(like->testexpr) : NULL;
+  sl->operName = like ? copyObject(like->operName) : NIL;
+  sl->location = -1;
+  return sl;
+}
+
+/**
+ * @brief Split a WHERE conjunct testing a correlated set operation into
+ *        conjuncts testing its arms, or return @c NIL.
+ *
+ *   NOT EXISTS (A UNION B)   =  NOT EXISTS A AND NOT EXISTS B
+ *   x IN (A INTERSECT B)     =  x IN A AND x IN B
+ *   x IN (A EXCEPT B)        =  x IN A AND NOT EXISTS (B matching x)
+ *
+ * with or without @c ALL for the first two, whose answer does not depend on
+ * how many copies there are.  In the third, a row of B matching x is one whose
+ * columns satisfy the IN test: x IN A holds only where x is not NULL, and a
+ * row equal to x is then also one not distinct from it, which is how the
+ * difference compares rows.  Each piece is a condition the decorrelation
+ * reads.  An uncorrelated body is left to @c wrap_body_setop, which tracks the
+ * set operation where it stands.
+ */
+static List *split_setop_sublink_conjunct(const constants_t *constants,
+                                          Node *c) {
+  Node *inner = c;
+  bool neg = false;
+  SubLink *sl;
+  Query *sub;
+  SetOperationStmt *so;
+  List *leaves = NIL, *out = NIL;
+  ListCell *lc;
+
+  if (IsA(c, BoolExpr) && ((BoolExpr *)c)->boolop == NOT_EXPR &&
+      list_length(((BoolExpr *)c)->args) == 1) {
+    neg = true;
+    inner = (Node *)linitial(((BoolExpr *)c)->args);
+  }
+  if (!IsA(inner, SubLink) || !IsA(((SubLink *)inner)->subselect, Query))
+    return NIL;
+  sl = (SubLink *)inner;
+  sub = (Query *)sl->subselect;
+  if (sub->setOperations == NULL || !IsA(sub->setOperations, SetOperationStmt))
+    return NIL;
+  if (sub->cteList != NIL || sub->limitCount != NULL ||
+      sub->limitOffset != NULL || sub->sortClause != NIL)
+    return NIL;
+  if (!reads_outside_walker((Node *)sub, 0) || !has_provenance(constants, sub))
+    return NIL;
+  so = (SetOperationStmt *)sub->setOperations;
+
+  if (neg && sl->subLinkType == EXISTS_SUBLINK) {
+    if (!setop_leaves_of_op((Node *)so, SETOP_UNION, true, &leaves))
+      return NIL;
+    foreach (lc, leaves) {
+      Query *a = setop_arm_as_body(sub, (RangeTblRef *)lfirst(lc));
+      if (a == NULL)
+        return NIL;
+      out = lappend(out, makeBoolExpr(
+        NOT_EXPR, list_make1(sublink_over(EXISTS_SUBLINK, a, NULL)), -1));
+    }
+    return out;
+  }
+
+  /* The test is copied into each piece: one that holds a subquery of its own
+   * would be a subquery in each, left to the refusal instead. */
+  if (neg || sl->subLinkType != ANY_SUBLINK || sl->testexpr == NULL ||
+      checkExprHasSubLink(sl->testexpr))
+    return NIL;
+
+  if (so->op == SETOP_INTERSECT) {
+    if (!setop_leaves_of_op((Node *)so, SETOP_INTERSECT, true, &leaves))
+      return NIL;
+    foreach (lc, leaves) {
+      Query *a = setop_arm_as_body(sub, (RangeTblRef *)lfirst(lc));
+      if (a == NULL)
+        return NIL;
+      out = lappend(out, sublink_over(ANY_SUBLINK, a, sl));
+    }
+    return out;
+  }
+
+  if (so->op == SETOP_EXCEPT && !so->all && IsA(so->larg, RangeTblRef) &&
+      IsA(so->rarg, RangeTblRef)) {
+    Query *a = setop_arm_as_body(sub, (RangeTblRef *)so->larg);
+    Query *b = setop_arm_as_body(sub, (RangeTblRef *)so->rarg);
+    replace_sublink_params_ctx pctx;
+    Node *match;
+
+    if (a == NULL || b == NULL || b->jointree == NULL ||
+        b->groupClause != NIL || b->groupingSets != NIL || b->hasAggs ||
+        b->havingQual != NULL || b->distinctClause != NIL ||
+        b->hasWindowFuncs || b->hasTargetSRFs || b->setOperations != NULL)
+      return NIL;
+    /* The test, read inside B: what it reads of the query around is one level
+     * further up, and its output-column parameters are B's columns. */
+    match = (Node *)copyObject(sl->testexpr);
+    IncrementVarSublevelsUp(match, 1, 0);
+    pctx.exprs = NIL;
+    foreach (lc, b->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (!te->resjunk)
+        pctx.exprs = lappend(pctx.exprs, te->expr);
+    }
+    match = replace_sublink_params_mutator(match, &pctx);
+    b->jointree->quals =
+      b->jointree->quals == NULL
+        ? match
+        : (Node *)makeBoolExpr(AND_EXPR, list_make2(b->jointree->quals, match),
+                               -1);
+    b->hasSubLinks = b->hasSubLinks || checkExprHasSubLink(match);
+    return list_make2(sublink_over(ANY_SUBLINK, a, sl),
+                      makeBoolExpr(NOT_EXPR,
+                                   list_make1(sublink_over(EXISTS_SUBLINK, b,
+                                                           NULL)),
+                                   -1));
+  }
+  return NIL;
+}
+
+/**
+ * @brief Split every WHERE conjunct of @p q testing a correlated set operation
+ *        into conjuncts testing its arms (@c split_setop_sublink_conjunct).
+ *
+ * Runs before @c split_predicate_sublinks, which then gives each of the
+ * resulting tests a level of its own.
+ *
+ * @return  Whether @p q was rewritten.
+ */
+static bool split_setop_sublinks(const constants_t *constants, Query *q) {
+  Node *quals;
+  List *conjs, *split = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+  foreach (lc, conjs) {
+    List *parts = split_setop_sublink_conjunct(constants, (Node *)lfirst(lc));
+    if (parts != NIL) {
+      split = list_concat(split, parts);
+      changed = true;
+    } else
+      split = lappend(split, lfirst(lc));
+  }
+  if (changed)
+    q->jointree->quals = list_length(split) == 1
+                           ? (Node *)linitial(split)
+                           : (Node *)makeBoolExpr(AND_EXPR, split, -1);
+  return changed;
+}
+
+/**
  * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
  *        over tracked relations into correlated @c count(*) comparisons.
  *
@@ -21447,6 +21681,15 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
   return agg_sides >= 1;
 }
 
+/** @brief Whether @p nt is an IS [NOT] NULL on an aggregate column of a
+ *  subquery, which agg_token_null_event reads. */
+static bool nulltest_on_agg_column(NullTest *nt, const constants_t *constants) {
+  Node *arg = strip_agg_cast((Node *)nt->arg);
+  return OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_NULL_EVENT) &&
+         arg != NULL && IsA(arg, Var) &&
+         exprType(arg) == constants->OID_TYPE_AGG_TOKEN;
+}
+
 /**
  * @brief Check whether every leaf of a Boolean expression is a supported
  *        comparison on an aggregate result.
@@ -21458,15 +21701,6 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
  * @param constants  Extension OID cache.
  * @return  True if all leaves are supported, false if any is not.
  */
-/** @brief Whether @p nt is an IS [NOT] NULL on an aggregate column of a
- *  subquery, which agg_token_null_event reads. */
-static bool nulltest_on_agg_column(NullTest *nt, const constants_t *constants) {
-  Node *arg = strip_agg_cast((Node *)nt->arg);
-  return OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_NULL_EVENT) &&
-         arg != NULL && IsA(arg, Var) &&
-         exprType(arg) == constants->OID_TYPE_AGG_TOKEN;
-}
-
 static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constants)
 {
   ListCell *lc;
@@ -24053,50 +24287,6 @@ static bool explode_setop_arms(Query *q, const constants_t *constants, Node *n,
   return false;
 }
 
-/**
- * @brief The aggregate columns @p cols of the subquery at @p rteid, each
- *        exploded into one row per value its aggregate takes over the possible
- *        worlds.
- *
- * Replaces the subquery @c R at @p rteid by
- *
- * @code{.sql}
- *   SELECT r.c_1, ..., v_1::T AS c_a1, ..., v_k::T AS c_ak, ..., r.c_n
- *   FROM R r, LATERAL unnest(agg_possible_values(r.c_a1)) AS v_1,
- *             ..., LATERAL unnest(agg_possible_values(r.c_ak)) AS v_k
- *   WHERE (v_1 IS NULL AND r.c_a1 IS NULL) OR r.c_a1 = v_1::T
- *     AND ...
- * @endcode
- *
- * The columns keep their order and their types, so the level above is left
- * as it is: what changes is that each aggregate column now holds a value of
- * the database, one row per combination of values.  The comparison in the
- * @c WHERE is the one ProvSQL already gives a provenance to (@c
- * having_OpExpr_to_provenance_cmp): the row of a value @c v is annotated
- * @c [c = v] and keeps no cut of its own, so the rows of one group are
- * pairwise exclusive and exactly one of them is in each world where the group
- * is.  Grouping, deduplicating or uniting on that column is then an operation
- * on data, tracked as any other.
- *
- * SEVERAL columns are exploded in ONE pass, and that is not a convenience: the
- * decision of whether a column can take NULL, and the companion @c count(arg)
- * that annotates the row where it does, are both read off the column's own
- * @c Aggref.  A pass that wrapped the arm first would leave the next column a
- * plain @c Var of that wrapper, with no @c Aggref to read and nowhere to put a
- * count -- the wrapper aggregates nothing.  Exploded one at a time, a
- * two-aggregate arm therefore lost the row of the world where the arm holds no
- * row at all: `SUM(a), SUM(b)` in a `UNION` arm gave every realised
- * combination its right probability and dropped `(NULL, NULL)`, whose mass
- * (an eighth, on two rows at one half) no row carried.  The combinations no
- * world realises are emitted with a provenance of zero, which says of itself
- * that no world holds it.
- *
- * @param q           Query to rewrite (modified in place).
- * @param constants   Extension OID cache.
- * @param rteid       1-based varno of the subquery owning the aggregates.
- * @param cols        The columns to explode, at least one.
- * @return  @p q, or @c NULL where the shape is not one this can rewrite.
- */
 /** @brief Whether @p arg, the argument of an aggregate of @p sub, is never
  *  NULL: a constant, a column of a base relation declared NOT NULL, a CASE
  *  or a COALESCE whose results are such.  A group of rows then always has a
@@ -24152,6 +24342,50 @@ static bool agg_arg_not_null(Query *sub, Node *arg) {
   return notnull;
 }
 
+/**
+ * @brief The aggregate columns @p cols of the subquery at @p rteid, each
+ *        exploded into one row per value its aggregate takes over the possible
+ *        worlds.
+ *
+ * Replaces the subquery @c R at @p rteid by
+ *
+ * @code{.sql}
+ *   SELECT r.c_1, ..., v_1::T AS c_a1, ..., v_k::T AS c_ak, ..., r.c_n
+ *   FROM R r, LATERAL unnest(agg_possible_values(r.c_a1)) AS v_1,
+ *             ..., LATERAL unnest(agg_possible_values(r.c_ak)) AS v_k
+ *   WHERE (v_1 IS NULL AND r.c_a1 IS NULL) OR r.c_a1 = v_1::T
+ *     AND ...
+ * @endcode
+ *
+ * The columns keep their order and their types, so the level above is left
+ * as it is: what changes is that each aggregate column now holds a value of
+ * the database, one row per combination of values.  The comparison in the
+ * @c WHERE is the one ProvSQL already gives a provenance to (@c
+ * having_OpExpr_to_provenance_cmp): the row of a value @c v is annotated
+ * @c [c = v] and keeps no cut of its own, so the rows of one group are
+ * pairwise exclusive and exactly one of them is in each world where the group
+ * is.  Grouping, deduplicating or uniting on that column is then an operation
+ * on data, tracked as any other.
+ *
+ * SEVERAL columns are exploded in ONE pass, and that is not a convenience: the
+ * decision of whether a column can take NULL, and the companion @c count(arg)
+ * that annotates the row where it does, are both read off the column's own
+ * @c Aggref.  A pass that wrapped the arm first would leave the next column a
+ * plain @c Var of that wrapper, with no @c Aggref to read and nowhere to put a
+ * count -- the wrapper aggregates nothing.  Exploded one at a time, a
+ * two-aggregate arm therefore lost the row of the world where the arm holds no
+ * row at all: `SUM(a), SUM(b)` in a `UNION` arm gave every realised
+ * combination its right probability and dropped `(NULL, NULL)`, whose mass
+ * (an eighth, on two rows at one half) no row carried.  The combinations no
+ * world realises are emitted with a provenance of zero, which says of itself
+ * that no world holds it.
+ *
+ * @param q           Query to rewrite (modified in place).
+ * @param constants   Extension OID cache.
+ * @param rteid       1-based varno of the subquery owning the aggregates.
+ * @param cols        The columns to explode, at least one.
+ * @return  @p q, or @c NULL where the shape is not one this can rewrite.
+ */
 static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
                                          Index rteid, List *cols) {
   RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
@@ -29308,6 +29542,8 @@ static Query *process_query(const constants_t *constants, Query *q,
       split_targetlist_sublinks(constants, q) != NULL)
     return process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
+  if (provsql_active && q->hasSubLinks && has_provenance(constants, q))
+    split_setop_sublinks(constants, q);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_predicate_sublinks(constants, q) != NULL)
     return process_query(constants, q, removed, wrap_root, top_level,
@@ -32512,3 +32748,4 @@ void _PG_fini(void) {
   ExecutorEnd_hook    = prev_ExecutorEnd;
   ProcessUtility_hook = prev_ProcessUtility;
 }
+
