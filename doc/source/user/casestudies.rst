@@ -177,6 +177,18 @@ Supported SQL constructs
    "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓"
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
+   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "", "", "", ""
+   "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", ""
+   "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", ""
+   "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "", "", "", ""
+   "Scalar subquery", "", "", "", "", "", "", "✓", "", "✓"
+   "``INTERSECT``", "", "", "", "", "", "", "", "", ""
+   "``DISTINCT ON``", "", "", "", "", "", "", "", "", ""
+   "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", ""
+   "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", ""
+   "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist``)", "", "", "", "", "", "", "", "", ""
+   "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", ""
+   "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", ""
 
 NULL values and zero-annotated rows
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -210,6 +222,14 @@ Aggregation
    "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", "", ""
    "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", ""
+   "``stddev`` / ``variance`` over tracked rows", "", "", "", "", "", "", "", "", ""
+   "``bool_and`` / ``bool_or``", "", "", "", "✓", "", "", "", "", ""
+   "Functions of an aggregate result (``round`` / ``abs`` / ``power``…)", "", "", "", "", "", "", "", "", ""
+   "``COALESCE`` / ``NULLIF`` / ``GREATEST`` over aggregates", "", "", "", "", "", "", "", "", ""
+   "Aggregate of an aggregate result (``avg`` of a ``count``…)", "", "", "", "", "", "", "", "", ""
+   "``GROUP BY`` / ``DISTINCT`` on an aggregate value", "", "", "", "", "", "", "", "", ""
+   "Comparison over an aggregate in the ``SELECT`` list", "", "", "", "", "", "", "", "", ""
+   "Ranking groups by an aggregate (``rank() OVER (ORDER BY count(*))``)", "", "", "", "", "", "", "", "", ""
 
 Circuit inspection
 ~~~~~~~~~~~~~~~~~~~
@@ -227,6 +247,7 @@ Circuit inspection
    "``get_extra``", "", "", "", "", "", "", "✓", "", ""
    "``circuit_subgraph`` / ``resolve_input`` (Studio circuit mode)", "", "", "", "", "", "", "✓", "✓", ""
    "``simplified_circuit_subgraph``", "", "", "", "", "", "", "(✓)", "✓", ""
+   "``provenance_plus`` / ``provenance_times`` / ``provenance_not`` (circuits built by hand)", "", "", "", "", "", "", "", "", ""
 
 Knowledge compilation and safe queries
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -251,10 +272,12 @@ Knowledge compilation and safe queries
    "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓", ""
    "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓", ""
    "Inversion-free certificate (``annotate`` / ``inversion_free_key`` / Studio IF badge)", "", "", "", "", "", "", "", "✓", ""
-   "External-tool registry (``provsql.tools``, ``register_tool``, ``set_tool_preference``)", "", "", "", "", "", "", "", "(✓)", ""
+   "External-tool registry (``provsql.tools``, ``register_tool``, ``set_tool_preference``, ``set_tool_enabled``, ``unregister_tool``)", "", "", "", "", "", "", "", "(✓)", ""
    "``provsql.fallback_compiler`` GUC", "", "", "", "", "", "", "", "", ""
    "``provsql.tool_search_path`` GUC", "", "", "", "", "", "", "", "", ""
    "``provsql.kcmcp_server`` GUC (managed KCMCP server)", "", "", "", "", "", "", "", "", ""
+   "``provsql.joint_max_states`` / ``provsql.joint_max_treewidth`` GUCs", "", "", "", "", "", "", "", "", ""
+   "``provsql.mobius_max_cnf`` / ``provsql.mobius_max_gates`` GUCs", "", "", "", "", "", "", "", "", ""
 
 Semiring evaluation
 ~~~~~~~~~~~~~~~~~~~
@@ -311,6 +334,9 @@ Probabilities
    "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", "", ""
    "``provsql.rv_mc_samples`` GUC", "", "", "", "", "", "", "✓", "", "✓"
    "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", ""
+   "``probability_is_set``", "", "", "", "", "", "", "", "", ""
+   "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "", "", "", "", "", "", "", ""
+   "``provsql.last_eval_method`` GUC", "", "", "", "", "", "", "", "", ""
 
 Continuous random variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -327,7 +353,7 @@ Continuous random variables
    "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.beta``", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian``", "", "", "", "", "", "", "", "", ""
+   "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian`` (``wald``)", "", "", "", "", "", "", "", "", ""
    "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "Latent (``random_variable``) distribution parameters, e.g., ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓"
@@ -350,6 +376,9 @@ Continuous random variables
    "``probability((A) | (B))`` over two comparison events", "", "", "", "", "", "", "", "", "✓"
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
    "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""
+   "``categorical_from_log_pmf``", "", "", "", "", "", "", "", "", ""
+   "``rv_families`` (list of the distribution families)", "", "", "", "", "", "", "", "", ""
+   "``provsql.ess_warn_fraction`` GUC", "", "", "", "", "", "", "", "", ""
 
 Shapley and Banzhaf values
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -388,6 +417,7 @@ Data-modification tracking
    "INSERT / UPDATE / DELETE tracked", "", "", "", "", "✓", "", "", "", ""
    "``update_provenance`` log table", "", "", "", "", "✓", "", "", "", ""
    "``undo``", "", "", "", "", "✓", "", "", "", ""
+   "``transaction_token``", "", "", "", "", "", "", "", "", ""
 
 Temporal features
 ~~~~~~~~~~~~~~~~~
@@ -403,6 +433,21 @@ Temporal features
    "``history``", "", "", "", "", "✓", "", "", "", ""
    "``time_validity_view`` extension", "", "", "", "", "✓", "", "", "", ""
    "``get_valid_time``", "", "", "", "", "", "", "", "", ""
+
+Persistence and administration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. csv-table::
+   :class: coverage-matrix
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+
+   "``check_store``", "", "", "", "", "", "", "", "", ""
+   "``circuit_cleanup``", "", "", "", "", "", "", "", "", ""
+   "``migrate_table_info``", "", "", "", "", "", "", "", "", ""
+   "``provsql.gate_cache_size`` GUC", "", "", "", "", "", "", "", "", ""
+   "``provsql.synchronous_commit`` / ``provsql.wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", ""
+   "``provsql.implicit_freeze`` GUC", "", "", "", "", "", "", "", "", ""
 
 Export and visualisation
 ~~~~~~~~~~~~~~~~~~~~~~~~~
