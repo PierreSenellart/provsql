@@ -7909,8 +7909,30 @@ static void rewrite_deviation_aggregates(const constants_t *constants,
   q->targetList = (List *)deviation_mutator((Node *)q->targetList, &c);
 }
 
+/** @brief Mutator: @c rewrite_agg_case_mutator outside the windows -- a
+ *  window call and the distinct tokens a dense_rank() counts read their
+ *  arguments as values PostgreSQL sorts and compares, which an agg_token
+ *  cannot be. */
+static Node *lower_agg_cases_outside_windows(Node *node, void *context) {
+  const constants_t *constants = (const constants_t *)context;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, WindowFunc) ||
+      (IsA(node, FuncExpr) &&
+       OidIsValid(constants->OID_FUNCTION_WINDOW_DISTINCT_TOKENS) &&
+       ((FuncExpr *)node)->funcid ==
+         constants->OID_FUNCTION_WINDOW_DISTINCT_TOKENS))
+    return node;
+  if (IsA(node, CaseExpr) || IsA(node, MinMaxExpr) ||
+      IsA(node, CoalesceExpr) || IsA(node, NullIfExpr))
+    return rewrite_agg_case_mutator(node, context);
+  return expression_tree_mutator(node, lower_agg_cases_outside_windows,
+                                 context);
+}
+
 static void
-rewrite_agg_cases(const constants_t *constants, Query *q)
+rewrite_agg_cases_ex(const constants_t *constants, Query *q,
+                     bool outside_windows)
 {
   ListCell *lc;
 
@@ -7918,9 +7940,25 @@ rewrite_agg_cases(const constants_t *constants, Query *q)
     return;
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
-    te->expr =
-      (Expr *)rewrite_agg_case_mutator((Node *)te->expr, (void *)constants);
+    /* After the windows are lowered, a key of a window, an ORDER BY or a
+     * GROUP BY is sorted or compared by PostgreSQL on the plain value, and so
+     * is what a window call reads: lowered to an agg_token, it would be
+     * compared as one, which raises. */
+    if (outside_windows) {
+      if (te->ressortgroupref != 0)
+        continue;
+      te->expr = (Expr *)lower_agg_cases_outside_windows((Node *)te->expr,
+                                                         (void *)constants);
+    } else
+      te->expr =
+        (Expr *)rewrite_agg_case_mutator((Node *)te->expr, (void *)constants);
   }
+}
+
+static void
+rewrite_agg_cases(const constants_t *constants, Query *q)
+{
+  rewrite_agg_cases_ex(constants, q, false);
 }
 
 /**
@@ -20488,6 +20526,15 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   }
 
 join:
+  /* A count(*) body counts the rows its group matched, which the join tells
+   * from the null-padded row by a key of the body's relation: a constant match
+   * indicator, since any data column can be NULL on a matched row too -- the
+   * grand total of a ROLLUP, whose grouping columns are all NULL, counted as
+   * no row at all, and its rank came out 0. */
+  if (is_agg_body &&
+      ((Aggref *)((TargetEntry *)linitial(sub->targetList))->expr)->aggstar &&
+      !oj_wrap_body_with_match_ind(constants, sub))
+    return false;
   /* A multi-table body (Q1, Q2, … in FROM) is collapsed into a single derived
    * cross-product subquery D, after which the body is "SELECT val FROM D WHERE
    * W" -- the single-Q path below handles D exactly as it handles a subquery R. */
@@ -25734,6 +25781,64 @@ static bool is_actual_marker(const constants_t *constants, Node *n) {
          ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PLAIN;
 }
 
+/**
+ * @brief Whether @p q gives at most one row in every world: a scalar
+ *        aggregation, or a product of such, filtered or not.
+ */
+static bool block_at_most_one_row(const Query *q) {
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
+      q->hasTargetSRFs || q->groupingSets != NIL || q->jointree == NULL)
+    return false;
+  if (q->hasAggs && q->groupClause == NIL)
+    return true;
+  if (q->hasAggs || q->groupClause != NIL || q->jointree->fromlist == NIL)
+    return false;
+  foreach (lc, q->jointree->fromlist) {
+    RangeTblEntry *r;
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+    r = rt_fetch(((RangeTblRef *)lfirst(lc))->rtindex, q->rtable);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL ||
+        !block_at_most_one_row(r->subquery))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Drop an @c ORDER @c BY @c ... @c LIMIT @c k (k at least 1, no
+ *        @c OFFSET) over a block of at most one row, which neither orders
+ *        nor truncates anything, in any world.
+ *
+ * @c "SELECT count(*), sum(x) FROM ... ORDER BY count(*) LIMIT 100" (TPC-DS
+ * 16, 90, 92, 94, 96) is read as it is written: the truncation would
+ * otherwise become the rank of a window, reported as a window the query does
+ * not have.
+ */
+static void drop_trivial_limit(Query *q) {
+  Const *c;
+
+  Node *folded;
+
+  if (q->limitCount == NULL || q->limitOffset != NULL)
+    return;
+  /* LIMIT 100 is parsed as the cast of an integer to bigint */
+  folded = eval_const_expressions(NULL, copyObject(q->limitCount));
+  if (!IsA(folded, Const))
+    return;
+  c = (Const *)folded;
+  if (c->constisnull || c->consttype != INT8OID ||
+      DatumGetInt64(c->constvalue) < 1 || !block_at_most_one_row(q))
+    return;
+  q->limitCount = NULL;
+#if PG_VERSION_NUM >= 130000
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  q->sortClause = NIL;
+}
+
 /** @brief Whether the LIMIT / OFFSET of @p q removes rows. */
 static bool limit_truncates(const Query *q) {
   return q->limitOffset != NULL ||
@@ -29055,6 +29160,8 @@ static Query *process_query(const constants_t *constants, Query *q,
     return process_query(constants, rewrite_intersect(constants, q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   }
+  if (provsql_active)
+    drop_trivial_limit(q);
   if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
       q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
       q->setOperations == NULL && q->distinctClause == NIL) {
@@ -29600,7 +29707,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       /* A GREATEST, CASE, COALESCE or NULLIF over the window aggregates just
        * lowered: an agg_case, as over the aggregates of a GROUP BY above. */
       if (windows_replaced)
-        rewrite_agg_cases(constants, q);
+        rewrite_agg_cases_ex(constants, q, true);
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */

@@ -147,4 +147,40 @@ DROP VIEW ro_v;
 SELECT remove_provenance('ro_vt');
 DROP TABLE ro_vt;
 
+-- The rank of a row whose grouping columns are all NULL, the grand total of
+-- a ROLLUP (TPC-DS 67).  The subquery counting the rows before and the row
+-- itself keyed its count on a grouping column, NULL on that row too, and
+-- counted no row at all: rank 0.  It is keyed on a constant now.  Over an empty
+-- table the grand total is the one row, of rank 1 in every world.
+CREATE TABLE ro_e(c text, x int);
+SELECT add_provenance('ro_e');
+CREATE TABLE ro_er AS
+  SELECT c, rank() OVER (ORDER BY s DESC) AS rk
+  FROM (SELECT c, sum(x) AS s FROM ro_e GROUP BY ROLLUP(c)) d;
+SELECT remove_provenance('ro_er');
+SELECT c, rk::text AS rk FROM ro_er;
+DROP TABLE ro_er;
+SELECT remove_provenance('ro_e');
+DROP TABLE ro_e;
+
+-- A dense_rank() ordered by a CASE over the aggregates of its own query is
+-- computed on the plain values, with a warning; the CASE lowered to an
+-- agg_token inside what the dense_rank counts was compared as one, and raised
+-- ("Comparison agg_token-agg_token not implemented").  The ranks are plain
+-- SQL's.
+CREATE TABLE ro_c(pid int);
+INSERT INTO ro_c VALUES (1), (1), (2), (3), (3), (3);
+SELECT add_provenance('ro_c');
+SET client_min_messages = error;
+CREATE TABLE ro_cr AS
+  SELECT pid, dense_rank() OVER (ORDER BY CASE WHEN count(*) > 1
+                                              THEN count(*) ELSE 0 END DESC) AS r
+  FROM ro_c GROUP BY pid;
+RESET client_min_messages;
+SELECT remove_provenance('ro_cr');
+SELECT pid, r::text AS r FROM ro_cr ORDER BY pid;
+DROP TABLE ro_cr;
+SELECT remove_provenance('ro_c');
+DROP TABLE ro_c;
+
 DROP TABLE ro;

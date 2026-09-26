@@ -311,3 +311,27 @@ SELECT remove_provenance('lr_tie');
 DROP TABLE lr_tie;
 SELECT remove_provenance('lr_v');
 DROP TABLE lr_v;
+
+-- ORDER BY ... LIMIT k over a block of at most one row -- a scalar
+-- aggregation, or a product of such (TPC-DS 16, 90, 92, 94, 96) -- neither
+-- orders nor truncates in any world: it is dropped, so the values are tracked
+-- and no window the query does not have is reported.
+CREATE TABLE lr_one(k int, x int);
+INSERT INTO lr_one VALUES (1, 1), (1, 2), (2, 3);
+SELECT add_provenance('lr_one');
+CREATE TABLE lr_one_r AS
+  SELECT count(DISTINCT x) AS n, sum(x) AS s FROM lr_one
+  ORDER BY count(DISTINCT x) LIMIT 100;
+SELECT remove_provenance('lr_one_r');
+SELECT n::text AS n, s::text AS s FROM lr_one_r;
+DROP TABLE lr_one_r;
+CREATE TABLE lr_one_r AS
+  SELECT a::numeric / b::numeric AS r
+  FROM (SELECT count(*) AS a FROM lr_one) x,
+       (SELECT count(*) AS b FROM lr_one WHERE k = 1) y
+  ORDER BY r LIMIT 100;
+SELECT remove_provenance('lr_one_r');
+SELECT round(r::text::numeric, 4) AS r FROM lr_one_r;
+DROP TABLE lr_one_r;
+SELECT remove_provenance('lr_one');
+DROP TABLE lr_one;
