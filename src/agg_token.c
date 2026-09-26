@@ -528,6 +528,38 @@ agg_token_plain_text(PG_FUNCTION_ARGS)
   PG_RETURN_TEXT_P(cstring_to_text(agg_token_value_cstring(aggtok)));
 }
 
+PG_FUNCTION_INFO_V1(ntile_as_rank);
+/**
+ * @brief The @c agg_token of the bucket @c ntile() gives a row, read over
+ *        its rank.
+ *
+ * Rows that tie on the @c ORDER @c BY of the window share the bucket of
+ * their rank, which is the reading of the semantics; SQL numbers them in
+ * some order and may split them between two buckets.  When @p sql_bucket,
+ * PostgreSQL's, differs from the tracked one, a warning says so, once per
+ * statement.
+ *
+ * @param bucket      The @c agg_token of the tracked bucket.
+ * @param sql_bucket  The bucket PostgreSQL gave the row.
+ * @return @p bucket.
+ */
+Datum
+ntile_as_rank(PG_FUNCTION_ARGS)
+{
+  static TimestampTz warned = 0;
+  agg_token *bucket = (agg_token *) PG_GETARG_POINTER(0);
+  int64 sql_bucket = PG_GETARG_INT64(1);
+
+  if (!agg_token_val_is_null(bucket) &&
+      strtoll(bucket->val, NULL, 10) != sql_bucket &&
+      warned != GetCurrentStatementStartTimestamp()) {
+    warned = GetCurrentStatementStartTimestamp();
+    provsql_warning("ntile() gives rows that tie on the ORDER BY the bucket "
+                    "of their rank, where SQL splits them between buckets");
+  }
+  PG_RETURN_POINTER(bucket);
+}
+
 PG_FUNCTION_INFO_V1(row_number_as_rank);
 /**
  * @brief The @c agg_token of @c rank() standing for @c row_number().

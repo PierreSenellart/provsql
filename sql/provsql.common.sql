@@ -7960,6 +7960,22 @@ CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
   AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
+ * @brief The bucket of a row read over its rank, for @c ntile() (internal)
+ *
+ * Called by the query rewriter for <tt>ntile(n) OVER (…)</tt> over
+ * provenance-tracked relations, whose bucket is computed from the rank of the
+ * row: rows that tie on the <tt>ORDER BY</tt> share a bucket, where SQL may
+ * split them.  Returns @p bucket, with a warning, once per statement, when
+ * @p sql_bucket differs from it.
+ *
+ * @param bucket the agg_token of the tracked bucket
+ * @param sql_bucket the bucket PostgreSQL gave the row
+ */
+CREATE OR REPLACE FUNCTION ntile_as_rank(bucket agg_token, sql_bucket bigint)
+  RETURNS agg_token
+  AS 'provsql','ntile_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+
+/**
  * @brief The contributions of the distinct values of a window frame
  *        (internal)
  *

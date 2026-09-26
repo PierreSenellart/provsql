@@ -120,6 +120,13 @@ SELECT * FROM wa_report('ntile(4), whole table',
   'ntile(4) OVER (ORDER BY x, id)', 'v >= 3');
 SELECT * FROM wa_report('ntile(3), more buckets than rows in a partition',
   'ntile(3) OVER (PARTITION BY g ORDER BY x DESC, id)', 'v = 1');
+-- Ordered on x alone, rows 2 and 3 tie: they share the bucket of their rank,
+-- 1, where SQL splits them between the two buckets, and a WARNING says so.
+CREATE TABLE wa_ntile_ties AS
+  SELECT id, ntile(2) OVER (PARTITION BY g ORDER BY x) AS b FROM wa;
+SELECT remove_provenance('wa_ntile_ties');
+SELECT id, b::text AS b FROM wa_ntile_ties ORDER BY id;
+DROP TABLE wa_ntile_ties;
 SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',

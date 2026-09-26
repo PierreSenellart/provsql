@@ -242,6 +242,9 @@ typedef struct constants_t {
    *  relations is rewritten into; @c InvalidOid on a schema that predates
    *  it. */
   Oid OID_FUNCTION_ROW_NUMBER_AS_RANK;
+  /** @brief OID of @c ntile_as_rank, the tie check of a tracked
+   *  @c ntile(); @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_NTILE_AS_RANK;
   /** @brief OID of @c window_distinct_tokens, used for @c dense_rank();
    *  @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_WINDOW_DISTINCT_TOKENS;

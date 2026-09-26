@@ -41,6 +41,18 @@ namespace provsql {
  */
 unsigned runCaseCmpExpander(GenericCircuit &gc);
 
+/**
+ * @brief Decide every comparison between two constants.
+ *
+ * The expansion of a guarded selection, and the constant folding of the
+ * arithmetic over its arms, can leave a comparison with a constant on both
+ * sides -- @c "round(2 + 1) > 3" once folded -- which no evaluator reads: it
+ * holds in every world or in none, and becomes @c gate_one or @c gate_zero.
+ *
+ * @return  The number of comparisons decided.
+ */
+unsigned runConstantCmpDecider(GenericCircuit &gc);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_CASE_CMP_EXPANDER_H

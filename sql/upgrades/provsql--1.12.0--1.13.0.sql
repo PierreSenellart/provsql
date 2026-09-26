@@ -2269,6 +2269,12 @@ CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
   RETURNS agg_token
   AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
+-- ntile() is read over the rank too, with its own warning where SQL splits
+-- the peers.
+CREATE OR REPLACE FUNCTION ntile_as_rank(bucket agg_token, sql_bucket bigint)
+  RETURNS agg_token
+  AS 'provsql','ntile_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+
 -- and dense_rank() counts the distinct values before the row.
 
 CREATE OR REPLACE FUNCTION window_distinct_tokens(vals anyarray, tokens uuid[])

@@ -261,6 +261,28 @@ bool subtract_expression_comparisons(GenericCircuit &gc, gate_t &zero,
 
 }  // namespace
 
+unsigned runConstantCmpDecider(GenericCircuit &gc)
+{
+  unsigned decided = 0;
+
+  for (std::size_t i = 0; i < gc.getNbGates(); ++i) {
+    const auto g = static_cast<gate_t>(i);
+    bool okop = false, holds = false;
+    if (gc.getGateType(g) != gate_cmp || gc.getWires(g).size() != 2)
+      continue;
+    const ComparisonOperator op = provsql_having_detail::map_cmp_op(gc, g, okop);
+    const gate_t l = gc.getWires(g)[0], r = gc.getWires(g)[1];
+    if (!okop || !decide_constant_cmp(gc, l, r, op, holds))
+      continue;
+    if (holds)
+      gc.resolveGateToOne(g);
+    else
+      gc.resolveGateToZero(g);
+    ++decided;
+  }
+  return decided;
+}
+
 unsigned runCaseCmpExpander(GenericCircuit &gc)
 {
   unsigned expanded = 0;
@@ -276,10 +298,15 @@ unsigned runCaseCmpExpander(GenericCircuit &gc)
     /* A comparison between two expressions becomes one with 0, and a
      * selection under the arithmetic a comparison reads comes up, a level per
      * round, so that the expansion below reaches it. */
-    if (subtract_expression_comparisons(gc, zero, have_zero))
+    bool rewritten = false;
+    if (subtract_expression_comparisons(gc, zero, have_zero)) {
       ++expanded;
-    if (hoist_cases_out_of_arith(gc))
+      rewritten = true;
+    }
+    if (hoist_cases_out_of_arith(gc)) {
       ++expanded;
+      rewritten = true;
+    }
     const auto nb = gc.getNbGates();
 
     for (std::size_t i = 0; i < nb; ++i) {
@@ -299,8 +326,11 @@ unsigned runCaseCmpExpander(GenericCircuit &gc)
           break;
         }
     }
-    if (todo.empty())
+    if (todo.empty()) {
+      if (rewritten)
+        continue;   /* a selection came up a level: the next round reads it */
       break;
+    }
 
     if (!have_one) {
       one = gc.addAnonymousGate(gate_one, {});

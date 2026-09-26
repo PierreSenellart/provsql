@@ -71,6 +71,20 @@ ntile(4), whole table|t|{0.048600000,0.224640000,0.557200000,0.371040000,0.00000
 q|exact|probabilities
 ntile(3), more buckets than rows in a partition|t|{0.018000000,0.328000000,0.210000000,0.400000000,0.060000000,0.900000000}
 (1 row)
+WARNING:  ProvSQL: ntile() gives rows that tie on the ORDER BY the bucket of their rank, where SQL splits them between buckets
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+id|b
+1|1
+2|1
+3|1
+4|2
+5|1
+6|2
+(6 rows)
 q|exact|probabilities
 share of the partition|t|{0.078000000,0.360000000,0.560000000,0.400000000,0.600000000,0.900000000}
 (1 row)

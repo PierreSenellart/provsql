@@ -245,6 +245,19 @@ void resolveGateToZero(gate_t g) {
 }
 
 /**
+ * @brief Rewrite a gate as @c gate_one, the event that holds in every world.
+ *
+ * Used by @c runConstantCmpDecider for a comparison between two constants
+ * that holds.  Same clearing as @c resolveGateToZero.
+ */
+void resolveGateToOne(gate_t g) {
+  setGateType(g, gate_one);
+  getWires(g).clear();
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Rewrite an arbitrary gate as a @c gate_value carrying the
  *        textual extra @p s.
  *

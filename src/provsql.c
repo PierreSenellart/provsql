@@ -11413,6 +11413,17 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
 
   if (node == NULL)
     return NULL;
+  /* An ntile's tie check (ntile_as_rank): the tracked bucket is lowered, the
+   * ntile PostgreSQL computes, which it is compared with, stays as it is. */
+  if (IsA(node, FuncExpr) &&
+      OidIsValid(c->constants->OID_FUNCTION_NTILE_AS_RANK) &&
+      ((FuncExpr *)node)->funcid == c->constants->OID_FUNCTION_NTILE_AS_RANK &&
+      list_length(((FuncExpr *)node)->args) == 2) {
+    FuncExpr *fe = (FuncExpr *)copyObject(node);
+    linitial(fe->args) =
+      window_aggregation_mutator((Node *)linitial(fe->args), ctx);
+    return (Node *)fe;
+  }
   if (IsA(node, WindowFunc)) {
     WindowFunc *wf = (WindowFunc *)node;
     Expr *e;
@@ -27552,6 +27563,12 @@ static Node *cume_dist_mutator(Node *node, void *cx) {
 
   if (node == NULL)
     return NULL;
+  /* The check an ntile was rewritten into compares the tracked bucket with
+   * PostgreSQL's ntile, which stays as it is. */
+  if (IsA(node, FuncExpr) &&
+      OidIsValid(ctx->constants->OID_FUNCTION_NTILE_AS_RANK) &&
+      ((FuncExpr *)node)->funcid == ctx->constants->OID_FUNCTION_NTILE_AS_RANK)
+    return node;
   if (IsA(node, WindowFunc) && ((WindowFunc *)node)->winfnoid == F_CUME_DIST_) {
     WindowFunc *wf = (WindowFunc *)node;
     WindowClause *wc = window_clause_of(ctx->q, wf->winref);
@@ -27720,6 +27737,28 @@ static Node *cume_dist_mutator(Node *node, void *cx) {
     if (res == NULL) {
       ctx->declined = true;
       return node;
+    }
+    if (OidIsValid(ctx->constants->OID_FUNCTION_NTILE_AS_RANK)) {
+      /* Checked against the bucket PostgreSQL gives the row, which differs
+       * where it splits peers between two buckets: ntile_as_rank warns
+       * then.  Its argument becomes an agg_token when the window aggregates
+       * are lowered; PostgreSQL's ntile stays as it is. */
+      FuncExpr *check = makeNode(FuncExpr);
+      Node *actual = coerce_to_target_type(NULL, (Node *)copyObject(wf),
+                                           INT4OID, INT8OID, -1,
+                                           COERCION_EXPLICIT,
+                                           COERCE_EXPLICIT_CAST, -1);
+      if (actual == NULL) {
+        ctx->declined = true;
+        return node;
+      }
+      check->funcid = ctx->constants->OID_FUNCTION_NTILE_AS_RANK;
+      check->funcresulttype = ctx->constants->OID_TYPE_AGG_TOKEN;
+      check->funcformat = COERCE_EXPLICIT_CALL;
+      check->args = list_make2(res, actual);
+      check->location = -1;
+      ctx->rewritten = true;
+      return (Node *)check;
     }
     ctx->rewritten = true;
     return res;

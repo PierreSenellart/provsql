@@ -70,6 +70,11 @@ void resolveComparators(GenericCircuit &gc, gate_t root,
     runRangeCheck(gc);
   }
 
+  // What the fold leaves with a constant on both sides -- an arm of a guarded
+  // selection over constants, round(2 + 1) > 3 -- holds in every world or in
+  // none.
+  const unsigned constant_cmp = runConstantCmpDecider(gc);
+
   // Island decomposer: group continuous-island comparators by base-RV
   // footprint overlap and inline a joint-distribution table (a gate_plus
   // over gate_mulinputs) for each shared group, so correlated comparators
@@ -104,8 +109,8 @@ void resolveComparators(GenericCircuit &gc, gate_t root,
   const unsigned always_true = runHavingAlwaysTrueRewriter(gc);
 
   const unsigned total =
-    case_cmp + reflexive + analytic + count_cmp + minmax + sum + agg_marginal +
-    always_true;
+    case_cmp + reflexive + constant_cmp + analytic + count_cmp + minmax + sum +
+    agg_marginal + always_true;
   if (total > 0 && provsql_verbose >= 5) {
     const std::size_t gates_after = count_reachable(gc, root);
     std::vector<std::string> parts;

@@ -912,5 +912,17 @@ CREATE TABLE agg_ng_r AS
 SELECT remove_provenance('agg_ng_r');
 SELECT * FROM agg_ng_r ORDER BY g;
 DROP TABLE agg_ng_r;
+-- The same under a cast to integer, a rounding: the selection comes up
+-- through the addition and then through the rounding, a level per round.
+-- count + GREATEST(sum, 2) + 1 as an integer exceeds 3 where group 1 has both
+-- rows (0.25) and for group 2 (0.5).
+CREATE TABLE agg_ng_r AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 6) AS p_gt3
+  FROM (SELECT g, (GREATEST(sum(v), 2) + 1)::int AS x
+        FROM agg_ng GROUP BY g) z
+  WHERE x > 3;
+SELECT remove_provenance('agg_ng_r');
+SELECT * FROM agg_ng_r ORDER BY g;
+DROP TABLE agg_ng_r;
 SELECT remove_provenance('agg_ng');
 DROP TABLE agg_ng;
