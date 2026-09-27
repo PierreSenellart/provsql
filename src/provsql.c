@@ -3253,6 +3253,10 @@ static int outer_join_depth_query(Query *q);
 /** @brief Name prefix of the CTEs holding a shared input. */
 #define PROVSQL_SHARED_CTE_PREFIX "provsql_shared_"
 
+/** @brief The @c location of a shared CTE whose body is rewritten: no parse
+ *  location, as the CTE is the rewriting's own, and copied with it. */
+#define PROVSQL_SHARED_CTE_REWRITTEN (-2)
+
 /** @brief Whether @p name names a CTE holding a shared input. */
 static bool is_shared_cte_name(const char *name) {
   return name != NULL &&
@@ -31271,6 +31275,36 @@ static bool shared_cte_refs_walker(Node *node, void *cx) {
   return expression_tree_walker(node, shared_cte_refs_walker, cx);
 }
 
+/** @brief Context for @c shared_cte_rename_walker. */
+typedef struct shared_cte_rename_ctx {
+  const char *from;       ///< The name the reads have
+  char *to;               ///< The name they get
+  int depth;              ///< Levels below the query holding the CTE
+} shared_cte_rename_ctx;
+
+/** @brief Walker: rename the reads of a CTE of the query walked from. */
+static bool shared_cte_rename_walker(Node *node, void *cx) {
+  shared_cte_rename_ctx *c = (shared_cte_rename_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *qq = (Query *)node;
+    ListCell *lc;
+    bool r;
+    foreach (lc, qq->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      if (rte->rtekind == RTE_CTE && rte->ctelevelsup == (Index)c->depth &&
+          strcmp(rte->ctename, c->from) == 0)
+        rte->ctename = c->to;
+    }
+    ++c->depth;
+    r = query_tree_walker(qq, shared_cte_rename_walker, cx, 0);
+    --c->depth;
+    return r;
+  }
+  return expression_tree_walker(node, shared_cte_rename_walker, cx);
+}
+
 /**
  * @brief Rewrite, once, the body of each shared CTE of @p q (see "Shared
  *        inputs of outer joins"), and record where its provenance is.
@@ -31292,8 +31326,34 @@ static void rewrite_shared_ctes(const constants_t *constants, Query *q,
     AttrNumber a = 0;
     ListCell *tc;
 
-    if (!is_shared_cte_name(cte->ctename) || shared_cte_provsql(cte->ctename))
+    if (!is_shared_cte_name(cte->ctename))
       continue;
+    if (cte->location == PROVSQL_SHARED_CTE_REWRITTEN &&
+        shared_cte_body(cte->ctename) == (Query *)cte->ctequery)
+      continue;                   /* this very CTE, rewritten already */
+    if (shared_cte_provsql(cte->ctename)) {
+      /* A copy of a CTE rewritten elsewhere -- a pass copied the query
+       * holding it (the one of COUNT(DISTINCT), for one): a CTE of its own,
+       * under a name of its own.  Copied after the rewriting, it has its
+       * provenance column and its reads were copied with it; copied before,
+       * it is rewritten here like any other. */
+      shared_cte_rename_ctx rn;
+      shared_cte_entry *e = palloc(sizeof(shared_cte_entry));
+      AttrNumber done = cte->location == PROVSQL_SHARED_CTE_REWRITTEN
+                          ? shared_cte_provsql(cte->ctename) : 0;
+      rn.from = cte->ctename;
+      rn.to = psprintf("%s%d", PROVSQL_SHARED_CTE_PREFIX,
+                       ++shared_cte_counter);
+      rn.depth = 0;
+      shared_cte_rename_walker((Node *)q, &rn);
+      cte->ctename = rn.to;
+      e->name = rn.to;
+      e->provsql = done;
+      e->body = done != 0 ? (Query *)cte->ctequery : NULL;
+      shared_ctes = lappend(shared_ctes, e);
+      if (done != 0)
+        continue;
+    }
     body = (Query *)cte->ctequery;
     old_len = list_length(body->targetList);
     nb = process_query(constants, body, &removed, false, false,
@@ -31301,6 +31361,7 @@ static void rewrite_shared_ctes(const constants_t *constants, Query *q,
     if (nb == NULL)
       provsql_error("shared CTE \"%s\" has no provenance", cte->ctename);
     cte->ctequery = (Node *)nb;
+    cte->location = PROVSQL_SHARED_CTE_REWRITTEN;
     foreach (tc, nb->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(tc);
       if (te->resjunk)

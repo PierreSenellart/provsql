@@ -475,5 +475,23 @@ CREATE TABLE oj_c_r AS
 SELECT remove_provenance('oj_c_r');
 SELECT o, round(sum(p)::numeric, 6) AS p FROM oj_c_r GROUP BY o ORDER BY o;
 DROP TABLE oj_c_r;
+-- COUNT(DISTINCT) over a chain: its rewriting copies the query holding the
+-- shared CTE, and the copy is a CTE of its own (difftest's BEAVER dw/082: "could
+-- not find pathkey item to sort", and a wrong probability once that was
+-- avoided).  Group 0: 1/8 for two distinct x; 3/4, 3/4, 1/2 for no t.
+CREATE TABLE oj_c_r AS
+  SELECT r.k, probability_evaluate(provenance()) AS p
+  FROM oj_c r LEFT JOIN oj_c s ON s.k = r.id LEFT JOIN oj_c t ON t.k = s.id
+  GROUP BY r.k HAVING count(DISTINCT s.x) >= 2;
+SELECT remove_provenance('oj_c_r');
+SELECT k, round(p::numeric, 6) AS p FROM oj_c_r ORDER BY k;
+DROP TABLE oj_c_r;
+CREATE TABLE oj_c_r AS
+  SELECT r.k, probability_evaluate(provenance()) AS p
+  FROM oj_c r LEFT JOIN oj_c s ON s.k = r.id LEFT JOIN oj_c t ON t.k = s.id
+  GROUP BY r.k HAVING count(DISTINCT t.id) = 0;
+SELECT remove_provenance('oj_c_r');
+SELECT k, round(p::numeric, 6) AS p FROM oj_c_r ORDER BY k;
+DROP TABLE oj_c_r;
 SELECT remove_provenance('oj_c');
 DROP TABLE oj_c;
