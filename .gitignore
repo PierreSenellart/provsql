@@ -46,3 +46,4 @@ wasm/.build/
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+src/build_id.h

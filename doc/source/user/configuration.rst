@@ -414,3 +414,15 @@ precedence over the database-level one and are left untouched.
 
 ProvSQL never edits your ``search_path`` on its own: ``CREATE EXTENSION``
 only advises, and ``setup_search_path()`` runs only when you call it.
+
+The Build in Use
+----------------
+
+The extension's version, ``1.13.0-dev`` for instance, is the same for every
+build of a development cycle. ``provsql.build_id()`` tells the builds apart: it
+returns the commit the loaded library was built from, as
+``git describe --tags --always --dirty`` gives it (e.g.,
+``v1.12.0-431-g577cc730``, with ``-dirty`` for a build from uncommitted
+changes), or ``unknown`` for a build outside a git checkout. It is worth
+quoting in a bug report, or recording beside results that depend on the
+build.

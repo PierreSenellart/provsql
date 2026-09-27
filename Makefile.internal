@@ -221,3 +221,20 @@ provsql_migrate_mmap: src/provsql_migrate_mmap.cpp
 		-I$(shell $(PG_CONFIG) --includedir) \
 		-o provsql_migrate_mmap src/provsql_migrate_mmap.cpp \
 		-L$(shell $(PG_CONFIG) --libdir) -lpq
+
+# The commit the library is built from, for provsql.build_id(): the header is
+# rewritten only when it changes, so that a new commit recompiles build_id.c
+# and nothing else.  Outside a git checkout (a source archive), "unknown".
+# Where git gives no answer but the header exists -- `sudo make install`,
+# whose git refuses a repository another user owns -- it is kept, or the
+# install would rebuild the library as "unknown".
+PROVSQL_BUILD_ID := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+src/build_id.h: FORCE
+	@if [ "$(PROVSQL_BUILD_ID)" = unknown ] && [ -f $@ ]; then :; else \
+	  echo '#define PROVSQL_BUILD_ID "$(PROVSQL_BUILD_ID)"' > $@.tmp; \
+	  cmp -s $@.tmp $@ || mv $@.tmp $@; \
+	  rm -f $@.tmp; \
+	fi
+src/build_id.o: src/build_id.h
+.PHONY: FORCE
+FORCE:

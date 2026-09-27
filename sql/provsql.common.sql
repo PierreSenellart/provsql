@@ -11970,6 +11970,19 @@ $$ LANGUAGE plpgsql;
 /** @} */
 
 /**
+ * @brief The build of the ProvSQL library loaded, as text
+ *
+ * The commit the library was built from, as @c "git describe --tags --always
+ * --dirty" gives it (e.g., @c v1.12.0-431-g577cc730), or @c unknown for a
+ * build outside a git checkout.  The extension's version is the same for
+ * every build of a development cycle; this tells them apart, for a bug report
+ * or a record of which build produced a result.
+ */
+CREATE OR REPLACE FUNCTION build_id()
+  RETURNS text
+  AS 'provsql','build_id' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief Append @c provsql to this database's default search_path, if missing.
  *
  * ProvSQL's operators and functions live in the @c provsql schema and

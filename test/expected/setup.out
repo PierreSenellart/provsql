@@ -8,3 +8,6 @@ NOTICE:  ProvSQL: appended provsql to search_path for database "contrib_regressi
 setup_search_path
 provsql_test, provsql
 (1 row)
+has_build_id
+t
+(1 row)
