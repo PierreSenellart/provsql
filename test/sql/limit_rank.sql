@@ -333,5 +333,11 @@ CREATE TABLE lr_one_r AS
 SELECT remove_provenance('lr_one_r');
 SELECT round(r::text::numeric, 4) AS r FROM lr_one_r;
 DROP TABLE lr_one_r;
+-- The same with no ORDER BY: which rows a LIMIT keeps is left open by SQL only
+-- where there are more rows than it keeps, so no warning here.
+CREATE TABLE lr_one_r AS SELECT count(x) AS n FROM lr_one LIMIT 10;
+SELECT remove_provenance('lr_one_r');
+SELECT n::text AS n FROM lr_one_r;
+DROP TABLE lr_one_r;
 SELECT remove_provenance('lr_one');
 DROP TABLE lr_one;

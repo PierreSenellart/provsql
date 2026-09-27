@@ -26224,6 +26224,26 @@ static bool block_at_most_one_row(const Query *q) {
 }
 
 /**
+ * @brief Whether @p q has a @c LIMIT @c k (k a constant at least 1, no
+ *        @c OFFSET) over a block of at most one row: a truncation that
+ *        removes nothing, in any world, with an @c ORDER @c BY or without.
+ */
+static bool limit_is_trivial(const Query *q) {
+  Node *folded;
+  Const *c;
+
+  if (q->limitCount == NULL || q->limitOffset != NULL)
+    return false;
+  /* LIMIT 100 is parsed as the cast of an integer to bigint */
+  folded = eval_const_expressions(NULL, copyObject(q->limitCount));
+  if (!IsA(folded, Const))
+    return false;
+  c = (Const *)folded;
+  return !c->constisnull && c->consttype == INT8OID &&
+         DatumGetInt64(c->constvalue) >= 1 && block_at_most_one_row(q);
+}
+
+/**
  * @brief Drop an @c ORDER @c BY @c ... @c LIMIT @c k (k at least 1, no
  *        @c OFFSET) over a block of at most one row, which neither orders
  *        nor truncates anything, in any world.
@@ -26234,19 +26254,7 @@ static bool block_at_most_one_row(const Query *q) {
  * not have.
  */
 static void drop_trivial_limit(Query *q) {
-  Const *c;
-
-  Node *folded;
-
-  if (q->limitCount == NULL || q->limitOffset != NULL)
-    return;
-  /* LIMIT 100 is parsed as the cast of an integer to bigint */
-  folded = eval_const_expressions(NULL, copyObject(q->limitCount));
-  if (!IsA(folded, Const))
-    return;
-  c = (Const *)folded;
-  if (c->constisnull || c->consttype != INT8OID ||
-      DatumGetInt64(c->constvalue) < 1 || !block_at_most_one_row(q))
+  if (!limit_is_trivial(q))
     return;
   q->limitCount = NULL;
 #if PG_VERSION_NUM >= 130000
@@ -26257,9 +26265,11 @@ static void drop_trivial_limit(Query *q) {
 
 /** @brief Whether the LIMIT / OFFSET of @p q removes rows. */
 static bool limit_truncates(const Query *q) {
-  return q->limitOffset != NULL ||
-         (q->limitCount != NULL &&
-          !(IsA(q->limitCount, Const) && ((Const *)q->limitCount)->constisnull));
+  return (q->limitOffset != NULL ||
+          (q->limitCount != NULL &&
+           !(IsA(q->limitCount, Const) &&
+             ((Const *)q->limitCount)->constisnull))) &&
+         !limit_is_trivial(q);
 }
 
 /** @brief Context for @c uncertain_value_walker. */
