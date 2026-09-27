@@ -92,12 +92,16 @@ DROP TABLE agg_result5;
 SELECT string_agg(DISTINCT position, name) FROM personnel;
 
 -- AGG(DISTINCT) in a LATERAL subquery reading a column of a subquery whose
--- provsql column, in the middle of its columns, is moved last.
+-- provsql column, in the middle of its columns, is moved last.  The column
+-- names move with it: checked by provsql.verify_rewrite, the names being
+-- otherwise read only by what looks up the provsql column.
+SET provsql.verify_rewrite = on;
 CREATE TABLE agg_result6 AS
   SELECT a.id, b.n
   FROM (SELECT *, string_to_array(name || ' ' || name, ' ') AS arr
         FROM personnel) a
   LEFT JOIN LATERAL (SELECT count(DISTINCT e) AS n FROM unnest(arr) e) b ON true;
+RESET provsql.verify_rewrite;
 SELECT remove_provenance('agg_result6');
 SELECT * FROM agg_result6 ORDER BY id;
 DROP TABLE agg_result6;

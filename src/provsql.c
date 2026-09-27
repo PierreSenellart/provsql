@@ -485,12 +485,33 @@ static bool reduce_varattno_walker(Node *node, void *ctx) {
  * @c LATERAL subquery, a function of the @c FROM list, a subquery
  * expression), which reach it from further down.
  *
- * @param q       Outer query to patch.
- * @param varno   Range-table entry whose attribute numbers need fixing.
- * @param offset  Cumulative shift per original attribute (negative or zero).
+ * A join of @p q that exposes a removed column keeps its place in the join's
+ * columns, with a NULL alias, as PostgreSQL marks a dropped column there:
+ * shifted, the reference would name the column before it.
+ *
+ * @param q        Outer query to patch.
+ * @param varno    Range-table entry whose attribute numbers need fixing.
+ * @param offset   Cumulative shift per original attribute (negative or zero).
+ * @param removed  Which original attributes were removed.
  */
-static void reduce_varattno_by_offset(Query *q, Index varno, int *offset) {
+static void reduce_varattno_by_offset(Query *q, Index varno, int *offset,
+                                      const bool *removed) {
   reduce_varattno_context context = {varno, offset, 0};
+  ListCell *lc;
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    ListCell *jc;
+    if (r->rtekind != RTE_JOIN)
+      continue;
+    foreach (jc, r->joinaliasvars) {
+      Node *a = (Node *)lfirst(jc);
+      if (a != NULL && IsA(a, Var) && ((Var *)a)->varno == varno &&
+          ((Var *)a)->varlevelsup == 0 && ((Var *)a)->varattno > 0 &&
+          removed[((Var *)a)->varattno - 1])
+        lfirst(jc) = NULL;
+    }
+  }
   query_tree_walker(q, reduce_varattno_walker, &context, 0);
 }
 
@@ -3481,7 +3502,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
               (i == 0 ? 0 : offset[i - 1]) - (inner_removed[i] ? 1 : 0);
           }
 
-          reduce_varattno_by_offset(q, rteid, offset);
+          reduce_varattno_by_offset(q, rteid, offset, inner_removed);
         }
 
         varattnoprovsql = 0;
