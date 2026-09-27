@@ -26803,12 +26803,72 @@ static int64 const_limit_value(Node *e) {
 }
 
 /**
+ * @brief Whether the @c WHERE of @p q sets every column of a key of its base
+ *        relation @p rtindex to a constant, so that it gives at most one row.
+ *
+ * A key (a PRIMARY KEY, or a UNIQUE constraint over NOT NULL columns) holds
+ * in every world, a world being a part of the instance: at most one row has
+ * the given values in each.  A foreign key would say nothing, a world being
+ * free to drop the row it refers to.  Only the conjuncts of the @c WHERE
+ * count, each an equality, mergejoinable, between a column and a constant
+ * that is not NULL: @c "SELECT ... FROM t WHERE id = 42 LIMIT 1", which an
+ * ORM writes for its first row.
+ */
+static bool relation_keyed_by_constants(const Query *q, Index rtindex) {
+  RangeTblEntry *r = rt_fetch(rtindex, q->rtable);
+  ProvenanceRelationKeys keys;
+  List *conjs, *fixed = NIL;
+  ListCell *lc;
+  int k;
+
+  if (r->rtekind != RTE_RELATION || q->jointree == NULL ||
+      q->jointree->quals == NULL ||
+      !provsql_lookup_relation_keys(r->relid, &keys))
+    return false;
+  conjs = make_ands_implicit((Expr *)q->jointree->quals);
+  foreach (lc, conjs) {
+    OpExpr *op = (OpExpr *)lfirst(lc);
+    Node *l, *rr;
+    Var *v = NULL;
+    Const *c = NULL;
+    if (!IsA(op, OpExpr) || list_length(op->args) != 2)
+      continue;
+    l = strip_implicit_coercions((Node *)linitial(op->args));
+    rr = strip_implicit_coercions((Node *)lsecond(op->args));
+    if (IsA(l, Var) && IsA(rr, Const)) {
+      v = (Var *)l;
+      c = (Const *)rr;
+    } else if (IsA(rr, Var) && IsA(l, Const)) {
+      v = (Var *)rr;
+      c = (Const *)l;
+    } else
+      continue;
+    if (v->varno != (int)rtindex || v->varlevelsup != 0 || v->varattno <= 0 ||
+        c->constisnull || !op_mergejoinable(op->opno, exprType((Node *)v)))
+      continue;
+    fixed = list_append_unique_int(fixed, v->varattno);
+  }
+  for (k = 0; k < keys.key_n; ++k) {
+    int i;
+    bool all = true;
+    for (i = 0; i < keys.keys[k].col_n; ++i)
+      if (!list_member_int(fixed, keys.keys[k].cols[i]))
+        all = false;
+    if (all)
+      return true;
+  }
+  return false;
+}
+
+/**
  * @brief A bound on the number of rows @p q gives, in every world, or -1.
  *
  * A scalar aggregation gives one row; a constant @c LIMIT bounds its block; a
- * block over bounded sources (FROM subqueries and LATERAL ones, joined by
- * commas) gives at most their product, a @c WHERE, a @c GROUP @c BY or a
- * @c DISTINCT only removing rows.  Anything else is unbounded here.
+ * relation whose key the @c WHERE sets to constants gives at most one
+ * (@c relation_keyed_by_constants); a block over bounded sources (those, and
+ * FROM subqueries and LATERAL ones, joined by commas) gives at most their
+ * product, a @c WHERE, a @c GROUP @c BY or a @c DISTINCT only removing rows.
+ * Anything else is unbounded here.
  *
  * @param q          The query.
  * @param own_limit  Whether to count @p q's own @c LIMIT.
@@ -26832,9 +26892,13 @@ static int64 block_row_bound(const Query *q, bool own_limit) {
       if (!IsA(lfirst(lc), RangeTblRef))
         return bound;
       r = rt_fetch(((RangeTblRef *)lfirst(lc))->rtindex, q->rtable);
-      if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      if (r->rtekind == RTE_RELATION)
+        b = relation_keyed_by_constants(q, ((RangeTblRef *)lfirst(lc))->rtindex)
+              ? 1 : -1;
+      else if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
         return bound;
-      b = block_row_bound(r->subquery, true);
+      else
+        b = block_row_bound(r->subquery, true);
       if (b < 0 || (b > 0 && product > PG_INT64_MAX / b))
         return bound;
       product *= b;

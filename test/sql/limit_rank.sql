@@ -360,3 +360,21 @@ SELECT id, p FROM lr_b_r ORDER BY id;
 DROP TABLE lr_b_r;
 SELECT remove_provenance('lr_b');
 DROP TABLE lr_b;
+
+-- A key the WHERE sets to constants bounds its relation at one row in every
+-- world, a world being a part of the instance: LIMIT 1 then cuts nothing
+-- (what an ORM writes for the first row), and no warning is due.  A key that
+-- is only partly set does not, and the LIMIT stays a truncation.
+CREATE TABLE lr_k(a int, b int, v int, PRIMARY KEY (a, b));
+INSERT INTO lr_k VALUES (1, 1, 10), (1, 2, 20);
+SELECT add_provenance('lr_k');
+CREATE TABLE lr_k_r AS SELECT v FROM lr_k WHERE a = 1 AND b = 2 LIMIT 1;
+SELECT remove_provenance('lr_k_r');
+SELECT v FROM lr_k_r;
+DROP TABLE lr_k_r;
+CREATE TABLE lr_k_r AS SELECT v FROM lr_k WHERE a = 1 LIMIT 1;
+SELECT remove_provenance('lr_k_r');
+SELECT count(*) AS n FROM lr_k_r;
+DROP TABLE lr_k_r;
+SELECT remove_provenance('lr_k');
+DROP TABLE lr_k;

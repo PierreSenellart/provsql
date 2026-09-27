@@ -246,3 +246,23 @@ id|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+v
+20
+(1 row)
+WARNING:  ProvSQL: LIMIT / OFFSET with no ORDER BY over provenance-tracked relations keeps the rows the data as it is gives, in the order it gives them: which rows those are is left open by SQL and is not recorded, so another world drops one of them and keeps a row this result does not hold, although the statement also tracks lr_k; write LIMIT plain(k) to say so, or ORDER BY the rows to have the truncation read in every world
+DETAIL:  provsql-reason: limit-without-order-by; scope: deliberate
+remove_provenance
+
+(1 row)
+n
+1
+(1 row)
+remove_provenance
+
+(1 row)
