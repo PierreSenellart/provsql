@@ -34,6 +34,15 @@ SELECT probability(t) = probability_evaluate(t) AS alias_agrees,
 SELECT t IS NOT NULL AS projected_present,
        pg_typeof(t) = 'uuid'::regtype AS projected_is_uuid
   FROM (SELECT x > y AS t FROM d) s;
+-- The reference to it above the subquery reads it as the uuid it is: its text
+-- is the token's, not a Boolean's (it printed "true", the uuid read as one).
+SELECT t::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+         AS projected_text_is_uuid
+  FROM (SELECT x > y AS t FROM d) s;
+SET provsql.verify_rewrite = on;
+SELECT t IS NOT NULL AS projected_present
+  FROM (SELECT x > y AS t FROM d) s;
+RESET provsql.verify_rewrite;
 
 -- probability(<predicate>) over RV comparisons, MC-backed (seed pinned).
 -- P(X > Y) = 1/2 for i.i.d. uniforms.

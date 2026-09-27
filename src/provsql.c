@@ -8160,6 +8160,120 @@ rewrite_probability_events(const constants_t *constants, Query *q)
 }
 
 /**
+ * @brief Whether @p v, a Var of @p q's own level, reads as @c boolean a column
+ *        of a FROM subquery that @c rewrite_probability_events lifted to its
+ *        event token.
+ */
+static bool var_reads_lifted_event(Query *q, Var *v) {
+  RangeTblEntry *rte;
+  ListCell *lc;
+  if (v->varlevelsup != 0 || v->vartype != BOOLOID || v->varattno <= 0 ||
+      v->varno < 1 || v->varno > list_length(q->rtable))
+    return false;
+  rte = rt_fetch(v->varno, q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return false;
+  foreach (lc, rte->subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resno == v->varattno)
+      return exprType((Node *)te->expr) == UUIDOID;
+  }
+  return false;
+}
+
+/** @brief A lifted event's reference, retyped to the token it now reads. */
+static Var *retype_lifted_event_var(Var *v) {
+  Var *r = (Var *)copyObject(v);
+  r->vartype = UUIDOID;
+  r->vartypmod = -1;
+  r->varcollid = InvalidOid;
+  return r;
+}
+
+/** @brief Mutator of @c retype_lifted_event_refs. */
+static Node *retype_lifted_event_mutator(Node *node, void *cx) {
+  Query *q = (Query *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && var_reads_lifted_event(q, (Var *)node))
+    provsql_unsupported(PROVSQL_GAP, "rv-event-read-as-boolean",
+                        "a comparison of random variables that a subquery "
+                        "projects is the token of its event, and is not read "
+                        "as a Boolean value by the query around it");
+  /* Reads that do not depend on the type: the token stands for the event. */
+  if (IsA(node, NullTest) && IsA(((NullTest *)node)->arg, Var) &&
+      var_reads_lifted_event(q, (Var *)((NullTest *)node)->arg)) {
+    NullTest *n = (NullTest *)copyObject(node);
+    n->arg = (Expr *)retype_lifted_event_var((Var *)n->arg);
+    return (Node *)n;
+  }
+  if ((IsA(node, FuncExpr) || IsA(node, CoerceViaIO))) {
+    Node *arg = IsA(node, FuncExpr)
+                  ? (list_length(((FuncExpr *)node)->args) == 1
+                       ? (Node *)linitial(((FuncExpr *)node)->args)
+                       : NULL)
+                  : (Node *)((CoerceViaIO *)node)->arg;
+    if (arg != NULL && IsA(arg, Var) && var_reads_lifted_event(q, (Var *)arg)) {
+      Oid result = exprType(node);
+      char *name = IsA(node, FuncExpr)
+                     ? get_func_name(((FuncExpr *)node)->funcid) : NULL;
+      if (name != NULL && strcmp(name, "pg_typeof") == 0) {
+        FuncExpr *f = (FuncExpr *)copyObject(node);
+        f->args = list_make1(retype_lifted_event_var((Var *)arg));
+        return (Node *)f;
+      }
+      /* A cast to text shows the token, as the column itself would. */
+      if (result == TEXTOID || result == VARCHAROID) {
+        CoerceViaIO *c = makeNode(CoerceViaIO);
+        c->arg = (Expr *)retype_lifted_event_var((Var *)arg);
+        c->resulttype = result;
+        c->resultcollid = DEFAULT_COLLATION_OID;
+        c->coerceformat = COERCE_EXPLICIT_CAST;
+        c->location = -1;
+        return (Node *)c;
+      }
+    }
+  }
+  if (IsA(node, Query))
+    return node;              /* another level: its references are its own */
+  return expression_tree_mutator(node, retype_lifted_event_mutator, cx);
+}
+
+/**
+ * @brief Retype the references of @p q to FROM-subquery columns that
+ *        @c rewrite_probability_events lifted from @c boolean to their event
+ *        token.
+ *
+ * @c "SELECT x > y AS t FROM d" projects the event of the comparison, a
+ * @c uuid, where the parser typed the column @c boolean; the query around it
+ * was typed against the Boolean, so a reference to @c t would read the token
+ * as one (@c "t::text" gave @c "true").  A reference passed through as a
+ * column, tested for NULL or asked its type becomes a @c uuid one, and a cast
+ * of it to text shows the token; any other reading, as a Boolean, is refused.
+ * Runs once the subqueries are rewritten, which is when their columns change.
+ */
+static void retype_lifted_event_refs(Query *q) {
+  ListCell *lc;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (IsA(te->expr, Var) && var_reads_lifted_event(q, (Var *)te->expr)) {
+      /* A sort or grouping key keeps the Boolean's operators. */
+      if (te->ressortgroupref != 0)
+        provsql_unsupported(PROVSQL_GAP, "rv-event-read-as-boolean",
+                            "a comparison of random variables that a "
+                            "subquery projects is the token of its event, "
+                            "and is not a sort or grouping key of the query "
+                            "around it");
+      te->expr = (Expr *)retype_lifted_event_var((Var *)te->expr);
+    } else
+      te->expr = (Expr *)retype_lifted_event_mutator((Node *)te->expr, q);
+  }
+  if (q->jointree != NULL)
+    q->jointree->quals = retype_lifted_event_mutator(q->jointree->quals, q);
+  q->havingQual = retype_lifted_event_mutator(q->havingQual, q);
+}
+
+/**
  * @brief Lower the RV surface in the values a data-modifying statement
  *        supplies directly.
  *
@@ -30437,6 +30551,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
     // by calling process_query (threading each subquery's marker sub-context)
     prov_atts = get_provenance_attributes(constants, q, in_boolean_rewrite,
                                           top_level, local_inv_ctx);
+    retype_lifted_event_refs(q);
+    REWRITE_STEP("get_provenance_attributes");
 
     /* Inversion-free path: wrap each certified atom's provenance token in its
      * per-input order marker.  prov_atts are base-relation Vars (the certified
