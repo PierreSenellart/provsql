@@ -325,7 +325,7 @@ _C_FUNC_MAP = {
     'make_dense_rank_expression': '/doxygen-c/html/provsql_8c.html#a12766b7a9bda7be4398f8f79aabc0cd6',
     'limit_lowerable':           '/doxygen-c/html/provsql_8c.html#ad55a684189c1ea1509370b61dd1e1caa',
     'lower_limit_to_rank':       '/doxygen-c/html/provsql_8c.html#ab3419922cfdf1e6725e45742b5587c8d',
-    'nested_limit_on_provenance': '/doxygen-c/html/provsql_8c.html#a4d2cfff57296c4731a4d94fbf495c98d',
+    'nested_limit_on_provenance': '/doxygen-c/html/provsql_8c.html#ae809e216d546f3bb0ad46e0c6d5e3fb9',
     'make_rv_aggregate_expression': '/doxygen-c/html/provsql_8c.html#af7a0a8db39aef1739545bfe674bba925',
     'nest_set_operations': '/doxygen-c/html/provsql_8c.html#ab773d38514b362f9f40f3bd8eb606b92',
     'having_possible': '/doxygen-c/html/provsql_8c.html#a581f9dedf58964f64ee31a70d360ac99',

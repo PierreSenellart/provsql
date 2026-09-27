@@ -141,8 +141,10 @@ id|s
 3|80 (*)
 4|80 (*)
 (6 rows)
-WARNING:  ProvSQL: window function not supported: its value is an offset into the partition, a ratio of ranks or a frame counted in rows, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function not supported: its value is read at an offset other than one, or over a frame counted in rows or peer groups with an offset, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
+WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
 remove_provenance
 
 (1 row)
@@ -279,7 +281,7 @@ remove_provenance
 pairs
 1
 (1 row)
-WARNING:  ProvSQL: window function not supported: its value is an offset into the partition, a ratio of ranks or a frame counted in rows, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function not supported: its value is read at an offset other than one, or over a frame counted in rows or peer groups with an offset, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 remove_provenance
 

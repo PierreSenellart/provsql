@@ -13763,43 +13763,59 @@ static bool freeze_relations_walker(Node *node, void *cx) {
 }
 
 /** @brief Walker: a window function outside any @c plain() call. */
+/** @brief Whether @p e is the integer constant 1. */
+static bool is_const_one(Node *e) {
+  Node *f = eval_const_expressions(NULL, copyObject(e));
+  if (!IsA(f, Const) || ((Const *)f)->constisnull)
+    return false;
+  switch (((Const *)f)->consttype) {
+    case INT2OID: return DatumGetInt16(((Const *)f)->constvalue) == 1;
+    case INT4OID: return DatumGetInt32(((Const *)f)->constvalue) == 1;
+    case INT8OID: return DatumGetInt64(((Const *)f)->constvalue) == 1;
+    default: return false;
+  }
+}
+
 /**
  * @brief Whether a window function is one the fragment leaves out: its value
- *        is an offset into the partition or a rank ratio, or its frame is a
- *        positional one.
+ *        is read at an offset other than one, or its frame counts rows or
+ *        peer groups with an offset.
  *
- * @c lag and its kind read the row a given number of rows away, and
- * @c cume_dist and @c percent_rank a ratio of counts: which row that is, and
- * what the counts are, depends on which rows are there, so there is no value
- * to carry rather than one not carried yet.  A frame counted in ROWS or in
- * GROUPS says the same of an ordinary aggregate: @c sum(x) @c OVER
- * @c (ORDER @c BY @c c @c ROWS @c BETWEEN @c 2 @c PRECEDING @c AND @c CURRENT
- * @c ROW) sums a set of rows that another world moves.  A frame that spans the
- * whole partition does not.
+ * The semantics reads the offset and distribution functions at offset one
+ * (@c lag, @c lead, @c first_value, @c last_value, @c nth_value(x, 1),
+ * @c ntile, @c percent_rank, @c cume_dist): those not tracked here are gaps.
+ * A value read k rows away, for k other than one (@c lag(x, 3),
+ * @c nth_value(x, 2)), is the k-th PRESENT row of a family, which is no
+ * function of a subfamily of a fixed family (requirement R6 of the
+ * semantics): there is no value to carry rather than one not carried yet.  A
+ * ROWS or GROUPS frame with an offset says the same of an ordinary aggregate:
+ * @c sum(x) @c OVER @c (ORDER @c BY @c c @c ROWS @c BETWEEN @c 2 @c PRECEDING
+ * @c AND @c CURRENT @c ROW) sums the rows a count of present rows (or peer
+ * groups) delimits, which another world moves.  A frame bounded only by
+ * @c UNBOUNDED or @c CURRENT @c ROW is determined by the values, and a RANGE
+ * offset too.
  */
 static bool window_outside_fragment(Query *q, WindowFunc *wf) {
-  static const char *const kinds[] = {
-    "lag", "lead", "first_value", "last_value", "nth_value",
-    "ntile", "percent_rank", "cume_dist"
-  };
   char *name = get_func_name(wf->winfnoid);
   WindowClause *wc;
-  size_t i;
+  bool outside = false;
 
   if (name != NULL) {
-    for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); ++i)
-      if (strcmp(name, kinds[i]) == 0) {
-        pfree(name);
-        return true;
-      }
+    if (strcmp(name, "lag") == 0 || strcmp(name, "lead") == 0)
+      outside = list_length(wf->args) >= 2 &&
+                !is_const_one((Node *)lsecond(wf->args));
+    else if (strcmp(name, "nth_value") == 0)
+      outside = list_length(wf->args) < 2 ||
+                !is_const_one((Node *)lsecond(wf->args));
     pfree(name);
+    if (outside)
+      return true;
   }
   wc = window_clause_of(q, wf->winref);
-  if (wc != NULL && (wc->frameOptions & (FRAMEOPTION_ROWS | FRAMEOPTION_GROUPS))
-      && !((wc->frameOptions & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
-           (wc->frameOptions & FRAMEOPTION_END_UNBOUNDED_FOLLOWING)))
-    return true;
-  return false;
+  return wc != NULL &&
+         (wc->frameOptions & (FRAMEOPTION_ROWS | FRAMEOPTION_GROUPS)) &&
+         (wc->frameOptions & (FRAMEOPTION_START_OFFSET |
+                              FRAMEOPTION_END_OFFSET));
 }
 
 /** @brief Context for @c window_kinds_walker. */
@@ -26369,11 +26385,9 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
    * aggregate column of a FROM subquery, or a scalar subquery that counts, is
    * the same top-k and the commonest way it is written.
    *
-   * @c sort_key_reads_agg_value is deliberately the SAME predicate the
-   * freezing report uses for @c limit-not-read-in-every-world (see
-   * @c warn_top_limit): what that reports as a gap is what this lowers, so a
-   * survey counting the tag is counting this lowering's coverage.  Keep them
-   * shared; giving either a predicate of its own takes that evidence away. */
+   * An ordered truncation this does not lower is reported as a gap
+   * (@c limit-not-read-in-every-world, see @c warn_top_limit): the semantics
+   * reads it in every world, whatever its sort keys. */
   ordered_by_agg = sort_key_reads_agg_value(constants, q);
 
   if (!limit_truncates(q) || is_actual_marker(constants, q->limitCount) ||
@@ -30160,11 +30174,11 @@ static Query *process_query(const constants_t *constants, Query *q,
           if (wk.outside)
             report_freeze(constants, NULL,
                           PROVSQL_DELIBERATE, "window-not-tracked",
-                          "window function not supported: its value is an "
-                          "offset into the partition, a ratio of ranks or a "
-                          "frame counted in rows, which the rows that are "
-                          "there decide, so it is evaluated as plain SQL, not "
-                          "tracked", NULL);
+                          "window function not supported: its value is read "
+                          "at an offset other than one, or over a frame "
+                          "counted in rows or peer groups with an offset, "
+                          "which the rows that are there decide, so it is "
+                          "evaluated as plain SQL, not tracked", NULL);
           if (wk.inside)
             report_freeze(constants, NULL,
                           PROVSQL_GAP, "window-not-tracked",
@@ -30709,27 +30723,35 @@ static Query *lift_tracked_sublinks(const constants_t *constants, Query *q) {
  *                   table and its WITH clause.
  * @param top        True for the statement's own query, whose LIMIT is not
  *                   reported.
+ * @param ordered    Set, when there is one, to whether it has an ORDER BY.
  * @return  True if there is such a LIMIT / OFFSET.
  */
 static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
-                                       bool top) {
+                                       bool top, bool *ordered) {
   ListCell *lc;
 
   /* A LIMIT that becomes the filter of a rank loses no provenance. */
   if (!top && limit_truncates(q) && has_provenance(constants, q) &&
-      !limit_lowerable(constants, q))
+      !limit_lowerable(constants, q)) {
+    /* LIMIT plain(k) asks for the cut of the actual result, which the
+     * semantics leaves aside, ordered or not. */
+    *ordered = q->sortClause != NIL &&
+               !is_actual_marker(constants, q->limitCount) &&
+               !is_actual_marker(constants, q->limitOffset);
     return true;
+  }
 
   foreach (lc, q->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
     if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
-        nested_limit_on_provenance(constants, r->subquery, false))
+        nested_limit_on_provenance(constants, r->subquery, false, ordered))
       return true;
   }
   foreach (lc, q->cteList) {
     CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
     if (IsA(cte->ctequery, Query) &&
-        nested_limit_on_provenance(constants, (Query *)cte->ctequery, false))
+        nested_limit_on_provenance(constants, (Query *)cte->ctequery, false,
+                                   ordered))
       return true;
   }
   return false;
@@ -30916,14 +30938,10 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
                   "write LIMIT plain(k) to say so, or ORDER BY the rows to "
                   "have the truncation read in every world");
   else
-    /* The truncation of a top-k whose key is an aggregate value is a reading
-     * the fragment has -- the filter of a rank, which @c limit_lowerable
-     * builds -- where one over keys of the data is a cut of the actual result,
-     * which no provenance describes.  The predicate is shared with that
-     * lowering on purpose (see the comment there). */
-    report_freeze(constants, NULL,
-                  sort_key_reads_agg_value(constants, q) ? PROVSQL_GAP
-                                                         : PROVSQL_DELIBERATE,
+    /* An ordered truncation is read in every world by the semantics, as the
+     * filter of a rank, whatever it is over: one that is not lowered here is
+     * a gap. */
+    report_freeze(constants, NULL, PROVSQL_GAP,
                   "limit-not-read-in-every-world",
                   "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
                   "relations is not read in each possible world over an "
@@ -30934,9 +30952,12 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
 }
 
 /** @brief Report the freezing @c nested_limit_on_provenance calls for. */
-static void warn_nested_limit(const constants_t *constants) {
+static void warn_nested_limit(const constants_t *constants, bool ordered) {
+  /* With an ORDER BY, the semantics reads the truncation in every world (a
+   * rank, at any level): not lowered here, it is a gap.  Without one, SQL
+   * leaves open which rows are kept. */
   report_freeze(constants, NULL,
-                PROVSQL_DELIBERATE, "limit-in-subquery",
+                ordered ? PROVSQL_GAP : PROVSQL_DELIBERATE, "limit-in-subquery",
                 "LIMIT / OFFSET in a subquery over provenance-tracked "
                 "relations: the rows kept carry the provenance they have in "
                 "the full result, so what is computed from them is not sound "
@@ -31000,10 +31021,12 @@ static PlannedStmt *provsql_planner(Query *q,
         foreach (lc_src, q->rtable) {
           RangeTblEntry *src = (RangeTblEntry *)lfirst(lc_src);
           if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL) {
+            bool ordered = false;
             if (top_limit_is_truncation(&constants, src->subquery))
               warn_top_limit(&constants, src->subquery);
-            if (nested_limit_on_provenance(&constants, src->subquery, true)) {
-              warn_nested_limit(&constants);
+            if (nested_limit_on_provenance(&constants, src->subquery, true,
+                                           &ordered)) {
+              warn_nested_limit(&constants, ordered);
               break;
             }
           }
@@ -31102,9 +31125,12 @@ static PlannedStmt *provsql_planner(Query *q,
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         top_limit_is_truncation(&constants, q))
       warn_top_limit(&constants, q);
-    if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
-        nested_limit_on_provenance(&constants, q, true))
-      warn_nested_limit(&constants);
+    {
+      bool nested_ordered = false;
+      if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
+          nested_limit_on_provenance(&constants, q, true, &nested_ordered))
+        warn_nested_limit(&constants, nested_ordered);
+    }
 
     /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
      * the user's outermost SELECT when the GUC is on.  Runs on the

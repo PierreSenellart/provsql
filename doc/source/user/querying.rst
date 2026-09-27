@@ -167,17 +167,16 @@ limit it is:
       provenance of their own;
     * ``IN`` read as a value, whose unknown truth no count of matches tells
       from false;
-    * a ``LIMIT`` that truncates the result of the data as it is (with no
-      ``ORDER BY``, over an aggregation, a ``DISTINCT`` or a set operation,
-      or in a subquery), since SQL leaves open which rows are kept and they
-      depend on the rows before them; a top-k whose sort key reads an
-      aggregate value (``ORDER BY count(*) DESC LIMIT 10``, directly or
-      through a subquery) is the filter of a rank, and is reported as a
-      ``gap`` instead;
-    * a window function whose value is an offset into the partition
-      (``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``) or an
-      aggregate over a frame counted in rows or groups without spanning the
-      partition, all decided by which rows are present;
+    * a ``LIMIT`` with no ``ORDER BY``, since SQL leaves open which rows are
+      kept, and a ``LIMIT plain(k)``, which asks for the cut of the result on
+      the data as it is; an ``ORDER BY … LIMIT`` that ProvSQL does not read in
+      every world is reported as a ``gap``;
+    * a window function whose value is read at an offset other than one
+      (``lag(x, 3)``, ``nth_value(x, 2)``), or an aggregate over a ``ROWS`` or
+      ``GROUPS`` frame with an offset, both decided by which rows are present;
+      the offset and distribution functions at offset one (``lag(x)``,
+      ``first_value``, ``cume_dist``, …) that are not tracked are reported as a
+      ``gap``;
     * a recursion outside the shape the fixpoint is defined for.
 
 ``gap``

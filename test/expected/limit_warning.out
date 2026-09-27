@@ -32,15 +32,15 @@ WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relation
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
 -- warning: over an aggregation
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks lw_t; write LIMIT plain(k) to say so
-DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
+DETAIL:  provsql-reason: limit-in-subquery; scope: gap
 -- no warning: the filter of a rank, in a FROM subquery, alone as OFFSET, in LATERAL, a CTE, an arm, below an INSERT
 -- warning: top level, not read in each world (set operation, aggregation), unless plain()
 WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over provenance-tracked relations is not read in each possible world over an aggregation, a DISTINCT, a set operation or sort keys that vary between worlds: it truncates the actual result, whose rows keep the provenance they have in the full result, although the statement also tracks lw_t; write LIMIT plain(k) to say so
-DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: deliberate
+DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
 WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over provenance-tracked relations is not read in each possible world over an aggregation, a DISTINCT, a set operation or sort keys that vary between worlds: it truncates the actual result, whose rows keep the provenance they have in the full result, although the statement also tracks lw_t; write LIMIT plain(k) to say so
-DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: deliberate
+DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
 WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over provenance-tracked relations is not read in each possible world over an aggregation, a DISTINCT, a set operation or sort keys that vary between worlds: it truncates the actual result, whose rows keep the provenance they have in the full result, although the statement also tracks lw_dst; write LIMIT plain(k) to say so
-DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: deliberate
+DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
 -- warning: top level with no ORDER BY at all (LIMIT, OFFSET), unless plain()
 WARNING:  ProvSQL: LIMIT / OFFSET with no ORDER BY over provenance-tracked relations keeps the rows the data as it is gives, in the order it gives them: which rows those are is left open by SQL and is not recorded, so another world drops one of them and keeps a row this result does not hold, although the statement also tracks lw_t; write LIMIT plain(k) to say so, or ORDER BY the rows to have the truncation read in every world
 DETAIL:  provsql-reason: limit-without-order-by; scope: deliberate
