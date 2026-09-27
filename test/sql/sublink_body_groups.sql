@@ -79,18 +79,78 @@ SELECT remove_provenance('bg_corr');
 SELECT * FROM bg_corr ORDER BY k, g, p;
 DROP TABLE bg_corr;
 
--- A body whose grouping IS read, by a HAVING of its own, and correlated: the
--- groups differ per outer row, so it stays refused, and the refusal names the
--- correlation (body-groups-correlated) rather than the grouping alone, that
--- being what an uncorrelated body of the same shape is carried in spite of.
-SELECT k FROM bgt WHERE k IN (SELECT bgu.k FROM bgu WHERE bgu.k = bgt.k
-                              GROUP BY bgu.k HAVING count(*) > 1);
+-- A body whose grouping IS read, by a HAVING of its own, and correlated by an
+-- equality: the correlated column becomes a key of the grouping and a column
+-- compared, which leaves the uncorrelated test above.  The group of (g, k) holds
+-- the rows the group g holds for the outer row of that k, so the HAVING reads
+-- the same rows.  Same answer as the uncorrelated form: 0.5 * 0.25 for k=1, 2.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE k IN (SELECT bgu.k FROM bgu WHERE bgu.k = bgt.k
+                       GROUP BY bgu.k HAVING count(*) > 1);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- EXISTS, grouped by another column than the correlated one.  k=1: the group
+-- g=10 has v 2 and 5, a sum of 5 needs the second, 0.5 * 0.5; k=2: v 3 and 3
+-- need both, 0.5 * 0.25; k=3: v 9 alone, 0.5 * 0.5.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE EXISTS (SELECT 1 FROM bgu WHERE bgu.k = bgt.k
+                         GROUP BY bgu.g HAVING sum(bgu.v) >= 5);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- Without a GROUP BY the body is one group even over no rows, where the keyed
+-- body has none: the same only because count(*) >= 2 fails over no rows.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE EXISTS (SELECT 1 FROM bgu WHERE bgu.k = bgt.k
+                         HAVING count(*) >= 2);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- count(*) < 2 holds over no rows, so every outer row without a match answers:
+-- the keyed body cannot say that, and the test stays refused.
+SELECT k FROM bgt WHERE EXISTS (SELECT 1 FROM bgu WHERE bgu.k = bgt.k
+                                HAVING count(*) < 2);
+-- An EXISTS whose grouping nothing reads asks only for a row: the grouping
+-- goes.  Each k needs its row and one of its bgu rows: 0.5 * 0.75 for k=1, 2,
+-- 0.5 * 0.5 for k=3.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE EXISTS (SELECT bgu.g, max(bgu.v) FROM bgu
+                         WHERE bgu.k = bgt.k GROUP BY bgu.g);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- A scalar subquery grouped by the column its correlation fixes has at most one
+-- group, the rows that match: the aggregate over them without the grouping,
+-- NULL over no rows either way for a max.  k=1: x=2 < 5 needs the row of v 5,
+-- 0.5 * 0.5; k=2: max 3 is never above 3; k=3: v 9, 0.5 * 0.5.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE x < (SELECT max(bgu.v) FROM bgu WHERE bgu.k = bgt.k
+                      GROUP BY bgu.k);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- A grouped body reading a subquery of its FROM, as it does a view: it moves
+-- into the derived table with the rest.  Only k=2 has two rows above 2,
+-- 0.5 * 0.25.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE k IN (SELECT w.k FROM (SELECT * FROM bgu WHERE v > 2) w
+                       GROUP BY w.k HAVING count(*) > 1);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
 
 -- Compared against an aggregate result: refused, and the message still names
 -- the body's grouping rather than the derived table the wrap would have made.
 SELECT k FROM bgt WHERE x IN (SELECT max(v) FROM bgu GROUP BY g);
--- An EXISTS body that groups: refused as before (its existence test has no
--- column to read, and the uncorrelated arm no key to count).
+-- An uncorrelated EXISTS body whose groups a HAVING reads: refused as before
+-- (its existence test has no column to read, and no correlation to key by).
 SELECT k FROM bgt WHERE EXISTS (SELECT 1 FROM bgu GROUP BY g HAVING count(*) > 1);
 
 SELECT remove_provenance('bgt');

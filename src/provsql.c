@@ -17605,9 +17605,12 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
     return false;                 /* nothing of its own to group */
   /* The shapes the wrap does not carry: they are read inside the derived table
    * as they would be anywhere else, but the body's own reading of them is what
-   * the diagnosis names, so leave them to it. */
+   * the diagnosis names, so leave them to it.  A subquery of the body's own is
+   * not one of them: uncorrelated with the query around (checked below), it
+   * moves into the derived table, where it is rewritten as in any grouped
+   * query. */
   if (sub->setOperations != NULL || sub->cteList != NIL ||
-      sub->hasWindowFuncs || sub->hasSubLinks || sub->distinctClause != NIL ||
+      sub->hasWindowFuncs || sub->distinctClause != NIL ||
       sub->limitCount != NULL || sub->limitOffset != NULL ||
       sub->rtable == NIL || sub->jointree == NULL)
     return false;
@@ -17648,7 +17651,9 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
     if (r->rtekind == RTE_GROUP)
       continue;
 #endif
-    if (r->rtekind != RTE_RELATION)
+    /* A subquery of the body's FROM -- a view is one by now -- moves into the
+     * derived table with the rest, where it is rewritten as any other. */
+    if (r->rtekind != RTE_RELATION && r->rtekind != RTE_SUBQUERY)
       return false;
     if (oj_rte_has_provsql(constants, r))
       any_tracked = true;
@@ -19200,6 +19205,434 @@ static bool split_setop_sublinks(const constants_t *constants, Query *q) {
   return changed;
 }
 
+/** @brief Which levels an expression reads: its own (0), the one just
+ *  above (1), further up, and whether it holds anything that is no plain
+ *  scalar expression of those columns (a sublink, an aggregate, a Param). */
+typedef struct levels_read_ctx {
+  bool own, above, further, opaque;
+} levels_read_ctx;
+
+static bool levels_read_walker(Node *node, void *cx) {
+  levels_read_ctx *c = (levels_read_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Index l = ((Var *)node)->varlevelsup;
+    if (l == 0)
+      c->own = true;
+    else if (l == 1)
+      c->above = true;
+    else
+      c->further = true;
+    return false;
+  }
+  if (IsA(node, SubLink) || IsA(node, Aggref) || IsA(node, GroupingFunc) ||
+      IsA(node, Param) || IsA(node, PlaceHolderVar) ||
+      IsA(node, WindowFunc)) {
+    c->opaque = true;
+    return false;
+  }
+  return expression_tree_walker(node, levels_read_walker, cx);
+}
+
+static levels_read_ctx levels_read(Node *node) {
+  levels_read_ctx c = {false, false, false, false};
+  levels_read_walker(node, &c);
+  return c;
+}
+
+/** @brief The value an aggregate of PostgreSQL's takes over no rows, @c NULL
+ *  where it is not one whose value there is known. */
+static Node *aggregate_over_no_rows(Aggref *a) {
+  static const char *const null_on_empty[] = {
+    "sum", "min", "max", "avg", "bool_and", "bool_or", "every", "string_agg",
+    "array_agg", "stddev", "stddev_samp", "stddev_pop", "variance",
+    "var_samp", "var_pop", NULL};
+  char *name;
+  int i;
+
+  if (a->agglevelsup != 0 ||
+      get_func_namespace(a->aggfnoid) != PG_CATALOG_NAMESPACE)
+    return NULL;
+  name = get_func_name(a->aggfnoid);
+  if (name == NULL)
+    return NULL;
+  if (strcmp(name, "count") == 0)
+    return (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                             Int64GetDatum(0), false, FLOAT8PASSBYVAL);
+  for (i = 0; null_on_empty[i] != NULL; ++i)
+    if (strcmp(name, null_on_empty[i]) == 0)
+      return (Node *)makeNullConst(a->aggtype, -1, a->aggcollid);
+  return NULL;
+}
+
+static Node *having_over_no_rows_mutator(Node *node, void *cx) {
+  bool *ok = (bool *)cx;
+  if (node == NULL || !*ok)
+    return node;
+  if (IsA(node, Aggref)) {
+    Node *v = aggregate_over_no_rows((Aggref *)node);
+    if (v == NULL)
+      *ok = false;
+    return v != NULL ? v : node;
+  }
+  if (IsA(node, Var) || IsA(node, SubLink) || IsA(node, Param) ||
+      IsA(node, GroupingFunc)) {
+    *ok = false;
+    return node;
+  }
+  return expression_tree_mutator(node, having_over_no_rows_mutator, cx);
+}
+
+/**
+ * @brief Does the @c HAVING of an aggregate without @c GROUP @c BY fail on no
+ *        rows?
+ *
+ * Such a body always has its one row, empty or not, where the same body grouped
+ * by a key has none for a key no row carries.  The two agree when the condition
+ * is not true over no rows, which is decided by evaluating it there:
+ * @c count(*) is 0, the other aggregates of PostgreSQL's are @c NULL.
+ */
+static bool having_fails_on_no_rows(Node *having) {
+  bool ok = true;
+  Node *e = having_over_no_rows_mutator(copyObject(having), &ok);
+
+  if (!ok || contain_volatile_functions(e))
+    return false;
+  e = eval_const_expressions(NULL, e);
+  return IsA(e, Const) &&
+         (((Const *)e)->constisnull || !DatumGetBool(((Const *)e)->constvalue));
+}
+
+/**
+ * @brief Normalise a correlated @c EXISTS or @c IN whose body groups rows of
+ *        its own into the uncorrelated membership test the grouped-body
+ *        rewriting lowers.
+ *
+ * Two shapes, both over the body of a sublink conjunct.
+ *
+ * An @c EXISTS whose body groups without a @c HAVING asks only whether the body
+ * has a row: a group exists exactly when a row does, so the grouping and what it
+ * computes go, and the test is the plain @c EXISTS the decorrelation lowers.
+ *
+ * A body that reads its groups with a @c HAVING, correlated with the query
+ * around it only by equalities between a column of its own and one of the
+ * query's (and by conjuncts reading the query's columns alone), has the same
+ * groups for every outer row once those columns are keys of the grouping:
+ *
+ *   EXISTS (SELECT 1 FROM t2 WHERE t2.k = t1.k AND C GROUP BY g HAVING H)
+ *   t1.k IN (SELECT t2.k FROM t2 WHERE C GROUP BY g, t2.k HAVING H)
+ *
+ * The group @c (g, t1.k) of the second body holds exactly the rows the group
+ * @c g of the first holds for that outer row, so @c H reads the same rows in
+ * both.  An @c IN keeps its own compared columns and gains these.  A conjunct
+ * reading only the query's columns moves up to the query (returned in
+ * @p lifted): false, it empties the body, which fails the test either way.
+ *
+ * Without a @c GROUP @c BY the body is one group even over no rows, and the
+ * keyed body has none there: the two agree only when @c H fails over no rows,
+ * which @c having_fails_on_no_rows checks.  Only the positive test: under a
+ * @c NOT, a @c NULL outer column makes the membership test unknown where the
+ * negated @c EXISTS is true.  The equality has to be the one the grouping
+ * uses (an operator of the same family), or a group would hold rows the
+ * correlation tells apart.
+ *
+ * @return  True when the sublink was changed in place.
+ */
+static bool regroup_correlated_body(SubLink *sl, bool neg, List **lifted) {
+  Query *sub;
+  List *keep = NIL, *lift = NIL, *inner = NIL, *outer = NIL, *ops = NIL;
+  List *conjs, *tl = NIL, *junk = NIL, *parts = NIL;
+  ListCell *lc, *lci, *lco, *lcp;
+  Index sgref = 0;
+  AttrNumber resno = 0;
+
+  *lifted = NIL;
+  if (!IsA(sl->subselect, Query))
+    return false;
+  sub = (Query *)sl->subselect;
+  if (sl->subLinkType != EXISTS_SUBLINK && sl->subLinkType != ANY_SUBLINK)
+    return false;
+  if (sub->commandType != CMD_SELECT || sub->setOperations != NULL ||
+      sub->cteList != NIL || sub->hasWindowFuncs ||
+      sub->distinctClause != NIL || sub->limitCount != NULL ||
+      sub->limitOffset != NULL || sub->groupingSets != NIL ||
+      sub->rtable == NIL || sub->jointree == NULL)
+    return false;
+
+  /* EXISTS over a grouping nothing reads: the grouping is dropped. */
+  if (sl->subLinkType == EXISTS_SUBLINK && sub->groupClause != NIL &&
+      sub->havingQual == NULL) {
+#if PG_VERSION_NUM >= 180000
+    strip_group_rte_pg18(sub);
+#endif
+    sub->groupClause = NIL;
+    sub->sortClause = NIL;
+    sub->hasAggs = false;
+    sub->targetList = list_make1(makeTargetEntry(
+      (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(1), false, true),
+      1, pstrdup("?column?"), false));
+    return true;
+  }
+
+  if (sub->havingQual == NULL || neg)
+    return false;
+  if (reads_outside_walker((Node *)sub->targetList, 0) ||
+      reads_outside_walker(sub->havingQual, 0))
+    return false;
+
+  conjs = sub->jointree->quals == NULL ? NIL
+          : (IsA(sub->jointree->quals, BoolExpr) &&
+             ((BoolExpr *)sub->jointree->quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)sub->jointree->quals)->args
+            : list_make1(sub->jointree->quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    levels_read_ctx r;
+
+    if (!reads_outside_walker(c, 0)) {
+      keep = lappend(keep, c);
+      continue;
+    }
+    r = levels_read(c);
+    if (!r.own && !r.further && !r.opaque && r.above &&
+        !contain_volatile_functions(c)) {
+      lift = lappend(lift, c);
+      continue;
+    }
+    if (IsA(c, OpExpr) && list_length(((OpExpr *)c)->args) == 2) {
+      OpExpr *op = (OpExpr *)c;
+      Node *l = (Node *)linitial(op->args), *rt = (Node *)lsecond(op->args);
+      levels_read_ctx rl = levels_read(l), rr = levels_read(rt);
+      Node *in = NULL, *out = NULL;
+      Oid opno = op->opno, eq = InvalidOid;
+
+      if (rl.own && !rl.above && !rl.further && !rl.opaque &&
+          rr.above && !rr.own && !rr.further && !rr.opaque) {
+        in = l;
+        out = rt;
+        opno = get_commutator(opno);   /* out op in, below */
+      } else if (rr.own && !rr.above && !rr.further && !rr.opaque &&
+                 rl.above && !rl.own && !rl.further && !rl.opaque) {
+        in = rt;
+        out = l;
+      }
+      if (in != NULL && OidIsValid(opno) && !contain_volatile_functions(c)) {
+        get_sort_group_operators(exprType(in), false, false, false, NULL, &eq,
+                                 NULL, NULL);
+        if (OidIsValid(eq) && equality_ops_are_compatible(op->opno, eq)) {
+          OpExpr *t = makeNode(OpExpr);
+          t->opno = opno;
+          t->opfuncid = get_opcode(opno);
+          t->opresulttype = BOOLOID;
+          t->opretset = false;
+          t->opcollid = InvalidOid;
+          t->inputcollid = op->inputcollid;
+          t->location = -1;
+          inner = lappend(inner, in);
+          outer = lappend(outer, out);
+          ops = lappend(ops, t);
+          continue;
+        }
+      }
+    }
+    return false;                 /* a correlation of another kind */
+  }
+  if (inner == NIL && (sl->subLinkType == EXISTS_SUBLINK || lift == NIL))
+    return false;
+  if (sub->groupClause == NIL && !having_fails_on_no_rows(sub->havingQual))
+    return false;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(sub);
+#endif
+  /* The target list: the columns an IN compares, then the correlated ones,
+   * then everything else as junk (the keys the grouping names by reference,
+   * an EXISTS's own columns). */
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->ressortgroupref > sgref)
+      sgref = te->ressortgroupref;
+    if (sl->subLinkType == ANY_SUBLINK && !te->resjunk) {
+      te->resno = ++resno;
+      tl = lappend(tl, te);
+    } else {
+      te->resjunk = true;
+      junk = lappend(junk, te);
+    }
+  }
+  forthree (lci, inner, lco, outer, lcp, ops) {
+    Node *in = (Node *)lfirst(lci);
+    Node *out = copyObject((Node *)lfirst(lco));
+    OpExpr *t = (OpExpr *)lfirst(lcp);
+    TargetEntry *te = makeTargetEntry((Expr *)copyObject(in), ++resno,
+                                      pstrdup("?column?"), false);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+    Param *p = makeNode(Param);
+
+    te->ressortgroupref = ++sgref;
+    sgc->tleSortGroupRef = te->ressortgroupref;
+    get_sort_group_operators(exprType(in), false, true, false, &sgc->sortop,
+                             &sgc->eqop, NULL, &sgc->hashable);
+    sub->groupClause = lappend(sub->groupClause, sgc);
+    tl = lappend(tl, te);
+
+    p->paramkind = PARAM_SUBLINK;
+    p->paramid = resno;
+    p->paramtype = exprType(in);
+    p->paramtypmod = exprTypmod(in);
+    p->paramcollid = exprCollation(in);
+    p->location = -1;
+    IncrementVarSublevelsUp(out, -1, 1);
+    t->args = list_make2(out, p);
+    parts = lappend(parts, t);
+  }
+  foreach (lc, junk)
+    ((TargetEntry *)lfirst(lc))->resno = ++resno;
+  sub->targetList = list_concat(tl, junk);
+  sub->sortClause = NIL;
+  sub->jointree->quals =
+    keep == NIL ? NULL
+                : (list_length(keep) == 1 ? (Node *)linitial(keep)
+                                          : (Node *)makeBoolExpr(AND_EXPR,
+                                                                 keep, -1));
+
+  if (sl->subLinkType == ANY_SUBLINK && sl->testexpr != NULL) {
+    if (IsA(sl->testexpr, BoolExpr) &&
+        ((BoolExpr *)sl->testexpr)->boolop == AND_EXPR)
+      parts = list_concat(list_copy(((BoolExpr *)sl->testexpr)->args), parts);
+    else
+      parts = lcons(sl->testexpr, parts);
+  }
+  if (parts != NIL)
+    sl->testexpr = list_length(parts) == 1
+                     ? (Node *)linitial(parts)
+                     : (Node *)makeBoolExpr(AND_EXPR, parts, -1);
+  if (sl->subLinkType == EXISTS_SUBLINK) {
+    sl->subLinkType = ANY_SUBLINK;
+    sl->operName = list_make1(makeString(pstrdup("=")));
+  }
+
+  foreach (lc, lift) {
+    Node *c = copyObject((Node *)lfirst(lc));
+    IncrementVarSublevelsUp(c, -1, 1);
+    *lifted = lappend(*lifted, c);
+  }
+  return true;
+}
+
+/**
+ * @brief Drop the grouping of a scalar subquery that groups by the columns its
+ *        correlation fixes.
+ *
+ * @c "(SELECT @c max(v) @c FROM @c p @c WHERE @c p.k @c = @c u.k @c GROUP @c BY
+ * @c p.k)" has, for each outer row, at most the one group of the rows that
+ * match it: the aggregate over the matching rows, without the grouping, when
+ * there are some.  When there are none, the grouped body has no row and the
+ * subquery is @c NULL, which the ungrouped one also is exactly when its value
+ * over no rows is @c NULL -- a @c max, not a @c count.  What is left is the
+ * scalar aggregate the decorrelation lowers.
+ */
+static void drop_correlated_key_grouping(SubLink *sl) {
+  Query *c;
+  List *inner = NIL, *conjs;
+  ListCell *lc;
+  TargetEntry *value = NULL;
+  bool ok = true;
+  Node *e;
+
+  if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query))
+    return;
+  c = (Query *)sl->subselect;
+  if (c->commandType != CMD_SELECT || c->groupClause == NIL ||
+      c->groupingSets != NIL || c->havingQual != NULL || !c->hasAggs ||
+      c->setOperations != NULL || c->hasWindowFuncs ||
+      c->distinctClause != NIL || c->limitCount != NULL ||
+      c->limitOffset != NULL || c->cteList != NIL || c->jointree == NULL ||
+      c->jointree->quals == NULL)
+    return;
+  c = (Query *)copyObject(c);
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(c);
+#endif
+
+  conjs = (IsA(c->jointree->quals, BoolExpr) &&
+           ((BoolExpr *)c->jointree->quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)c->jointree->quals)->args
+            : list_make1(c->jointree->quals);
+  foreach (lc, conjs) {
+    OpExpr *op = (OpExpr *)lfirst(lc);
+    Node *l, *r, *in = NULL;
+    levels_read_ctx rl, rr;
+    Oid eq = InvalidOid;
+
+    if (!IsA(op, OpExpr) || list_length(op->args) != 2 ||
+        contain_volatile_functions((Node *)op))
+      continue;
+    l = (Node *)linitial(op->args);
+    r = (Node *)lsecond(op->args);
+    rl = levels_read(l);
+    rr = levels_read(r);
+    if (rl.own && !rl.above && !rl.further && !rl.opaque &&
+        !rr.own && !rr.opaque && (rr.above || rr.further))
+      in = l;
+    else if (rr.own && !rr.above && !rr.further && !rr.opaque &&
+             !rl.own && !rl.opaque && (rl.above || rl.further))
+      in = r;
+    if (in == NULL)
+      continue;
+    get_sort_group_operators(exprType(in), false, false, false, NULL, &eq,
+                             NULL, NULL);
+    if (OidIsValid(eq) && equality_ops_are_compatible(op->opno, eq))
+      inner = lappend(inner, in);
+  }
+  foreach (lc, c->groupClause) {
+    TargetEntry *te =
+      get_sortgroupclause_tle((SortGroupClause *)lfirst(lc), c->targetList);
+    if (!list_member(inner, te->expr))
+      return;                     /* a key the correlation does not fix */
+  }
+  foreach (lc, c->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (value != NULL)
+      return;
+    value = te;
+  }
+  if (value == NULL)
+    return;
+  e = having_over_no_rows_mutator(copyObject((Node *)value->expr), &ok);
+  if (!ok || contain_volatile_functions(e))
+    return;
+  e = eval_const_expressions(NULL, e);
+  if (!IsA(e, Const) || !((Const *)e)->constisnull)
+    return;                       /* a value over no rows, not NULL */
+  /* The junk columns go with the grouping: a key read outside an aggregate
+   * has no row to be read from once the aggregate is over no rows. */
+  c->groupClause = NIL;
+  c->sortClause = NIL;
+  c->targetList = list_make1(value);
+  value->resno = 1;
+  sl->subselect = (Node *)c;
+}
+
+/** @brief Walker applying @c drop_correlated_key_grouping to the scalar
+ *  subqueries of the query's own level. */
+static bool drop_correlated_key_grouping_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    drop_correlated_key_grouping((SubLink *)node);
+    return drop_correlated_key_grouping_walker(((SubLink *)node)->testexpr,
+                                               cx);
+  }
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, drop_correlated_key_grouping_walker, cx);
+}
+
 /**
  * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
  *        over tracked relations into correlated @c count(*) comparisons.
@@ -19243,6 +19676,14 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     }
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
+      /* A correlated body that groups, keyed by its correlation. */
+      {
+        List *lifted = NIL;
+        if (regroup_correlated_body(sl, neg, &lifted)) {
+          changed = true;
+          newconjs = list_concat(newconjs, lifted);
+        }
+      }
       /* A test nested in this body whose own conjuncts read only the levels
        * above it: lift them here, which leaves that test uncorrelated for the
        * rewriting below and this body plain for the decorrelation. */
@@ -30814,6 +31255,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
     REWRITE_STEP("normalize_quantified_aggregate_sublinks");
     query_tree_walker(q, drop_semijoin_distinct_walker, NULL,
                       QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
+    query_tree_walker(q, drop_correlated_key_grouping_walker, NULL,
+                      QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
     rewrite_uncorrelated_antijoin(constants, q);
     REWRITE_STEP("rewrite_uncorrelated_antijoin");
     wrap_untracked_from_for_sublink(constants, q);
@@ -32293,6 +32736,8 @@ static Query *lift_tracked_sublinks(const constants_t *constants, Query *q) {
   rewrite_array_sublinks(constants, lifted);
   normalize_quantified_aggregate_sublinks(constants, lifted);
   query_tree_walker(lifted, drop_semijoin_distinct_walker, NULL,
+                    QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
+  query_tree_walker(lifted, drop_correlated_key_grouping_walker, NULL,
                     QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
   rewrite_uncorrelated_antijoin(constants, lifted);
   rewrite_predicate_sublinks(constants, lifted);
