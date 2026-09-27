@@ -64,14 +64,16 @@ virtual value_type delta(value_type x) const override
 {
   return x;
 }
-virtual bool absorptive() const override {
+/** @brief Exclusive: @f$a \otimes (\mathbb{1} \ominus a) = \mathbb{0}@f$
+ *  (Lean @c Bool.exclusive). */
+virtual bool exclusive() const override {
   return true;
 }
-/**
- * @brief Conditions over one family are combined as their product: exclusive,
- *        with an idempotent @f$\otimes@f$.
- */
-virtual bool product_is_joint() const override {
+/** @brief @f$\otimes@f$ is idempotent (Lean @c Bool.mulIdempotent). */
+virtual bool mul_idempotent() const override {
+  return true;
+}
+virtual bool absorptive() const override {
   return true;
 }
 /**

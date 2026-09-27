@@ -61,6 +61,12 @@ virtual value_type delta(value_type x) const override
 {
   return x!=0 ? 1 : 0;
 }
+/** @brief Exclusive: @f$a \otimes (\mathbb{1} \ominus a) = \mathbb{0}@f$
+ *  (Lean @c Nat.exclusive); @f$\otimes@f$ is not idempotent
+ *  (@c Nat.not_mulIdempotent). */
+virtual bool exclusive() const override {
+  return true;
+}
 /**
  * @brief @f$\otimes@f$ distributes over @f$\ominus@f$ (truncated
  *        subtraction on the naturals).  Recorded for completeness: the

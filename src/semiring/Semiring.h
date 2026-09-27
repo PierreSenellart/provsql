@@ -412,21 +412,47 @@ virtual bool idempotent() const {
 }
 
 /**
- * @brief Return @c true if the product of the predicate provenances of two
- *        conditions over one family of occurrences is the provenance of
- *        their conjunction (and their sum that of their disjunction).
+ * @brief Return @c true if the semiring is exclusive:
+ *        @f$a \otimes (\mathbb{1} \ominus a) = \mathbb{0}@f$.
  *
- * The provenance of a selection on aggregates is a sum over the worlds of
- * the family they read.  Taken condition by condition and multiplied, it is
- * that sum only where the semiring is exclusive with an idempotent
- * @f$\otimes@f$ (Lean @c predProvOf_mul_predProvOf): the HAVING machinery
- * then keeps the conditions apart, with their closed forms, and resolves them
- * jointly otherwise (@c provsql_having).
+ * Equivalently @f$a \otimes (\mathbb{1} \ominus (a \oplus b)) =
+ * \mathbb{0}@f$, the form the worlds of a family take: a world's annotation
+ * and the absence of what it holds cancel.  Lean @c exclusive.
  *
  * @return @c false by default; override to return @c true only with a proof.
  */
-virtual bool product_is_joint() const {
+virtual bool exclusive() const {
   return false;
+}
+
+/**
+ * @brief Return @c true if @f$\otimes@f$ is idempotent:
+ *        @f$a \otimes a = a@f$.
+ *
+ * Not to be confused with @c idempotent(), which is about @f$\oplus@f$.
+ * Lean @c mulIdempotent.
+ *
+ * @return @c false by default; override to return @c true only with a proof.
+ */
+virtual bool mul_idempotent() const {
+  return false;
+}
+
+/**
+ * @brief Whether the product of the predicate provenances of two conditions
+ *        over one family of occurrences is the provenance of their
+ *        conjunction (and their sum that of their disjunction).
+ *
+ * The provenance of a selection on aggregates is a sum over the worlds of
+ * the family they read.  Taken condition by condition and multiplied, it is
+ * that sum exactly when the semiring is exclusive with an idempotent
+ * @f$\otimes@f$ (Lean @c predProvOf_mul_predProvOf): the HAVING machinery
+ * then keeps the conditions apart, with their closed forms, and resolves them
+ * jointly otherwise (@c provsql_having).  Counting is exclusive, and its
+ * @f$\otimes@f$ is not idempotent.
+ */
+bool product_is_joint() const {
+  return exclusive() && mul_idempotent();
 }
 
 /**

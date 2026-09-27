@@ -109,6 +109,15 @@ value_type monus(value_type x, value_type y) const override {
 value_type delta(value_type x) const override {
   return x.has_value() ? one() : zero();
 }
+/** @brief Exclusive: @f$a \otimes (\mathbb{1} \ominus a) = \mathbb{0}@f$
+ *  (Lean @c Which.exclusive). */
+virtual bool exclusive() const override {
+  return true;
+}
+/** @brief @f$\otimes@f$ is idempotent (Lean @c Which.mulIdempotent). */
+virtual bool mul_idempotent() const override {
+  return true;
+}
 
 /**
  * @brief Which-provenance is idempotent: @f$\oplus@f$ is set union.
