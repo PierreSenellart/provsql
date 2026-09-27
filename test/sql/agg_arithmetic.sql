@@ -169,7 +169,7 @@ CREATE TABLE agg_arith_bool AS
          CASE count(*) WHEN 2 THEN 'two' ELSE 'other' END AS simple_case
   FROM personnel GROUP BY city;
 SELECT remove_provenance('agg_arith_bool');
-SELECT city, has_dir, eq_true, not_every, simple_case FROM agg_arith_bool ORDER BY city;
+SELECT city, has_dir, eq_true, not_every, simple_case FROM agg_arith_bool ORDER BY city, simple_case;
 DROP TABLE agg_arith_bool;
 
 -- Division of integers truncates toward zero, in the displayed value as in
