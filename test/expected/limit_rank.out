@@ -235,3 +235,19 @@ n
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.500000
+2|0.500000
+3|0.375000
+4|0.250000
+5|0.156250
+(5 rows)
+remove_provenance
+
+(1 row)

@@ -26213,61 +26213,87 @@ static void simple_cases_to_searched(Query *q) {
   q->havingQual = simple_case_to_searched_mutator(q->havingQual, NULL);
 }
 
+/** @brief The value of a constant LIMIT / OFFSET expression, or -1. */
+static int64 const_limit_value(Node *e) {
+  Node *f;
+  if (e == NULL)
+    return -1;
+  /* LIMIT 100 is parsed as the cast of an integer to bigint */
+  f = eval_const_expressions(NULL, copyObject(e));
+  if (!IsA(f, Const) || ((Const *)f)->constisnull ||
+      ((Const *)f)->consttype != INT8OID)
+    return -1;
+  return DatumGetInt64(((Const *)f)->constvalue);
+}
+
 /**
- * @brief Whether @p q gives at most one row in every world: a scalar
- *        aggregation, or a product of such, filtered or not.
+ * @brief A bound on the number of rows @p q gives, in every world, or -1.
+ *
+ * A scalar aggregation gives one row; a constant @c LIMIT bounds its block; a
+ * block over bounded sources (FROM subqueries and LATERAL ones, joined by
+ * commas) gives at most their product, a @c WHERE, a @c GROUP @c BY or a
+ * @c DISTINCT only removing rows.  Anything else is unbounded here.
+ *
+ * @param q          The query.
+ * @param own_limit  Whether to count @p q's own @c LIMIT.
  */
-static bool block_at_most_one_row(const Query *q) {
+static int64 block_row_bound(const Query *q, bool own_limit) {
   ListCell *lc;
+  int64 bound = -1;
 
   if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
       q->hasTargetSRFs || q->groupingSets != NIL || q->jointree == NULL)
-    return false;
+    return -1;
+  if (own_limit && q->limitCount != NULL)
+    bound = const_limit_value(q->limitCount);
   if (q->hasAggs && q->groupClause == NIL)
-    return true;
-  if (q->hasAggs || q->groupClause != NIL || q->jointree->fromlist == NIL)
-    return false;
-  foreach (lc, q->jointree->fromlist) {
-    RangeTblEntry *r;
-    if (!IsA(lfirst(lc), RangeTblRef))
-      return false;
-    r = rt_fetch(((RangeTblRef *)lfirst(lc))->rtindex, q->rtable);
-    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL ||
-        !block_at_most_one_row(r->subquery))
-      return false;
+    return bound == 0 ? 0 : 1;
+  if (q->jointree->fromlist != NIL) {
+    int64 product = 1;
+    foreach (lc, q->jointree->fromlist) {
+      RangeTblEntry *r;
+      int64 b;
+      if (!IsA(lfirst(lc), RangeTblRef))
+        return bound;
+      r = rt_fetch(((RangeTblRef *)lfirst(lc))->rtindex, q->rtable);
+      if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+        return bound;
+      b = block_row_bound(r->subquery, true);
+      if (b < 0 || (b > 0 && product > PG_INT64_MAX / b))
+        return bound;
+      product *= b;
+    }
+    if (bound < 0 || product < bound)
+      bound = product;
   }
-  return true;
+  return bound;
 }
 
 /**
  * @brief Whether @p q has a @c LIMIT @c k (k a constant at least 1, no
- *        @c OFFSET) over a block of at most one row: a truncation that
- *        removes nothing, in any world, with an @c ORDER @c BY or without.
+ *        @c OFFSET) over a block of at most k rows (@c block_row_bound): a
+ *        truncation that removes nothing, in any world, with an @c ORDER
+ *        @c BY or without.
  */
 static bool limit_is_trivial(const Query *q) {
-  Node *folded;
-  Const *c;
+  int64 k, bound;
 
   if (q->limitCount == NULL || q->limitOffset != NULL)
     return false;
-  /* LIMIT 100 is parsed as the cast of an integer to bigint */
-  folded = eval_const_expressions(NULL, copyObject(q->limitCount));
-  if (!IsA(folded, Const))
-    return false;
-  c = (Const *)folded;
-  return !c->constisnull && c->consttype == INT8OID &&
-         DatumGetInt64(c->constvalue) >= 1 && block_at_most_one_row(q);
+  k = const_limit_value(q->limitCount);
+  bound = block_row_bound(q, false);
+  return k >= 1 && bound >= 0 && bound <= k;
 }
 
 /**
- * @brief Drop an @c ORDER @c BY @c ... @c LIMIT @c k (k at least 1, no
- *        @c OFFSET) over a block of at most one row, which neither orders
- *        nor truncates anything, in any world.
+ * @brief Drop a @c LIMIT @c k (k at least 1, no @c OFFSET) over a block of at
+ *        most k rows, which truncates nothing, in any world.
  *
  * @c "SELECT count(*), sum(x) FROM ... ORDER BY count(*) LIMIT 100" (TPC-DS
  * 16, 90, 92, 94, 96) is read as it is written: the truncation would
  * otherwise become the rank of a window, reported as a window the query does
- * not have.
+ * not have.  Over a single row the @c ORDER @c BY goes too, having nothing to
+ * order; over more, it stays, still ordering what is shown.
  */
 static void drop_trivial_limit(Query *q) {
   if (!limit_is_trivial(q))
@@ -26276,7 +26302,8 @@ static void drop_trivial_limit(Query *q) {
 #if PG_VERSION_NUM >= 130000
   q->limitOption = LIMIT_OPTION_COUNT;
 #endif
-  q->sortClause = NIL;
+  if (block_row_bound(q, false) <= 1)
+    q->sortClause = NIL;
 }
 
 /** @brief Whether the LIMIT / OFFSET of @p q removes rows. */

@@ -341,3 +341,22 @@ SELECT n::text AS n FROM lr_one_r;
 DROP TABLE lr_one_r;
 SELECT remove_provenance('lr_one');
 DROP TABLE lr_one;
+
+-- A LIMIT over a block another LIMIT already bounds by no more rows cuts
+-- nothing either: the middle LIMIT 3 below is dropped, and the other two are
+-- read in every world.  Rows at one half; the probabilities are those of the
+-- enumeration of the 32 worlds.
+CREATE TABLE lr_b(id int);
+INSERT INTO lr_b VALUES (1), (2), (3), (4), (5);
+SELECT add_provenance('lr_b');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM lr_b; END $$;
+CREATE TABLE lr_b_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT * FROM (SELECT * FROM lr_b ORDER BY id LIMIT 3) a
+        ORDER BY id DESC LIMIT 3) b
+  ORDER BY id LIMIT 2;
+SELECT remove_provenance('lr_b_r');
+SELECT id, p FROM lr_b_r ORDER BY id;
+DROP TABLE lr_b_r;
+SELECT remove_provenance('lr_b');
+DROP TABLE lr_b;
