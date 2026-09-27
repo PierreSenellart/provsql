@@ -50,8 +50,8 @@ remove_provenance
 
 (1 row)
 city|formula
-Berlin|((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Ellen ⊗ Susan)) ⊗ ((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan))
-Paris|((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy))) ⊗ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy))
+Berlin|(Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan)
+Paris|(Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy)) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave))
 (2 rows)
 remove_provenance
 

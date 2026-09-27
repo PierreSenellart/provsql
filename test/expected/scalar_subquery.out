@@ -753,7 +753,7 @@ remove_provenance
 
 (1 row)
 a|f
-x|3 ⊗ ((𝟙 ⊖ 3) ⊕ 3)
+x|3
 (1 row)
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: sublink-in-untracked-position-frozen; scope: gap

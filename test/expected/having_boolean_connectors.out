@@ -21,7 +21,7 @@ remove_provenance
 city|c|formula|counting|round
 Berlin|2 (*)|(Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan))|0|0.54
 New York|2 (*)|(Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul))|0|0.26
-Paris|3 (*)|(Dave ⊗ Magdalen ⊗ Nancy) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))|1|0.50
+Paris|3 (*)|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1|0.50
 (3 rows)
 remove_provenance
 
@@ -29,7 +29,7 @@ remove_provenance
 city|c|formula|counting|round
 Berlin|2 (*)|(Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan))|0|0.54
 New York|2 (*)|(Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul))|0|0.26
-Paris|3 (*)|(Dave ⊗ Magdalen ⊗ Nancy) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))|1|0.50
+Paris|3 (*)|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1|0.50
 (3 rows)
 remove_provenance
 
@@ -37,7 +37,7 @@ remove_provenance
 city|c|formula|counting|round
 Berlin|2 (*)|(Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan))|0|0.54
 New York|2 (*)|(Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul))|0|0.26
-Paris|3 (*)|(Dave ⊗ Magdalen ⊗ Nancy) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))|1|0.50
+Paris|3 (*)|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1|0.50
 (3 rows)
 remove_provenance
 
@@ -58,5 +58,34 @@ remove_provenance
 
 (1 row)
 city|c|formula|counting|round
-Paris|3 (*)|(Dave ⊗ Magdalen ⊗ Nancy) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))|1|0.50
+Paris|3 (*)|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1|0.50
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|c|v
+count>2 AND count<5|1|6|0.315000
+count>=2 AND (sum<=3 OR max>=3)|1|6|0.630000
+count>=2 AND (sum<=3 OR max>=3)|2|2|0.180000
+count>=3 AND sum<=4|1|0|0.315000
+(4 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|v
+3 <= count <= 10|0.704880
+count <= 10|0.900000
+count = 2|0.801000
+(3 rows)
+remove_provenance
+
 (1 row)

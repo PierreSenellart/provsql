@@ -412,6 +412,24 @@ virtual bool idempotent() const {
 }
 
 /**
+ * @brief Return @c true if the product of the predicate provenances of two
+ *        conditions over one family of occurrences is the provenance of
+ *        their conjunction (and their sum that of their disjunction).
+ *
+ * The provenance of a selection on aggregates is a sum over the worlds of
+ * the family they read.  Taken condition by condition and multiplied, it is
+ * that sum only where the semiring is exclusive with an idempotent
+ * @f$\otimes@f$ (Lean @c predProvOf_mul_predProvOf): the HAVING machinery
+ * then keeps the conditions apart, with their closed forms, and resolves them
+ * jointly otherwise (@c provsql_having).
+ *
+ * @return @c false by default; override to return @c true only with a proof.
+ */
+virtual bool product_is_joint() const {
+  return false;
+}
+
+/**
  * @brief Return @c true if @f$\otimes@f$ distributes over the monus
  *        on the left: @f$a \otimes (b \ominus c) = (a \otimes b) \ominus
  *        (a \otimes c)@f$ for all @f$a, b, c@f$.

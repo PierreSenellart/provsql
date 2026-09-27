@@ -68,6 +68,13 @@ virtual bool absorptive() const override {
   return true;
 }
 /**
+ * @brief Conditions over one family are combined as their product: exclusive,
+ *        with an idempotent @f$\otimes@f$.
+ */
+virtual bool product_is_joint() const override {
+  return true;
+}
+/**
  * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
  *        @c MIN / @c MAX comparisons take the single-scan closed form.
  *

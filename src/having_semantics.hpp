@@ -25,17 +25,27 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "GenericCircuit.hpp"
+extern "C" {
+#include "access/xact.h"
+}
 #include "provsql_utils.h"
 #include "subset.hpp"
 #include "Aggregation.h"
 
 /** @cond INTERNAL */
 namespace provsql_having_detail {
+/** @brief One comparison of a joint resolution: @c L @c op @c R. */
+struct JointAtom {
+  gate_t L;
+  gate_t R;
+  ComparisonOperator op;
+};
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start);
 bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out);
 bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::string &m_out, gate_t &k_gate_out);
@@ -337,6 +347,461 @@ void provsql_having(
       }
       return combine_exhaustive_worlds(worlds, kvals, /*upset=*/false, monotone);
     };
+
+  // One comparison, or several over the same contributors combined by a
+  // Boolean predicate (a conjunction, a disjunction of HAVING atoms on one
+  // group), resolved over the worlds of those contributors: in each, every
+  // comparison is read and the predicate decides whether the world counts.
+  // Numeric aggregates (SUM, COUNT, AVG, MIN, MAX, choose()) and arithmetic
+  // over them; at most 24 contributors.
+auto build_joint = [&](const std::vector<JointAtom> &atoms,
+                       const std::function<bool(const std::vector<bool> &)>
+                         &pred,
+                       typename SemiringT::value_type &pw_out) -> bool {
+    struct AggInfo {
+      AggregationOperator kind;
+      bool is_int;                                    // integer-typed result?
+      bool is_scalar;                                 // aggregation without GROUP BY?
+      std::vector<std::pair<int, double> > contribs;  // (distinct-K index, value)
+    };
+    // A decimal text denotes an integer iff it has no fractional/exponent part.
+    auto text_is_int = [](const std::string &s) -> bool {
+      if (s.empty()) return false;
+      for (char ch : s)
+        if (!((ch >= '0' && ch <= '9') || ch == '+' || ch == '-'))
+          return false;
+      return true;
+    };
+    std::map<gate_t, AggInfo> aggs;
+    std::map<gate_t, int> kindex;
+    std::vector<gate_t> kgates;
+
+    // A number, the whole text of it: a date such as 2022-08-05 is not
+    // 2022.
+    auto parse_number = [](const std::string &s, double &out) -> bool {
+      try {
+        std::size_t pos = 0;
+        out = std::stod(s, &pos);
+        return pos == s.size();
+      } catch (...) {
+        return false;
+      }
+    };
+
+    std::function<bool(gate_t)> collect = [&](gate_t gx) -> bool {
+      gate_type gt = c.getGateType(gx);
+      if (gt == gate_agg) {
+        if (aggs.count(gx))
+          return true;
+        AggInfo ai;
+        ai.kind = getAggregationOperator(c.getInfos(gx).first);
+        ai.is_int = aggtype_is_integer(c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK);
+        ai.is_scalar =
+          (c.getInfos(gx).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+        // Only the kinds eval reads a value of: any other declines the
+        // route here, rather than reading there as "no value" in every
+        // world -- which is a comparison that never holds, a probability of
+        // zero with nothing to say so.  bool_and / bool_or / array_agg were
+        // kept out only by their values failing to parse as numbers.
+        switch (ai.kind) {
+        case AggregationOperator::SUM:
+        case AggregationOperator::COUNT:
+        case AggregationOperator::AVG:
+        case AggregationOperator::MIN:
+        case AggregationOperator::MAX:
+        case AggregationOperator::CHOOSE:
+          break;
+        default:
+          return false;
+        }
+        for (gate_t ch : c.getWires(gx)) {
+          if (c.getGateType(ch) != gate_semimod)
+            return false;
+          std::string ms;
+          gate_t kg{};
+          if (!semimod_extract_string_and_K(c, ch, ms, kg))
+            return false;
+          int idx;
+          auto it = kindex.find(kg);
+          if (it == kindex.end()) {
+            idx = static_cast<int>(kgates.size());
+            kindex[kg] = idx;
+            kgates.push_back(kg);
+          } else
+            idx = it->second;
+          double m;
+          if (!parse_number(ms, m)) return false;
+          ai.contribs.emplace_back(idx, m);
+        }
+        aggs.emplace(gx, std::move(ai));
+        return true;
+      }
+      if (gt == gate_arith) {
+        for (gate_t ch : c.getWires(gx))
+          if (!collect(ch))
+            return false;
+        return true;
+      }
+      if (gt == gate_value)
+        return true;
+      if (gt == gate_semimod) {       // a constant threshold: semimod(1, value)
+        std::string ms;
+        gate_t kg{};
+        if (!semimod_extract_string_and_K(c, gx, ms, kg))
+          return false;
+        return c.getGateType(kg) == gate_one;
+      }
+      return false;
+    };
+
+    for (const JointAtom &a : atoms)
+      if (!collect(a.L) || !collect(a.R))
+        return false;
+    if (aggs.empty())
+      return false;
+    const size_t n = kgates.size();
+    if (n > 24)                      // 2^n enumeration: keep it bounded
+      return false;
+
+    // Numeric value of a subexpression in a given world, tracking whether it
+    // is integer-valued so that division floors as SQL does (NULL -> false).
+    std::function<bool(gate_t, uint64_t, double &, bool &)> eval =
+      [&](gate_t gx, uint64_t world, double &out, bool &is_int) -> bool {
+      gate_type gt = c.getGateType(gx);
+      if (gt == gate_value) {
+        std::string s = c.getExtra(gx);
+        if (!parse_number(s, out)) return false;
+        is_int = text_is_int(s);
+        return true;
+      }
+      if (gt == gate_semimod) {       // constant threshold
+        std::string ms; gate_t kg{};
+        if (!semimod_extract_string_and_K(c, gx, ms, kg)) return false;
+        if (!parse_number(ms, out)) return false;
+        is_int = text_is_int(ms);
+        return true;
+      }
+      if (gt == gate_agg) {
+        const AggInfo &ai = aggs.at(gx);
+        double acc = 0, mn = 0, mx = 0, fst = 0;
+        long cnt = 0;
+        bool first = true;
+        for (const auto &pr : ai.contribs)
+          if (world & (uint64_t(1) << pr.first)) {
+            double m = pr.second;
+            acc += m; ++cnt;
+            if (first) { mn = mx = fst = m; first = false; }
+            else { mn = std::min(mn, m); mx = std::max(mx, m); }
+          }
+        is_int = ai.is_int;
+        // An aggregate with no surviving contributor in this world declines
+        // the world (returning false), which the caller reads as "the
+        // comparison does not hold here".  Two situations produce cnt == 0
+        // and both want that answer: the group has no row present, so the
+        // group's row does not exist; or the group is non-empty but every
+        // contributed value was NULL, so the aggregate is SQL NULL and the
+        // comparison is NULL, hence false.  (A NULL-valued row never reaches
+        // contribs -- the aggregation rewriting drops it -- which is why the
+        // two are indistinguishable here, and why they need not be.)
+        //
+        // COUNT is the exception: an empty set genuinely counts 0, so the
+        // world has a value whenever a row exists to carry it -- which is
+        // the case for a scalar aggregation, and not for a grouped one whose
+        // empty group is no row at all.  The gate records COUNT for both
+        // count(*) and count(expr) (see make_aggregation_expression), so no
+        // guessing from the values is needed here.
+        switch (ai.kind) {
+        case AggregationOperator::SUM:   if (cnt == 0) return false; out = acc; return true;
+        case AggregationOperator::COUNT:                       // values 1 or 0/1
+          if (cnt == 0 && !ai.is_scalar) return false;
+          out = acc; return true;
+        case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
+        case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;
+        case AggregationOperator::MAX:   if (cnt == 0) return false; out = mx; return true;
+        // choose() is PICKFIRST: the value of the first present contributor,
+        // in the order of the gate's wires (see ChooseAgg).
+        case AggregationOperator::CHOOSE: if (cnt == 0) return false; out = fst; return true;
+        default:
+          // collect admits no other kind: one reaching here would read as
+          // "no value" in every world, so it raises instead.
+          throw CircuitException(
+            "having_semantics: aggregate kind not read per world");
+        }
+      }
+      if (gt == gate_arith) {
+        const auto &w = c.getWires(gx);
+        unsigned aop = static_cast<unsigned>(c.getInfos(gx).first);
+        if (aop == PROVSQL_ARITH_PLUS || aop == PROVSQL_ARITH_TIMES) {
+          double r = (aop == PROVSQL_ARITH_PLUS) ? 0 : 1;
+          bool all_int = true;
+          for (gate_t ch : w) {
+            double v; bool vi;
+            if (!eval(ch, world, v, vi)) return false;
+            if (aop == PROVSQL_ARITH_PLUS) r += v; else r *= v;
+            all_int = all_int && vi;
+          }
+          out = r; is_int = all_int; return true;
+        }
+        if (aop == PROVSQL_ARITH_MINUS) {
+          if (w.size() != 2) return false;
+          double a, b; bool ai, bi;
+          if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
+          out = a - b; is_int = ai && bi; return true;
+        }
+        if (aop == PROVSQL_ARITH_DIV || aop == PROVSQL_ARITH_INTDIV) {
+          if (w.size() != 2) return false;
+          double a, b; bool ai, bi;
+          if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
+          if (b == 0) return false;
+          if (aop == PROVSQL_ARITH_INTDIV) {  // SQL division of integers
+            out = std::trunc(a / b);
+            is_int = true;
+          } else {
+            /* A real division, whatever the operands happen to be in this
+             * world.  Which of the two divisions SQL means is the gate's to
+             * say -- the rewriting emits INTDIV exactly where the
+             * expression's type is an integer one -- and deciding it again
+             * from the values truncated a division the query wrote over
+             * numbers: count(*) OVER w / count(*) OVER w0 came out 1 or 0
+             * per world, so a comparison over it answered the probability
+             * that the two counts are equal.  The other five evaluators
+             * (Monte Carlo, RangeCheck, Expectation, the simplifier, the
+             * collapsed moment) all read the op and not the values. */
+            out = a / b;
+            is_int = false;
+          }
+          return true;
+        }
+        if (aop == PROVSQL_ARITH_NEG) {
+          if (w.size() != 1) return false;
+          double a; bool ai;
+          if (!eval(w[0], world, a, ai)) return false;
+          out = -a; is_int = ai; return true;
+        }
+        if (aop == PROVSQL_ARITH_ASFLOAT8 ||
+            aop == PROVSQL_ARITH_ASFLOAT4) {
+          /* The value read in its own type: a double is what this carries,
+           * and a real rounds it to seven digits. */
+          double a;
+          bool ai;
+          if (w.size() != 1 || !eval(w[0], world, a, ai)) return false;
+          out = aop == PROVSQL_ARITH_ASFLOAT8
+                  ? a : static_cast<double>(static_cast<float>(a));
+          is_int = ai;
+          return true;
+        }
+        if (aop == PROVSQL_ARITH_ROUND || aop == PROVSQL_ARITH_FLOOR ||
+            aop == PROVSQL_ARITH_CEIL || aop == PROVSQL_ARITH_ABS) {
+          /* Read in the world, on the value the world gives: rounding and
+           * absolute value of a value, never of an expectation. */
+          double a;
+          bool ai;
+          if (w.empty() || !eval(w[0], world, a, ai)) return false;
+          if (aop == PROVSQL_ARITH_FLOOR) out = std::floor(a);
+          else if (aop == PROVSQL_ARITH_CEIL) out = std::ceil(a);
+          else if (aop == PROVSQL_ARITH_ABS) out = std::fabs(a);
+          else if (w.size() == 1) out = std::round(a);
+          else {
+            double d;
+            bool di;
+            if (!eval(w[1], world, d, di)) return false;
+            const double f = std::pow(10.0, d);
+            out = std::round(a * f) / f;
+          }
+          /* An integer in, an integer out, except a rounding to digits of a
+           * value that was not one. */
+          is_int = ai || aop != PROVSQL_ARITH_ROUND || w.size() == 1;
+          return true;
+        }
+        if (aop == PROVSQL_ARITH_POW || aop == PROVSQL_ARITH_LN ||
+            aop == PROVSQL_ARITH_EXP) {
+          /* The transform of the value this world gives.  Without these
+           * three the switch fell through to "no value in this world", which
+           * the caller reads as "the comparison does not hold here" -- in
+           * every world, so a HAVING over sqrt(sum(x)) (a POW of one half),
+           * over ln or exp, or over an expression holding one, answered
+           * probability 0 whatever the threshold.  The other five evaluators
+           * read them, or decline the shape and leave it to this one.
+           *
+           * Where the transform is undefined ON the value the world gives --
+           * the logarithm of a nonpositive number, a negative base raised to
+           * a fraction -- the world has no value, the reading a divisor of
+           * zero gets (see the DIV arm) rather than the error SQL raises
+           * there: raising in one world would take every other world's
+           * answer with it. */
+          double a;
+          bool ai;
+
+          if (w.empty() || !eval(w[0], world, a, ai)) return false;
+          if (aop == PROVSQL_ARITH_LN) {
+            if (!(a > 0)) return false;
+            out = std::log(a);
+          } else if (aop == PROVSQL_ARITH_EXP) {
+            out = std::exp(a);
+          } else {
+            double e;
+            bool ei;
+
+            if (w.size() != 2 || !eval(w[1], world, e, ei)) return false;
+            out = std::pow(a, e);
+            if (std::isnan(out)) return false;
+          }
+          if (!std::isfinite(out)) return false;
+          is_int = false;
+          return true;
+        }
+        if (aop == PROVSQL_ARITH_MAX || aop == PROVSQL_ARITH_MIN) {
+          if (w.empty()) return false;
+          double r = 0; bool all_int = true, first = true;
+          for (gate_t ch : w) {
+            double v; bool vi;
+            if (!eval(ch, world, v, vi)) return false;
+            if (first) { r = v; first = false; }
+            else r = (aop == PROVSQL_ARITH_MAX) ? std::max(r, v)
+                                                : std::min(r, v);
+            all_int = all_int && vi;
+          }
+          out = r; is_int = all_int; return true;
+        }
+        if (aop == PROVSQL_ARITH_PERCENTILE) {
+          /* A continuous percentile over the group's rows: the wires are
+           * interleaved [ind_1, x_1, ...] with ind_i the row's 0/1 presence,
+           * and the fraction is the gate's own text.  The values the world
+           * holds are sorted and interpolated at the fraction, as
+           * MonteCarloSampler reads them; a world holding none of them has no
+           * value, like an aggregate with no contributing row.  No comparison
+           * reaches this today -- the gate is built for percentile_cont over
+           * a random variable, whose circuits the sampler reads -- so it is
+           * written to the sampler's reading rather than to a measurement. */
+          std::vector<double> members;
+          double fraction, pos, fp;
+          std::size_t lo;
+
+          if (w.empty() || w.size() % 2 != 0) return false;
+          try {
+            fraction = std::stod(c.getExtra(gx));
+          } catch (const std::exception &) {
+            return false;
+          }
+          for (std::size_t i = 0; i < w.size(); i += 2) {
+            double ind, x;
+            bool ii, xi;
+
+            if (!eval(w[i], world, ind, ii)) return false;
+            if (ind < 0.5) continue;              /* the row is not here */
+            if (!eval(w[i + 1], world, x, xi)) return false;
+            members.push_back(x);
+          }
+          if (members.empty()) return false;
+          std::sort(members.begin(), members.end());
+          pos = fraction * static_cast<double>(members.size() - 1);
+          lo = static_cast<std::size_t>(pos);
+          fp = pos - static_cast<double>(lo);
+          out = (lo + 1 < members.size())
+                  ? members[lo] + fp * (members[lo + 1] - members[lo])
+                  : members[lo];
+          is_int = false;
+          return true;
+        }
+        /* An arithmetic this evaluator does not know.  Falling through to
+         * "this world has no value" is what made a HAVING over sqrt, ln or
+         * exp answer probability 0 in every world, silently and with
+         * confidence, for as long as those three arms were missing: the
+         * caller reads no value as "the comparison does not hold here".  An
+         * unimplemented operator has to be told apart from a world that
+         * genuinely has no value, so it raises, as every other evaluator's
+         * default does (MonteCarloSampler, Expectation).  A new gate_arith
+         * operator therefore fails loudly here until it is read. */
+        throw CircuitException(
+                "having_semantics: unknown gate_arith operator tag: " +
+                std::to_string(aop));
+      }
+      return false;
+    };
+
+    std::vector<typename SemiringT::value_type> kval(n);
+    for (size_t i = 0; i < n; ++i)
+      kval[i] = c.evaluate<SemiringT>(kgates[i], mapping, S);
+
+    // The joint enumeration below is over complete worlds already:
+    // certify the disjuncts when the semiring and contributors allow.
+    const bool certify = certifiable_contributors(kval);
+
+    // Whether the world in which no contributor is present is itself a
+    // valid world.  For a grouped aggregation it is not: an empty group is
+    // no row, so there is nothing for the comparison to hold of.  A scalar
+    // aggregation always yields its single row, empty input included, so
+    // that world is real and a predicate true on it (count(*) = 0, and
+    // anything the empty-input values satisfy) must pick it up.  Mixed
+    // shapes follow the grouped reading: whichever side is grouped has no
+    // row there, so the joined row does not exist either.
+    const bool empty_world_valid =
+      !aggs.empty() &&
+      std::all_of(aggs.begin(), aggs.end(),
+                  [](const std::pair<const gate_t, AggInfo> &e) {
+      return e.second.is_scalar;
+    });
+    // No contributor at all: the empty world is the only one, and it is
+    // only a world for scalar aggregations (a window frame that may be
+    // empty while its row exists).
+    if (n == 0 && !empty_world_valid)
+      return false;
+
+    std::vector<typename SemiringT::value_type> disjuncts;
+    const uint64_t total = uint64_t(1) << n;
+    for (uint64_t world = empty_world_valid ? 0 : 1; world < total; ++world) {
+      std::vector<bool> truth(atoms.size(), false);
+      for (size_t ai = 0; ai < atoms.size(); ++ai) {
+        double lv, rv;
+        bool lint, rint;
+        if (!eval(atoms[ai].L, world, lv, lint) ||
+            !eval(atoms[ai].R, world, rv, rint))
+          continue;                                     // NULL comparison: false
+        switch (atoms[ai].op) {
+        case ComparisonOperator::EQ: truth[ai] = (lv == rv); break;
+        case ComparisonOperator::NE: truth[ai] = (lv != rv); break;
+        case ComparisonOperator::LT: truth[ai] = (lv <  rv); break;
+        case ComparisonOperator::LE: truth[ai] = (lv <= rv); break;
+        case ComparisonOperator::GT: truth[ai] = (lv >  rv); break;
+        case ComparisonOperator::GE: truth[ai] = (lv >= rv); break;
+        }
+      }
+      /* A comparison that is NULL in the world counts as false: exact for a
+       * conjunction and a disjunction, which keep a row only where they are
+       * true, and there is no negation among them. */
+      if (!pred(truth))
+        continue;
+
+      std::vector<typename SemiringT::value_type> present, missing;
+      for (size_t i = 0; i < n; ++i) {
+        if (world & (uint64_t(1) << i)) {
+          if (certify || kval[i] != S.one()) present.push_back(kval[i]);
+        } else {
+          if (certify || kval[i] != S.zero()) missing.push_back(kval[i]);
+        }
+      }
+      if (certify) {
+        disjuncts.push_back(S.certified_world_term(present, missing));
+        continue;
+      }
+      auto present_prod = S.times(present);
+      if (missing.empty())
+        disjuncts.push_back(std::move(present_prod));
+      else {
+        auto monus_factor = S.monus(S.one(), S.plus(missing));
+        disjuncts.push_back(
+          present_prod == S.one()
+            ? monus_factor
+            : S.times(std::vector<typename SemiringT::value_type>{
+                present_prod, monus_factor}));
+      }
+    }
+
+    pw_out = disjuncts.empty() ? S.zero()
+             : certify ? S.certified_exclusive_plus(disjuncts)
+             : S.plus(disjuncts);
+    return true;
+  };
 
   auto pw_from_cmp_gate = [&](gate_t cmp_gate, typename SemiringT::value_type &pw_out) -> bool {
     const auto &cw = c.getWires(cmp_gate);
@@ -751,442 +1216,9 @@ void provsql_having(
     // (returning false, leaving the gate unresolved) beyond a small bound.
     auto build_general = [&](gate_t Lx, gate_t Rx,
                              ComparisonOperator opx) -> bool {
-      struct AggInfo {
-        AggregationOperator kind;
-        bool is_int;                                    // integer-typed result?
-        bool is_scalar;                                 // aggregation without GROUP BY?
-        std::vector<std::pair<int, double> > contribs;  // (distinct-K index, value)
-      };
-      // A decimal text denotes an integer iff it has no fractional/exponent part.
-      auto text_is_int = [](const std::string &s) -> bool {
-        if (s.empty()) return false;
-        for (char ch : s)
-          if (!((ch >= '0' && ch <= '9') || ch == '+' || ch == '-'))
-            return false;
-        return true;
-      };
-      std::map<gate_t, AggInfo> aggs;
-      std::map<gate_t, int> kindex;
-      std::vector<gate_t> kgates;
-
-      // A number, the whole text of it: a date such as 2022-08-05 is not
-      // 2022.
-      auto parse_number = [](const std::string &s, double &out) -> bool {
-        try {
-          std::size_t pos = 0;
-          out = std::stod(s, &pos);
-          return pos == s.size();
-        } catch (...) {
-          return false;
-        }
-      };
-
-      std::function<bool(gate_t)> collect = [&](gate_t gx) -> bool {
-        gate_type gt = c.getGateType(gx);
-        if (gt == gate_agg) {
-          if (aggs.count(gx))
-            return true;
-          AggInfo ai;
-          ai.kind = getAggregationOperator(c.getInfos(gx).first);
-          ai.is_int = aggtype_is_integer(c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK);
-          ai.is_scalar =
-            (c.getInfos(gx).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
-          // Only the kinds eval reads a value of: any other declines the
-          // route here, rather than reading there as "no value" in every
-          // world -- which is a comparison that never holds, a probability of
-          // zero with nothing to say so.  bool_and / bool_or / array_agg were
-          // kept out only by their values failing to parse as numbers.
-          switch (ai.kind) {
-          case AggregationOperator::SUM:
-          case AggregationOperator::COUNT:
-          case AggregationOperator::AVG:
-          case AggregationOperator::MIN:
-          case AggregationOperator::MAX:
-          case AggregationOperator::CHOOSE:
-            break;
-          default:
-            return false;
-          }
-          for (gate_t ch : c.getWires(gx)) {
-            if (c.getGateType(ch) != gate_semimod)
-              return false;
-            std::string ms;
-            gate_t kg{};
-            if (!semimod_extract_string_and_K(c, ch, ms, kg))
-              return false;
-            int idx;
-            auto it = kindex.find(kg);
-            if (it == kindex.end()) {
-              idx = static_cast<int>(kgates.size());
-              kindex[kg] = idx;
-              kgates.push_back(kg);
-            } else
-              idx = it->second;
-            double m;
-            if (!parse_number(ms, m)) return false;
-            ai.contribs.emplace_back(idx, m);
-          }
-          aggs.emplace(gx, std::move(ai));
-          return true;
-        }
-        if (gt == gate_arith) {
-          for (gate_t ch : c.getWires(gx))
-            if (!collect(ch))
-              return false;
-          return true;
-        }
-        if (gt == gate_value)
-          return true;
-        if (gt == gate_semimod) {       // a constant threshold: semimod(1, value)
-          std::string ms;
-          gate_t kg{};
-          if (!semimod_extract_string_and_K(c, gx, ms, kg))
-            return false;
-          return c.getGateType(kg) == gate_one;
-        }
-        return false;
-      };
-
-      if (!collect(Lx) || !collect(Rx))
-        return false;
-      if (aggs.empty())
-        return false;
-      const size_t n = kgates.size();
-      if (n > 24)                      // 2^n enumeration: keep it bounded
-        return false;
-
-      // Numeric value of a subexpression in a given world, tracking whether it
-      // is integer-valued so that division floors as SQL does (NULL -> false).
-      std::function<bool(gate_t, uint64_t, double &, bool &)> eval =
-        [&](gate_t gx, uint64_t world, double &out, bool &is_int) -> bool {
-        gate_type gt = c.getGateType(gx);
-        if (gt == gate_value) {
-          std::string s = c.getExtra(gx);
-          if (!parse_number(s, out)) return false;
-          is_int = text_is_int(s);
-          return true;
-        }
-        if (gt == gate_semimod) {       // constant threshold
-          std::string ms; gate_t kg{};
-          if (!semimod_extract_string_and_K(c, gx, ms, kg)) return false;
-          if (!parse_number(ms, out)) return false;
-          is_int = text_is_int(ms);
-          return true;
-        }
-        if (gt == gate_agg) {
-          const AggInfo &ai = aggs.at(gx);
-          double acc = 0, mn = 0, mx = 0, fst = 0;
-          long cnt = 0;
-          bool first = true;
-          for (const auto &pr : ai.contribs)
-            if (world & (uint64_t(1) << pr.first)) {
-              double m = pr.second;
-              acc += m; ++cnt;
-              if (first) { mn = mx = fst = m; first = false; }
-              else { mn = std::min(mn, m); mx = std::max(mx, m); }
-            }
-          is_int = ai.is_int;
-          // An aggregate with no surviving contributor in this world declines
-          // the world (returning false), which the caller reads as "the
-          // comparison does not hold here".  Two situations produce cnt == 0
-          // and both want that answer: the group has no row present, so the
-          // group's row does not exist; or the group is non-empty but every
-          // contributed value was NULL, so the aggregate is SQL NULL and the
-          // comparison is NULL, hence false.  (A NULL-valued row never reaches
-          // contribs -- the aggregation rewriting drops it -- which is why the
-          // two are indistinguishable here, and why they need not be.)
-          //
-          // COUNT is the exception: an empty set genuinely counts 0, so the
-          // world has a value whenever a row exists to carry it -- which is
-          // the case for a scalar aggregation, and not for a grouped one whose
-          // empty group is no row at all.  The gate records COUNT for both
-          // count(*) and count(expr) (see make_aggregation_expression), so no
-          // guessing from the values is needed here.
-          switch (ai.kind) {
-          case AggregationOperator::SUM:   if (cnt == 0) return false; out = acc; return true;
-          case AggregationOperator::COUNT:                       // values 1 or 0/1
-            if (cnt == 0 && !ai.is_scalar) return false;
-            out = acc; return true;
-          case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
-          case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;
-          case AggregationOperator::MAX:   if (cnt == 0) return false; out = mx; return true;
-          // choose() is PICKFIRST: the value of the first present contributor,
-          // in the order of the gate's wires (see ChooseAgg).
-          case AggregationOperator::CHOOSE: if (cnt == 0) return false; out = fst; return true;
-          default:
-            // collect admits no other kind: one reaching here would read as
-            // "no value" in every world, so it raises instead.
-            throw CircuitException(
-              "having_semantics: aggregate kind not read per world");
-          }
-        }
-        if (gt == gate_arith) {
-          const auto &w = c.getWires(gx);
-          unsigned aop = static_cast<unsigned>(c.getInfos(gx).first);
-          if (aop == PROVSQL_ARITH_PLUS || aop == PROVSQL_ARITH_TIMES) {
-            double r = (aop == PROVSQL_ARITH_PLUS) ? 0 : 1;
-            bool all_int = true;
-            for (gate_t ch : w) {
-              double v; bool vi;
-              if (!eval(ch, world, v, vi)) return false;
-              if (aop == PROVSQL_ARITH_PLUS) r += v; else r *= v;
-              all_int = all_int && vi;
-            }
-            out = r; is_int = all_int; return true;
-          }
-          if (aop == PROVSQL_ARITH_MINUS) {
-            if (w.size() != 2) return false;
-            double a, b; bool ai, bi;
-            if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
-            out = a - b; is_int = ai && bi; return true;
-          }
-          if (aop == PROVSQL_ARITH_DIV || aop == PROVSQL_ARITH_INTDIV) {
-            if (w.size() != 2) return false;
-            double a, b; bool ai, bi;
-            if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
-            if (b == 0) return false;
-            if (aop == PROVSQL_ARITH_INTDIV) {  // SQL division of integers
-              out = std::trunc(a / b);
-              is_int = true;
-            } else {
-              /* A real division, whatever the operands happen to be in this
-               * world.  Which of the two divisions SQL means is the gate's to
-               * say -- the rewriting emits INTDIV exactly where the
-               * expression's type is an integer one -- and deciding it again
-               * from the values truncated a division the query wrote over
-               * numbers: count(*) OVER w / count(*) OVER w0 came out 1 or 0
-               * per world, so a comparison over it answered the probability
-               * that the two counts are equal.  The other five evaluators
-               * (Monte Carlo, RangeCheck, Expectation, the simplifier, the
-               * collapsed moment) all read the op and not the values. */
-              out = a / b;
-              is_int = false;
-            }
-            return true;
-          }
-          if (aop == PROVSQL_ARITH_NEG) {
-            if (w.size() != 1) return false;
-            double a; bool ai;
-            if (!eval(w[0], world, a, ai)) return false;
-            out = -a; is_int = ai; return true;
-          }
-          if (aop == PROVSQL_ARITH_ASFLOAT8 ||
-              aop == PROVSQL_ARITH_ASFLOAT4) {
-            /* The value read in its own type: a double is what this carries,
-             * and a real rounds it to seven digits. */
-            double a;
-            bool ai;
-            if (w.size() != 1 || !eval(w[0], world, a, ai)) return false;
-            out = aop == PROVSQL_ARITH_ASFLOAT8
-                    ? a : static_cast<double>(static_cast<float>(a));
-            is_int = ai;
-            return true;
-          }
-          if (aop == PROVSQL_ARITH_ROUND || aop == PROVSQL_ARITH_FLOOR ||
-              aop == PROVSQL_ARITH_CEIL || aop == PROVSQL_ARITH_ABS) {
-            /* Read in the world, on the value the world gives: rounding and
-             * absolute value of a value, never of an expectation. */
-            double a;
-            bool ai;
-            if (w.empty() || !eval(w[0], world, a, ai)) return false;
-            if (aop == PROVSQL_ARITH_FLOOR) out = std::floor(a);
-            else if (aop == PROVSQL_ARITH_CEIL) out = std::ceil(a);
-            else if (aop == PROVSQL_ARITH_ABS) out = std::fabs(a);
-            else if (w.size() == 1) out = std::round(a);
-            else {
-              double d;
-              bool di;
-              if (!eval(w[1], world, d, di)) return false;
-              const double f = std::pow(10.0, d);
-              out = std::round(a * f) / f;
-            }
-            /* An integer in, an integer out, except a rounding to digits of a
-             * value that was not one. */
-            is_int = ai || aop != PROVSQL_ARITH_ROUND || w.size() == 1;
-            return true;
-          }
-          if (aop == PROVSQL_ARITH_POW || aop == PROVSQL_ARITH_LN ||
-              aop == PROVSQL_ARITH_EXP) {
-            /* The transform of the value this world gives.  Without these
-             * three the switch fell through to "no value in this world", which
-             * the caller reads as "the comparison does not hold here" -- in
-             * every world, so a HAVING over sqrt(sum(x)) (a POW of one half),
-             * over ln or exp, or over an expression holding one, answered
-             * probability 0 whatever the threshold.  The other five evaluators
-             * read them, or decline the shape and leave it to this one.
-             *
-             * Where the transform is undefined ON the value the world gives --
-             * the logarithm of a nonpositive number, a negative base raised to
-             * a fraction -- the world has no value, the reading a divisor of
-             * zero gets (see the DIV arm) rather than the error SQL raises
-             * there: raising in one world would take every other world's
-             * answer with it. */
-            double a;
-            bool ai;
-
-            if (w.empty() || !eval(w[0], world, a, ai)) return false;
-            if (aop == PROVSQL_ARITH_LN) {
-              if (!(a > 0)) return false;
-              out = std::log(a);
-            } else if (aop == PROVSQL_ARITH_EXP) {
-              out = std::exp(a);
-            } else {
-              double e;
-              bool ei;
-
-              if (w.size() != 2 || !eval(w[1], world, e, ei)) return false;
-              out = std::pow(a, e);
-              if (std::isnan(out)) return false;
-            }
-            if (!std::isfinite(out)) return false;
-            is_int = false;
-            return true;
-          }
-          if (aop == PROVSQL_ARITH_MAX || aop == PROVSQL_ARITH_MIN) {
-            if (w.empty()) return false;
-            double r = 0; bool all_int = true, first = true;
-            for (gate_t ch : w) {
-              double v; bool vi;
-              if (!eval(ch, world, v, vi)) return false;
-              if (first) { r = v; first = false; }
-              else r = (aop == PROVSQL_ARITH_MAX) ? std::max(r, v)
-                                                  : std::min(r, v);
-              all_int = all_int && vi;
-            }
-            out = r; is_int = all_int; return true;
-          }
-          if (aop == PROVSQL_ARITH_PERCENTILE) {
-            /* A continuous percentile over the group's rows: the wires are
-             * interleaved [ind_1, x_1, ...] with ind_i the row's 0/1 presence,
-             * and the fraction is the gate's own text.  The values the world
-             * holds are sorted and interpolated at the fraction, as
-             * MonteCarloSampler reads them; a world holding none of them has no
-             * value, like an aggregate with no contributing row.  No comparison
-             * reaches this today -- the gate is built for percentile_cont over
-             * a random variable, whose circuits the sampler reads -- so it is
-             * written to the sampler's reading rather than to a measurement. */
-            std::vector<double> members;
-            double fraction, pos, fp;
-            std::size_t lo;
-
-            if (w.empty() || w.size() % 2 != 0) return false;
-            try {
-              fraction = std::stod(c.getExtra(gx));
-            } catch (const std::exception &) {
-              return false;
-            }
-            for (std::size_t i = 0; i < w.size(); i += 2) {
-              double ind, x;
-              bool ii, xi;
-
-              if (!eval(w[i], world, ind, ii)) return false;
-              if (ind < 0.5) continue;              /* the row is not here */
-              if (!eval(w[i + 1], world, x, xi)) return false;
-              members.push_back(x);
-            }
-            if (members.empty()) return false;
-            std::sort(members.begin(), members.end());
-            pos = fraction * static_cast<double>(members.size() - 1);
-            lo = static_cast<std::size_t>(pos);
-            fp = pos - static_cast<double>(lo);
-            out = (lo + 1 < members.size())
-                    ? members[lo] + fp * (members[lo + 1] - members[lo])
-                    : members[lo];
-            is_int = false;
-            return true;
-          }
-          /* An arithmetic this evaluator does not know.  Falling through to
-           * "this world has no value" is what made a HAVING over sqrt, ln or
-           * exp answer probability 0 in every world, silently and with
-           * confidence, for as long as those three arms were missing: the
-           * caller reads no value as "the comparison does not hold here".  An
-           * unimplemented operator has to be told apart from a world that
-           * genuinely has no value, so it raises, as every other evaluator's
-           * default does (MonteCarloSampler, Expectation).  A new gate_arith
-           * operator therefore fails loudly here until it is read. */
-          throw CircuitException(
-                  "having_semantics: unknown gate_arith operator tag: " +
-                  std::to_string(aop));
-        }
-        return false;
-      };
-
-      std::vector<typename SemiringT::value_type> kval(n);
-      for (size_t i = 0; i < n; ++i)
-        kval[i] = c.evaluate<SemiringT>(kgates[i], mapping, S);
-
-      // The joint enumeration below is over complete worlds already:
-      // certify the disjuncts when the semiring and contributors allow.
-      const bool certify = certifiable_contributors(kval);
-
-      // Whether the world in which no contributor is present is itself a
-      // valid world.  For a grouped aggregation it is not: an empty group is
-      // no row, so there is nothing for the comparison to hold of.  A scalar
-      // aggregation always yields its single row, empty input included, so
-      // that world is real and a predicate true on it (count(*) = 0, and
-      // anything the empty-input values satisfy) must pick it up.  Mixed
-      // shapes follow the grouped reading: whichever side is grouped has no
-      // row there, so the joined row does not exist either.
-      const bool empty_world_valid =
-        !aggs.empty() &&
-        std::all_of(aggs.begin(), aggs.end(),
-                    [](const std::pair<const gate_t, AggInfo> &e) {
-        return e.second.is_scalar;
-      });
-      // No contributor at all: the empty world is the only one, and it is
-      // only a world for scalar aggregations (a window frame that may be
-      // empty while its row exists).
-      if (n == 0 && !empty_world_valid)
-        return false;
-
-      std::vector<typename SemiringT::value_type> disjuncts;
-      const uint64_t total = uint64_t(1) << n;
-      for (uint64_t world = empty_world_valid ? 0 : 1; world < total; ++world) {
-        double lv, rv;
-        bool lint, rint;
-        if (!eval(Lx, world, lv, lint) || !eval(Rx, world, rv, rint))
-          continue;                                       // NULL comparison: false
-        bool holds = false;
-        switch (opx) {
-        case ComparisonOperator::EQ: holds = (lv == rv); break;
-        case ComparisonOperator::NE: holds = (lv != rv); break;
-        case ComparisonOperator::LT: holds = (lv <  rv); break;
-        case ComparisonOperator::LE: holds = (lv <= rv); break;
-        case ComparisonOperator::GT: holds = (lv >  rv); break;
-        case ComparisonOperator::GE: holds = (lv >= rv); break;
-        }
-        if (!holds)
-          continue;
-
-        std::vector<typename SemiringT::value_type> present, missing;
-        for (size_t i = 0; i < n; ++i) {
-          if (world & (uint64_t(1) << i)) {
-            if (certify || kval[i] != S.one()) present.push_back(kval[i]);
-          } else {
-            if (certify || kval[i] != S.zero()) missing.push_back(kval[i]);
-          }
-        }
-        if (certify) {
-          disjuncts.push_back(S.certified_world_term(present, missing));
-          continue;
-        }
-        auto present_prod = S.times(present);
-        if (missing.empty())
-          disjuncts.push_back(std::move(present_prod));
-        else {
-          auto monus_factor = S.monus(S.one(), S.plus(missing));
-          disjuncts.push_back(
-            present_prod == S.one()
-              ? monus_factor
-              : S.times(std::vector<typename SemiringT::value_type>{
-                  present_prod, monus_factor}));
-        }
-      }
-
-      pw_out = disjuncts.empty() ? S.zero()
-               : certify ? S.certified_exclusive_plus(disjuncts)
-               : S.plus(disjuncts);
-      return true;
+      return build_joint(std::vector<JointAtom>{JointAtom{Lx, Rx, opx}},
+                         [](const std::vector<bool> &t) { return t[0]; },
+                         pw_out);
     };
 
     // ---- Two array_agg() aggregates compared with each other (a join on
@@ -1247,6 +1279,261 @@ void provsql_having(
     return build_general(L, R, op);
   };
 
+  // Several conditions over one group -- HAVING count(*) >= 3 AND
+  // sum(price) <= 4 -- have as provenance one sum over the worlds of the
+  // group, of the worlds where the whole predicate holds.  The circuit holds
+  // the product (or sum) of the conditions, which is that only in a semiring
+  // exclusive with an idempotent product (product_is_joint): elsewhere a
+  // product or a sum whose children include conditions over the same
+  // contributors has them resolved together, in one enumeration, and replaced
+  // by a gate carrying the result.  Visited from the root down, so that a
+  // combination nested in another over the same group is resolved with it.
+  // A Boolean combination of conditions over one family: its tree, with
+  // the conditions numbered in the order of @c atoms.
+  struct FNode {
+    int kind;                   // 0 condition, 1 and, 2 or
+    size_t atom;
+    std::vector<FNode> kids;
+  };
+  // A conjunction of comparisons of one count(*) with constants is a range
+  // C <= count <= D, whose provenance is S_C ⊖ S_{D+1}, S_j the sum over
+  // the worlds of exactly j occurrences of the products of their
+  // annotations (Lean G_eq_S_monus_S): in a semiring absorptive with ⊗
+  // distributing over ⊖, in O(n·D) rather than an enumeration of 2^n
+  // worlds, and past the enumeration's bound on n.
+  auto count_range = [&](const std::vector<JointAtom> &atoms,
+                         const FNode &root,
+                         typename SemiringT::value_type &out) -> bool {
+    if (!S.absorptive() || !S.mul_sub_left_distributive())
+      return false;
+    std::function<bool(const FNode &)> all_and = [&](const FNode &n) {
+      if (n.kind == 0) return true;
+      if (n.kind != 1) return false;
+      for (const FNode &k : n.kids)
+        if (!all_and(k)) return false;
+      return true;
+    };
+    if (!all_and(root))
+      return false;
+    long lo = 0, hi = -1;           // hi < 0: no upper bound
+    bool scalar = false;
+    std::vector<gate_t> ks;
+    for (size_t ai = 0; ai < atoms.size(); ++ai) {
+      gate_t agg = atoms[ai].L, cst = atoms[ai].R;
+      ComparisonOperator op = atoms[ai].op;
+      if (c.getGateType(agg) != gate_agg) {
+        std::swap(agg, cst);
+        op = flip_op(op);
+      }
+      if (c.getGateType(agg) != gate_agg ||
+          getAggregationOperator(c.getInfos(agg).first) !=
+            AggregationOperator::COUNT)
+        return false;
+      std::string cs;
+      if (!extract_constant_string(c, cst, cs))
+        return false;
+      long v;
+      try {
+        std::size_t pos = 0;
+        v = std::stol(cs, &pos);
+        if (pos != cs.size()) return false;
+      } catch (...) {
+        return false;
+      }
+      scalar = (c.getInfos(agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+      std::vector<gate_t> these;
+      for (gate_t ch : c.getWires(agg)) {
+        std::string ms;
+        gate_t kg{};
+        if (c.getGateType(ch) != gate_semimod ||
+            !semimod_extract_string_and_K(c, ch, ms, kg) || ms != "1")
+          return false;             // count(*): every occurrence counts one
+        these.push_back(kg);
+      }
+      if (ai == 0)
+        ks = these;
+      else if (these != ks)
+        return false;
+      switch (op) {
+      case ComparisonOperator::GE: lo = std::max(lo, v); break;
+      case ComparisonOperator::GT: lo = std::max(lo, v + 1); break;
+      case ComparisonOperator::LE: hi = hi < 0 ? v : std::min(hi, v); break;
+      case ComparisonOperator::LT: hi = hi < 0 ? v - 1 : std::min(hi, v - 1); break;
+      case ComparisonOperator::EQ:
+        lo = std::max(lo, v);
+        hi = hi < 0 ? v : std::min(hi, v);
+        break;
+      default:
+        return false;
+      }
+    }
+    if (!scalar && lo < 1)
+      lo = 1;                       // an empty group is no row
+    const long n = static_cast<long>(ks.size());
+    if ((hi >= 0 && hi < lo) || lo > n) {
+      out = S.zero();
+      return true;
+    }
+    const long top = (hi >= 0 && hi + 1 <= n) ? hi + 1 : lo;
+    std::vector<typename SemiringT::value_type> Sj(top + 1, S.zero());
+    Sj[0] = S.one();
+    for (long i = 0; i < n; ++i) {
+      auto a = c.evaluate<SemiringT>(ks[i], mapping, S);
+      for (long j = std::min(top, i + 1); j >= 1; --j)
+        Sj[j] = S.plus(std::vector<typename SemiringT::value_type>{
+          Sj[j], S.times(std::vector<typename SemiringT::value_type>{
+                   Sj[j - 1], a})});
+    }
+    out = (hi >= 0 && hi + 1 <= n) ? S.monus(Sj[lo], Sj[hi + 1]) : Sj[lo];
+    return true;
+  };
+
+  if (!S.product_is_joint()) {
+    std::set<gate_t> cmpset(cmp_gates.begin(), cmp_gates.end());
+
+    // The contributors a condition reads: the row tokens under its aggregates.
+    std::function<void(gate_t, std::set<gate_t> &)> family_walk =
+      [&](gate_t x, std::set<gate_t> &fam) {
+        gate_type t = c.getGateType(x);
+        if (t == gate_agg) {
+          for (gate_t ch : c.getWires(x)) {
+            std::string ms;
+            gate_t kg{};
+            if (c.getGateType(ch) == gate_semimod &&
+                semimod_extract_string_and_K(c, ch, ms, kg))
+              fam.insert(kg);
+          }
+        } else if (t == gate_arith || t == gate_cmp)
+          for (gate_t ch : c.getWires(x))
+            family_walk(ch, fam);
+      };
+
+    std::function<bool(gate_t, std::set<gate_t> &, bool &, FNode &,
+                       std::vector<JointAtom> &)> as_combination =
+      [&](gate_t x, std::set<gate_t> &fam, bool &fam_set, FNode &out,
+          std::vector<JointAtom> &atoms) -> bool {
+        if (cmpset.count(x)) {
+          const auto &w = c.getWires(x);
+          bool okop = false;
+          ComparisonOperator op = map_cmp_op(c, x, okop);
+          std::set<gate_t> f;
+          if (w.size() != 2 || !okop)
+            return false;
+          family_walk(x, f);
+          if (f.empty())
+            return false;
+          if (!fam_set) {
+            fam = f;
+            fam_set = true;
+          } else if (fam != f)
+            return false;
+          out.kind = 0;
+          out.atom = atoms.size();
+          atoms.push_back(JointAtom{w[0], w[1], op});
+          return true;
+        }
+        gate_type t = c.getGateType(x);
+        if (t != gate_times && t != gate_plus)
+          return false;
+        out.kind = t == gate_times ? 1 : 2;
+        for (gate_t ch : c.getWires(x)) {
+          FNode k;
+          if (!as_combination(ch, fam, fam_set, k, atoms))
+            return false;
+          out.kids.push_back(std::move(k));
+        }
+        return !out.kids.empty();
+      };
+    std::function<bool(const FNode &, const std::vector<bool> &)> holds =
+      [&](const FNode &n, const std::vector<bool> &t) -> bool {
+        if (n.kind == 0)
+          return t[n.atom];
+        for (const FNode &k : n.kids) {
+          bool v = holds(k, t);
+          if (n.kind == 1 && !v) return false;
+          if (n.kind == 2 && v) return true;
+        }
+        return n.kind == 1;
+      };
+
+    std::set<gate_t> seen;
+    std::vector<gate_t> todo{g};
+    /* Once per statement, as each row's token is evaluated on its own. */
+    static TimestampTz warned_at = 0;
+    bool warned = warned_at == GetCurrentStatementStartTimestamp();
+    while (!todo.empty()) {
+      gate_t p = todo.back();
+      todo.pop_back();
+      if (!seen.insert(p).second)
+        continue;
+      gate_type pt = c.getGateType(p);
+      if (pt == gate_times || pt == gate_plus) {
+        // The children that are combinations of conditions, by family.
+        std::map<std::set<gate_t>, std::vector<std::pair<gate_t, FNode>>> groups;
+        for (gate_t ch : c.getWires(p)) {
+          std::set<gate_t> fam;
+          bool fam_set = false;
+          FNode n;
+          std::vector<JointAtom> scratch;
+          if (as_combination(ch, fam, fam_set, n, scratch))
+            groups[fam].emplace_back(ch, FNode());
+        }
+        for (auto &grp : groups) {
+          if (grp.second.size() < 2)
+            continue;
+          std::vector<JointAtom> atoms;
+          FNode root;
+          root.kind = pt == gate_times ? 1 : 2;
+          std::set<gate_t> fam;
+          bool fam_set = false, ok = true;
+          for (auto &m : grp.second) {
+            FNode k;
+            if (!as_combination(m.first, fam, fam_set, k, atoms)) {
+              ok = false;
+              break;
+            }
+            root.kids.push_back(std::move(k));
+          }
+          typename SemiringT::value_type joint;
+          if (!ok ||
+              (!count_range(atoms, root, joint) &&
+               !build_joint(atoms,
+                           [&](const std::vector<bool> &t) {
+                             return holds(root, t);
+                           },
+                           joint))) {
+            if (!warned) {
+              warned = true;
+              warned_at = GetCurrentStatementStartTimestamp();
+              provsql_warning(
+                "conditions on aggregates of one group are combined as the "
+                "product of their provenances, which is not the provenance "
+                "of their combination in this semiring: these aggregates are "
+                "not resolved jointly");
+            }
+            continue;
+          }
+          /* The group's conditions give way to one gate holding their joint
+           * provenance. */
+          gate_t n = c.addGate();
+          mapping[n] = std::move(joint);
+          std::vector<gate_t> wires;
+          std::set<gate_t> replaced;
+          for (auto &m : grp.second)
+            replaced.insert(m.first);
+          for (gate_t ch : c.getWires(p))
+            if (!replaced.count(ch))
+              wires.push_back(ch);
+          wires.push_back(n);
+          c.getWires(p) = wires;
+        }
+      }
+      for (gate_t ch : c.getWires(p))
+        if (!cmpset.count(ch))
+          todo.push_back(ch);
+    }
+  }
+
   // Each comparison gate is resolved on its own: its possible-world
   // enumeration reads the circuit and writes only its own mapping entry, so
   // one gate the enumeration cannot handle -- an agg-vs-agg shape past the
@@ -1256,8 +1543,38 @@ void provsql_having(
   // renders them (Formula) or raises, and a gate this loop could have
   // resolved should not be demoted to that just because of its position in
   // collect_sp_cmp_gates' traversal.
+  // What the joint resolution replaced is no longer read.
+  std::set<gate_t> reachable;
+  {
+    std::vector<gate_t> st{g};
+    while (!st.empty()) {
+      gate_t x = st.back();
+      st.pop_back();
+      if (!reachable.insert(x).second)
+        continue;
+      for (gate_t ch : c.getWires(x))
+        st.push_back(ch);
+    }
+  }
   for (gate_t cmp_gate : cmp_gates) {
     typename SemiringT::value_type pw;
+    if (!reachable.count(cmp_gate))
+      continue;
+    /* A single count(*) against a constant is the range of one bound. */
+    if (!S.product_is_joint()) {
+      const auto &w = c.getWires(cmp_gate);
+      bool okop = false;
+      ComparisonOperator op = map_cmp_op(c, cmp_gate, okop);
+      FNode one;
+      one.kind = 0;
+      one.atom = 0;
+      if (w.size() == 2 && okop &&
+          count_range(std::vector<JointAtom>{JointAtom{w[0], w[1], op}}, one,
+                      pw)) {
+        mapping[cmp_gate] = std::move(pw);
+        continue;
+      }
+    }
     if (!pw_from_cmp_gate(cmp_gate, pw))
       continue;
 
