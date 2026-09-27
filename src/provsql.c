@@ -29575,10 +29575,234 @@ static Query *rewrite_rank_over_aggregate(const constants_t *constants,
   return q;
 }
 
-static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root, bool top_level,
-                            bool in_boolean_rewrite,
-                            const InvFreeMarkerCtx *inv_ctx) {
+/* -------------------------------------------------------------------------
+ * Rewrite checking (debugging aids)
+ *
+ * The rewriting is a chain of passes over PostgreSQL's Query tree, which
+ * addresses columns by position: a pass that moves a query one level down, or
+ * adds a column in the middle of a target list, must adjust every reference
+ * to them, and nothing in PostgreSQL checks that it did before the planner
+ * trips on the result, far from the pass that broke it.
+ *
+ * provsql.verify_rewrite checks, after every pass, that each Var names an
+ * existing column of the stated type, that target entries are numbered by
+ * position, that aggregates and subquery expressions are declared by the
+ * query holding them and that permission indices are in range: the first
+ * violation is an error naming the pass.  provsql.trace_rewrite reports each
+ * pass that changed the query, with the level of process_query it ran at.
+ * ------------------------------------------------------------------------- */
+
+static bool provsql_verify_rewrite = false; ///< @c provsql.verify_rewrite GUC
+static bool provsql_trace_rewrite = false;  ///< @c provsql.trace_rewrite GUC
+
+/** @brief Depth of the current @c process_query call, 1 for the statement. */
+static int rewrite_level = 0;
+/** @brief Hash of the query at the last checkpoint of each level. */
+static uint32 rewrite_hash[64];
+/** @brief The pass whose result the next @c process_query call rewrites. */
+static const char *rewrite_restart_pass = NULL;
+
+/** @brief Context for @c rewrite_verify_walker. */
+typedef struct rewrite_verify_ctx {
+  List *levels;       ///< Enclosing queries, innermost first
+  char *problem;      ///< First violation found, or NULL
+} rewrite_verify_ctx;
+
+/** @brief The type of column @p attno of range-table entry @p rte, or
+ *  @c InvalidOid where it has none. */
+static Oid rewrite_column_type(RangeTblEntry *rte, AttrNumber attno) {
+  ListCell *lc;
+  switch (rte->rtekind) {
+    case RTE_RELATION:
+      return get_atttype(rte->relid, attno);
+    case RTE_SUBQUERY:
+      if (rte->subquery == NULL)
+        return InvalidOid;
+      foreach (lc, rte->subquery->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc);
+        if (te->resno == attno)
+          return exprType((Node *)te->expr);
+      }
+      return InvalidOid;
+    case RTE_JOIN:
+      if (attno > list_length(rte->joinaliasvars))
+        return InvalidOid;
+      {
+        Node *a = (Node *)list_nth(rte->joinaliasvars, attno - 1);
+        return a == NULL ? UNKNOWNOID : exprType(a); /* NULL: a dropped column */
+      }
+    default:
+      /* Functions, VALUES, CTEs, ...: the column count is what is known */
+      return attno <= list_length(rte->eref->colnames) ? UNKNOWNOID
+                                                        : InvalidOid;
+  }
+}
+
+/** @brief Record the first violation met. */
+static void rewrite_problem(rewrite_verify_ctx *ctx, char *msg) {
+  if (ctx->problem == NULL)
+    ctx->problem = msg;
+}
+
+/** @brief Walker for @c rewrite_verify. */
+static bool rewrite_verify_walker(Node *node, void *cx) {
+  rewrite_verify_ctx *ctx = (rewrite_verify_ctx *)cx;
+  if (node == NULL || ctx->problem != NULL)
+    return false;
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    Query *owner;
+    RangeTblEntry *rte;
+    Oid t;
+    if (v->varlevelsup >= (Index)list_length(ctx->levels))
+      return false;             /* a level above the query checked */
+    owner = (Query *)list_nth(ctx->levels, v->varlevelsup);
+    if (v->varno < 1 || v->varno > list_length(owner->rtable)) {
+      rewrite_problem(ctx, psprintf("Var %d.%d (%d levels up) names no "
+                                    "range-table entry", v->varno,
+                                    v->varattno, v->varlevelsup));
+      return false;
+    }
+    if (v->varattno <= 0)
+      return false;             /* whole row, or a system column */
+    rte = rt_fetch(v->varno, owner->rtable);
+#if PG_VERSION_NUM >= 180000
+    if (rte->rtekind == RTE_GROUP) {
+      if (v->varattno > list_length(rte->groupexprs))
+        rewrite_problem(ctx, psprintf("Var %d.%d names no grouping expression",
+                                      v->varno, v->varattno));
+      return false;
+    }
+#endif
+    t = rewrite_column_type(rte, v->varattno);
+    if (!OidIsValid(t))
+      rewrite_problem(ctx, psprintf("Var %d.%d (%d levels up) names no "
+                                    "column of \"%s\"", v->varno, v->varattno,
+                                    v->varlevelsup, rte->eref->aliasname));
+    else if (t != UNKNOWNOID && t != v->vartype)
+      rewrite_problem(ctx, psprintf("Var %d.%d (%d levels up) has type %s, "
+                                    "column %d of \"%s\" has type %s",
+                                    v->varno, v->varattno, v->varlevelsup,
+                                    format_type_be(v->vartype), v->varattno,
+                                    rte->eref->aliasname, format_type_be(t)));
+    return false;
+  }
+
+  if (IsA(node, Aggref)) {
+    Aggref *a = (Aggref *)node;
+    if (a->agglevelsup < (Index)list_length(ctx->levels) &&
+        !((Query *)list_nth(ctx->levels, a->agglevelsup))->hasAggs)
+      rewrite_problem(ctx, pstrdup("an aggregate in a query whose hasAggs is "
+                                   "false"));
+  }
+
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    AttrNumber pos = 0;
+    bool r;
+
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resno != ++pos) {
+        rewrite_problem(ctx, psprintf("target entry %d has resno %d", pos,
+                                      te->resno));
+        return false;
+      }
+    }
+    if (!q->hasSubLinks && query_has_own_sublinks(q)) {
+      rewrite_problem(ctx, pstrdup("a subquery expression in a query whose "
+                                   "hasSubLinks is false"));
+      return false;
+    }
+#if PG_VERSION_NUM >= 160000
+    foreach (lc, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      if (rte->perminfoindex > (Index)list_length(q->rteperminfos)) {
+        rewrite_problem(ctx, psprintf("range-table entry \"%s\" has "
+                                      "permission index %u of %d",
+                                      rte->eref->aliasname, rte->perminfoindex,
+                                      list_length(q->rteperminfos)));
+        return false;
+      }
+    }
+#endif
+    ctx->levels = lcons(q, ctx->levels);
+    r = query_tree_walker(q, rewrite_verify_walker, cx, 0);
+    ctx->levels = list_delete_first(ctx->levels);
+    return r;
+  }
+  return expression_tree_walker(node, rewrite_verify_walker, cx);
+}
+
+/** @brief The first violation of the Query-tree invariants in @p q, or NULL. */
+static char *rewrite_verify(Query *q) {
+  rewrite_verify_ctx ctx;
+  ctx.levels = NIL;
+  ctx.problem = NULL;
+  rewrite_verify_walker((Node *)q, &ctx);
+  return ctx.problem;
+}
+
+/** @brief A hash of @p q, to tell whether a pass changed it. */
+static uint32 rewrite_query_hash(Query *q) {
+  char *s = nodeToString(q);
+  uint32 h = 2166136261u;       /* FNV-1a */
+  const char *c;
+  for (c = s; *c; ++c)
+    h = (h ^ (unsigned char)*c) * 16777619u;
+  pfree(s);
+  return h;
+}
+
+/**
+ * @brief Check @p q after the pass @p pass, as the debugging settings ask.
+ *
+ * @param q      The query as the pass left it.
+ * @param pass   The name of the pass.
+ * @param fresh  Whether @p q is new at this level (the start of a
+ *               @c process_query call), so that no change is reported.
+ */
+static void rewrite_checkpoint(Query *q, const char *pass, bool fresh) {
+  int lvl = rewrite_level < 64 ? rewrite_level : 63;
+  if (!provsql_verify_rewrite && !provsql_trace_rewrite)
+    return;
+  if (provsql_trace_rewrite && q != NULL) {
+    uint32 h = rewrite_query_hash(q);
+    if (fresh)
+      provsql_notice("rewrite level %d: %s", rewrite_level, pass);
+    else if (h != rewrite_hash[lvl])
+      provsql_notice("rewrite level %d: pass %s changed the query",
+                     rewrite_level, pass);
+    rewrite_hash[lvl] = h;
+  }
+  if (provsql_verify_rewrite && q != NULL) {
+    char *problem = rewrite_verify(q);
+    if (problem != NULL)
+      provsql_error("rewrite check failed at level %d after %s: %s",
+                    rewrite_level, pass, problem);
+  }
+}
+
+/** @brief Note that @p pass rewrote the query into one @c process_query
+ *  starts over on. */
+static void rewrite_restart(const char *pass) {
+  rewrite_restart_pass = pass;
+}
+
+/** @brief Checkpoint after the pass @p name in @c process_query_impl. */
+#define REWRITE_STEP(name) rewrite_checkpoint(q, (name), false)
+
+static Query *process_query_impl(const constants_t *constants, Query *q,
+                                 bool **removed, bool wrap_root,
+                                 bool top_level, bool in_boolean_rewrite,
+                                 const InvFreeMarkerCtx *inv_ctx);
+
+static Query *process_query_impl(const constants_t *constants, Query *q,
+                                 bool **removed, bool wrap_root,
+                                 bool top_level, bool in_boolean_rewrite,
+                                 const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -29603,6 +29827,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active) {
     strip_provsql_join_columns((Node *)q, (void *)constants);
     normalize_inner_joins(q);
+    REWRITE_STEP("normalize_inner_joins");
     query_tree_walker(q, normalize_inner_joins_walker, NULL, 0);
   }
 
@@ -29614,6 +29839,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * otherwise couple it into the outer lineage. */
   if (provsql_active)
     process_inert_fetches(constants, q);
+  REWRITE_STEP("process_inert_fetches");
 
   /* Natural Boolean-predicate conditioning: rewrite "X | (predicate)" into
    * the carrier's conditioning constructor over the converted condition gate
@@ -29625,6 +29851,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * consumed here, not lifted as a WHERE qual). */
   if (provsql_active)
     rewrite_cond_predicates(constants, q);
+  REWRITE_STEP("rewrite_cond_predicates");
 
   /* Comparison-event surface: lift RV comparisons appearing in the SELECT
    * target list -- a projected "x > y" and the probability(<predicate>)
@@ -29633,6 +29860,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * HAVING quals stay with migrate_probabilistic_quals). */
   if (provsql_active)
     rewrite_probability_events(constants, q);
+  REWRITE_STEP("rewrite_probability_events");
 
   /* Normalise a bare boolean aggregate used as a HAVING condition (HAVING
    * bool_or(x), HAVING NOT(every(x))) to "agg = true", while the aggregate is
@@ -29771,7 +29999,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       !q->hasDistinctOn && !q->hasAggs) {
     Query *outer = distinct_over_windows(constants, q);
     if (outer)
-      return process_query(constants, outer, removed, wrap_root, top_level,
+      return rewrite_restart("distinct_over_windows"), process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   if (provsql_active && q->groupingSets != NIL &&
@@ -29779,30 +30007,32 @@ static Query *process_query(const constants_t *constants, Query *q,
         ((GroupingSet *)linitial(q->groupingSets))->kind ==
           GROUPING_SET_EMPTY) &&
       has_provenance(constants, q))
-    return process_query(constants, rewrite_grouping_sets(q), removed,
+    return rewrite_restart("rewrite_grouping_sets"), process_query(constants, rewrite_grouping_sets(q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   /* An untracked block with a tracked subquery condition gets its certain
    * provenance column before the passes below ask whether it is tracked. */
   if (provsql_active && q->hasSubLinks)
     wrap_untracked_from_for_sublink(constants, q);
+  REWRITE_STEP("wrap_untracked_from_for_sublink");
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_aggregation_over_sublinks(constants, q) != NULL)
-    return process_query(constants, q, removed, wrap_root, top_level,
+    return rewrite_restart("split_aggregation_over_sublinks"), process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_targetlist_sublinks(constants, q) != NULL)
-    return process_query(constants, q, removed, wrap_root, top_level,
+    return rewrite_restart("split_targetlist_sublinks"), process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q))
     split_setop_sublinks(constants, q);
+  REWRITE_STEP("split_setop_sublinks");
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_predicate_sublinks(constants, q) != NULL)
-    return process_query(constants, q, removed, wrap_root, top_level,
+    return rewrite_restart("split_predicate_sublinks"), process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
   if (provsql_active && q->hasDistinctOn && has_provenance(constants, q)) {
     Query *lowered = lower_distinct_on_to_rank(constants, q);
     if (lowered)
-      return process_query(constants, lowered, removed, wrap_root, top_level,
+      return rewrite_restart("lower_distinct_on_to_rank"), process_query(constants, lowered, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   if (provsql_active && q->setOperations != NULL &&
@@ -29842,21 +30072,23 @@ static Query *process_query(const constants_t *constants, Query *q,
      * would no longer find (see rewrite_explode_agg_values). */
     if (cols != NIL &&
         explode_setop_arms(q, constants, q->setOperations, cols))
-      return process_query(constants, q, removed, wrap_root, top_level,
+      return rewrite_restart("explode_setop_arms"), process_query(constants, q, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
-    return process_query(constants, rewrite_intersect(constants, q), removed,
+    return rewrite_restart("rewrite_intersect"), process_query(constants, rewrite_intersect(constants, q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   }
   if (provsql_active) {
     drop_trivial_limit(q);
+    REWRITE_STEP("drop_trivial_limit");
     simple_cases_to_searched(q);
+    REWRITE_STEP("simple_cases_to_searched");
   }
   if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
       q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
       q->setOperations == NULL && q->distinctClause == NIL) {
     Query *outer = scalar_agg_over_uncorrelated_sublinks(constants, q);
     if (outer)
-      return process_query(constants, outer, removed, wrap_root, top_level,
+      return rewrite_restart("scalar_agg_over_uncorrelated_sublinks"), process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   /* A DISTINCT over the aggregates of this level: the aggregation moves to a
@@ -29866,17 +30098,18 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && has_provenance(constants, q)) {
     Query *split = split_having_sublinks(constants, q);
     if (split)
-      return process_query(constants, split, removed, wrap_root, top_level,
+      return rewrite_restart("split_having_sublinks"), process_query(constants, split, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   if (provsql_active && has_provenance(constants, q)) {
     Query *split = split_distinct_over_aggregates(constants, q);
     if (split)
-      return process_query(constants, split, removed, wrap_root, top_level,
+      return rewrite_restart("split_distinct_over_aggregates"), process_query(constants, split, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   if (provsql_active)
     normalize_distinct_into_group_by(q);
+  REWRITE_STEP("normalize_distinct_into_group_by");
 
   /* Inline non-recursive CTE references as subqueries so we can track
    * provenance through them. Must happen before set operation handling
@@ -29887,11 +30120,13 @@ static Query *process_query(const constants_t *constants, Query *q,
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(constants, q);
+  REWRITE_STEP("inline_ctes");
 
   /* Whole-row values of tracked relations read as any row leave provsql
    * out, before the rewritings below meet them. */
   if (provsql_active)
     hide_provsql_in_wholerows(constants, q, top_level);
+  REWRITE_STEP("hide_provsql_in_wholerows");
 
   /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
    * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN
@@ -29899,18 +30134,29 @@ static Query *process_query(const constants_t *constants, Query *q,
    * "Subqueries not supported" guard further down. */
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
+    REWRITE_STEP("rewrite_array_sublinks");
     normalize_quantified_aggregate_sublinks(constants, q);
+    REWRITE_STEP("normalize_quantified_aggregate_sublinks");
     query_tree_walker(q, drop_semijoin_distinct_walker, NULL,
                       QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
     rewrite_uncorrelated_antijoin(constants, q);
+    REWRITE_STEP("rewrite_uncorrelated_antijoin");
     wrap_untracked_from_for_sublink(constants, q);
+    REWRITE_STEP("wrap_untracked_from_for_sublink");
     rewrite_nested_antijoin(constants, q);
+    REWRITE_STEP("rewrite_nested_antijoin");
     rewrite_uncorrelated_membership(constants, q);
+    REWRITE_STEP("rewrite_uncorrelated_membership");
     rewrite_predicate_sublinks(constants, q);
+    REWRITE_STEP("rewrite_predicate_sublinks");
     move_uncorrelated_where_predicates(constants, q);
+    REWRITE_STEP("move_uncorrelated_where_predicates");
     move_uncorrelated_sublinks_to_from(constants, q);
+    REWRITE_STEP("move_uncorrelated_sublinks_to_from");
     rewrite_target_list_exists(constants, q);
+    REWRITE_STEP("rewrite_target_list_exists");
     decorrelate_scalar_sublinks(constants, q);
+    REWRITE_STEP("decorrelate_scalar_sublinks");
   }
 
   /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two tracked arms
@@ -29921,7 +30167,9 @@ static Query *process_query(const constants_t *constants, Query *q,
    * passes. */
   if (provsql_active) {
     normalize_outer_join_tree(constants, q);
+    REWRITE_STEP("normalize_outer_join_tree");
     lower_outer_joins(constants, q);
+    REWRITE_STEP("lower_outer_joins");
   }
 
   /* A window over the aggregates of this level: the aggregation moves to a
@@ -29929,7 +30177,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && has_provenance(constants, q)) {
     Query *cume = rewrite_cume_dist(constants, q);
     if (cume)
-      return process_query(constants, cume, removed, wrap_root, top_level,
+      return rewrite_restart("rewrite_cume_dist"), process_query(constants, cume, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
 
@@ -29937,7 +30185,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && has_provenance(constants, q)) {
     Query *split = split_window_over_aggregates(constants, q);
     if (split)
-      return process_query(constants, split, removed, wrap_root, top_level,
+      return rewrite_restart("split_window_over_aggregates"), process_query(constants, split, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
 
@@ -29946,7 +30194,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && has_provenance(constants, q)) {
     Query *ranked = rewrite_rank_over_aggregate(constants, q);
     if (ranked)
-      return process_query(constants, ranked, removed, wrap_root, top_level,
+      return rewrite_restart("rewrite_rank_over_aggregate"), process_query(constants, ranked, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
 
@@ -29958,7 +30206,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && limit_truncates(q) && has_provenance(constants, q)) {
     Query *limited = lower_limit_to_rank(constants, q);
     if (limited)
-      return process_query(constants, limited, removed, wrap_root, top_level,
+      return rewrite_restart("lower_limit_to_rank"), process_query(constants, limited, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
 
@@ -30040,7 +30288,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root, top_level,
+        return rewrite_restart("rewrite_agg_distinct"), process_query(constants, rewritten, removed, wrap_root, top_level,
                              in_boolean_rewrite, inv_ctx);
     }
 
@@ -30050,7 +30298,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     {
       Query *rewritten = push_agg_nulltest_into_subquery(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root,
+        return rewrite_restart("push_agg_nulltest_into_subquery"), process_query(constants, rewritten, removed, wrap_root,
                              top_level, in_boolean_rewrite, inv_ctx);
     }
 
@@ -30066,7 +30314,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       {
         Query *rewritten = rewrite_join_agg_token(q, constants, rteid, join_attno);
         if (rewritten)
-          return process_query(constants, rewritten, removed, wrap_root,
+          return rewrite_restart("rewrite_join_agg_token"), process_query(constants, rewritten, removed, wrap_root,
                                top_level, in_boolean_rewrite, inv_ctx);
       }
     }
@@ -30083,7 +30331,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         Query *rewritten =
           rewrite_explode_agg_values(q, constants, rteid, cols);
         if (rewritten)
-          return process_query(constants, rewritten, removed, wrap_root,
+          return rewrite_restart("rewrite_explode_agg_values"), process_query(constants, rewritten, removed, wrap_root,
                                top_level, in_boolean_rewrite, inv_ctx);
       }
     }
@@ -30105,7 +30353,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (rewritten == NULL)
         rewritten = rewrite_explode_scalar_agg_cmp_truth(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root,
+        return rewrite_restart("rewrite_explode_scalar_agg_cmp_truth"), process_query(constants, rewritten, removed, wrap_root,
                              top_level, in_boolean_rewrite, inv_ctx);
     }
 
@@ -30133,7 +30381,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         /* The whole rewritten subtree is a boolean safe-query rewrite: flag it
          * so the joint-width recogniser defers to it everywhere below (the
          * signal would otherwise be lost at the subquery boundary). */
-        return process_query(constants, rewritten, removed, true, top_level,
+        return rewrite_restart("try_safe_query_rewrite"), process_query(constants, rewritten, removed, true, top_level,
                              true, inv_ctx);
 
     }
@@ -30177,6 +30425,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      * semantics α ⊖ ⊕β.  Must run before get_provenance_attributes processes
      * the arms. */
     group_set_difference_right_arm(constants, q);
+    REWRITE_STEP("group_set_difference_right_arm");
 
     /* Every rewrite that can absorb an outer join has run; what survives
      * with a tracked null-padded side would be silently mis-tracked as an
@@ -30260,6 +30509,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      * operations, sublink decorrelation) and is a no-op otherwise. */
     if (supported && q->distinctClause)
       normalize_distinct_into_group_by(q);
+    REWRITE_STEP("normalize_distinct_into_group_by");
 
     if (supported && q->setOperations) {
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
@@ -30401,6 +30651,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */
       insert_agg_token_casts(constants, q);
+      REWRITE_STEP("insert_agg_token_casts");
 
       /* The provenance of one row, which a provenance() read per input row
        * of an aggregating query means (replace_provenance_function_by_expression);
@@ -30470,6 +30721,27 @@ static Query *process_query(const constants_t *constants, Query *q,
     elog_node_display(NOTICE, "ProvSQL: After query rewriting", q, true);
 
   return q;
+}
+
+/**
+ * @brief Rewrite @p q (see @c process_query_impl), at one more level of
+ *        @c process_query, with the checkpoints of the debugging settings.
+ */
+static Query *process_query(const constants_t *constants, Query *q,
+                            bool **removed, bool wrap_root, bool top_level,
+                            bool in_boolean_rewrite,
+                            const InvFreeMarkerCtx *inv_ctx) {
+  Query *r;
+  const char *via = rewrite_restart_pass;
+  rewrite_restart_pass = NULL;
+  ++rewrite_level;
+  rewrite_checkpoint(q, via != NULL ? psprintf("start, after %s", via)
+                                    : "start", true);
+  r = process_query_impl(constants, q, removed, wrap_root, top_level,
+                         in_boolean_rewrite, inv_ctx);
+  rewrite_checkpoint(r, "end", false);
+  --rewrite_level;
+  return r;
 }
 
 /* -------------------------------------------------------------------------
@@ -32506,6 +32778,31 @@ void _PG_init(void) {
                            "display value is recovered via "
                            "provsql.agg_token_value_text(uuid).",
                            &provsql_aggtoken_text_as_uuid,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.verify_rewrite",
+                           "Check the query tree after every pass of the "
+                           "rewriting (debugging aid).",
+                           "An error names the first pass after which a "
+                           "column reference, a target entry, an aggregate "
+                           "or a permission index is inconsistent.",
+                           &provsql_verify_rewrite,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.trace_rewrite",
+                           "Report each pass of the rewriting that changed "
+                           "the query (debugging aid).",
+                           "A notice per pass, with the level of the "
+                           "rewriting it ran at.",
+                           &provsql_trace_rewrite,
                            false,
                            PGC_USERSET,
                            0,

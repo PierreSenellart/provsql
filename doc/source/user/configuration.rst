@@ -149,6 +149,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
       after rewriting, and the cost-calibration notices of the
       probability method chooser.
 
+``provsql.verify_rewrite`` (default: ``off``)
+    A debugging aid for developers: checks the query tree after every
+    step of the rewriting, and raises an error naming the step after which
+    a column reference, the numbering of the result columns, an aggregate
+    or a permission index became inconsistent.
+
+``provsql.trace_rewrite`` (default: ``off``)
+    A debugging aid for developers: a ``NOTICE`` for each step of the
+    rewriting that changed the query, with the nesting level it ran at.
+
 ``provsql.aggtoken_text_as_uuid`` (default: ``off``)
     Controls how an ``agg_token`` cell renders as text. By default it
     renders as ``"value (*)"``, where *value* is the aggregate value.
