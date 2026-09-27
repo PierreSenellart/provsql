@@ -570,15 +570,25 @@ PG_FUNCTION_INFO_V1(row_number_as_rank);
  * says so, once per statement.
  *
  * @param rank        The @c agg_token of the rank of the row.
- * @param row_number  The row number PostgreSQL gave the row.
+ * @param row_number  The row number of the row among those of the database as
+ *                    it is, or NULL for a row absent from it.
  * @return @p rank.
  */
 Datum
 row_number_as_rank(PG_FUNCTION_ARGS)
 {
   static TimestampTz warned = 0;
-  agg_token *rank = (agg_token *) PG_GETARG_POINTER(0);
-  int64 row_number = PG_GETARG_INT64(1);
+  agg_token *rank;
+  int64 row_number;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  rank = (agg_token *) PG_GETARG_POINTER(0);
+  /* No row number: a row absent from the database as it is, which SQL does
+   * not number (see make_rank_expression). */
+  if (PG_ARGISNULL(1))
+    PG_RETURN_POINTER(rank);
+  row_number = PG_GETARG_INT64(1);
 
   if (!agg_token_val_is_null(rank) &&
       strtoll(rank->val, NULL, 10) != row_number &&

@@ -7953,11 +7953,12 @@ CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUI
  * from it.
  *
  * @param rank the agg_token of the rank of the row
- * @param row_number the row number PostgreSQL gave the row
+ * @param row_number the row number of the row among those of the database
+ *        as it is, or NULL for a row absent from it (no check then)
  */
 CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
   RETURNS agg_token
-  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE PARALLEL SAFE;
 
 /**
  * @brief The bucket of a row read over its rank, for @c ntile() (internal)

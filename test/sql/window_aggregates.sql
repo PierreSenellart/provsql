@@ -329,3 +329,24 @@ DROP TABLE wa_plainmark;
 DROP FUNCTION wa_report(text, text, text);
 DROP FUNCTION wa_check(text, text);
 DROP TABLE wa, wa_plain;
+
+-- A window aggregate over an outer join: the null-padded row is kept for the
+-- world where the right row is absent, and the value shown counts only the
+-- rows of the database as it is, as plain SQL does (1, not 2).  The row
+-- number is checked against the rank over those same rows: no warning.
+CREATE TABLE wa_l(id int, g int);
+CREATE TABLE wa_r(id int);
+INSERT INTO wa_l VALUES (1, 7);
+INSERT INTO wa_r VALUES (1);
+SELECT add_provenance('wa_l');
+SELECT add_provenance('wa_r');
+CREATE TABLE wa_lr AS
+  SELECT wa_l.id, wa_r.id AS rid, count(wa_l.id) OVER (PARTITION BY wa_l.g) AS c,
+         row_number() OVER (ORDER BY wa_l.id) AS rn
+  FROM wa_l LEFT JOIN wa_r ON wa_l.id = wa_r.id;
+SELECT remove_provenance('wa_lr');
+SELECT id, rid, c::text AS c, rn::text AS rn FROM wa_lr ORDER BY rid NULLS LAST;
+DROP TABLE wa_lr;
+SELECT remove_provenance('wa_l');
+SELECT remove_provenance('wa_r');
+DROP TABLE wa_l, wa_r;

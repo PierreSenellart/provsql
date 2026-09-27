@@ -2267,7 +2267,7 @@ DROP FUNCTION IF EXISTS set_extra(uuid, text);
 
 CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
   RETURNS agg_token
-  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE PARALLEL SAFE;
 
 -- ntile() is read over the rank too, with its own warning where SQL splits
 -- the peers.

@@ -11531,6 +11531,24 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
   filter = (Expr *)copyObject(wf->aggfilter);
   is_scalar = !window_frame_has_current_row(wc);
 
+  /* The value shown is the one plain SQL computes, over the rows that hold in
+   * the database as it is, not over those kept only for their provenance (the
+   * padded rows of an outer join, which hold in other worlds): as for the
+   * aggregates of a GROUP BY (make_aggregation_expression). */
+  {
+    Expr *plain_token = plain_row_token(constants, q, prov_atts, SR_TIMES);
+    if (plain_token != NULL) {
+      FuncExpr *truth = makeFuncExpr(constants->OID_FUNCTION_PLAIN_TRUTH,
+                                     BOOLOID, list_make1(plain_token),
+                                     InvalidOid, InvalidOid,
+                                     COERCE_EXPLICIT_CALL);
+      wf = (WindowFunc *)copyObject(wf);
+      wf->aggfilter = wf->aggfilter == NULL
+        ? (Expr *)truth
+        : makeBoolExpr(AND_EXPR, list_make2(wf->aggfilter, truth), -1);
+    }
+  }
+
   semimod = make_row_semimod(
     constants, wf->winfnoid,
     wf->winfnoid == F_COUNT_ ? NULL : (Expr *)copyObject(linitial(wf->args)),
@@ -11623,6 +11641,70 @@ typedef struct window_aggregation_context {
   List *prov_atts;              ///< List of provenance Var nodes
   bool untracked;               ///< A window function was left untracked
 } window_aggregation_context;
+
+/**
+ * @brief The number SQL gives the row with @c row_number() @p wf, among the
+ *        rows of the database as it is, for the check of the rank it is
+ *        tracked as.
+ *
+ * The rank's value counts the rows before a row that hold in the database as
+ * it is (make_window_aggregation_expression), not those kept only for their
+ * provenance; the row number compared with it must count the same rows, or it
+ * reports ties there are none of.  Where some row may be such a kept one, it
+ * is @c count(*) @c FILTER @c (WHERE @c plain_truth(k)) over the rows up to
+ * the current one, and NULL for a kept row, which SQL does not number.
+ * Otherwise @p wf itself.
+ */
+static Expr *actual_row_number(window_aggregation_context *c,
+                               WindowFunc *wf) {
+  Expr *token = plain_row_token(c->constants, c->q, c->prov_atts, SR_TIMES);
+  WindowClause *wc = window_clause_of(c->q, wf->winref), *frame;
+  WindowFunc *count;
+  FuncExpr *truth;
+  CaseExpr *ce;
+  CaseWhen *cw;
+  Index winref = 0;
+  ListCell *lc;
+
+  if (token == NULL || wc == NULL)
+    return (Expr *)wf;
+  foreach (lc, c->q->windowClause)
+    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+  frame = (WindowClause *)copyObject(wc);
+  frame->name = NULL;
+  frame->refname = NULL;
+  frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_ROWS |
+                        FRAMEOPTION_BETWEEN |
+                        FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+                        FRAMEOPTION_END_CURRENT_ROW;
+  frame->startOffset = NULL;
+  frame->endOffset = NULL;
+  frame->winref = winref + 1;
+  c->q->windowClause = lappend(c->q->windowClause, frame);
+
+  truth = makeFuncExpr(c->constants->OID_FUNCTION_PLAIN_TRUTH, BOOLOID,
+                       list_make1(token), InvalidOid, InvalidOid,
+                       COERCE_EXPLICIT_CALL);
+  count = makeNode(WindowFunc);
+  count->winfnoid = F_COUNT_;
+  count->wintype = INT8OID;
+  count->winref = frame->winref;
+  count->winstar = true;
+  count->winagg = true;
+  count->aggfilter = (Expr *)copyObject(truth);
+  count->location = -1;
+
+  cw = makeNode(CaseWhen);
+  cw->expr = (Expr *)truth;
+  cw->result = (Expr *)count;
+  cw->location = -1;
+  ce = makeNode(CaseExpr);
+  ce->casetype = INT8OID;
+  ce->args = list_make1(cw);
+  ce->defresult = (Expr *)makeNullConst(INT8OID, -1, InvalidOid);
+  ce->location = -1;
+  return (Expr *)ce;
+}
 
 /**
  * @brief The provenance expression of the rank of a row in the window of
@@ -11774,7 +11856,7 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
         FuncExpr *check = makeNode(FuncExpr);
         check->funcid = c->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK;
         check->funcresulttype = c->constants->OID_TYPE_AGG_TOKEN;
-        check->args = list_make2(e, wf);
+        check->args = list_make2(e, actual_row_number(c, wf));
         check->location = -1;
         e = (Expr *)check;
       }
