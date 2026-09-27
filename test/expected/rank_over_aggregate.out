@@ -131,3 +131,22 @@ rank DESC|3|0.281250
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

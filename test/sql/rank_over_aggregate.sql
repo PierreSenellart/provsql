@@ -213,3 +213,29 @@ SELECT remove_provenance('ro_n');
 DROP TABLE ro_n;
 
 DROP TABLE ro;
+
+-- A row_number() over groups is the rank it is tracked as when its order tells
+-- the groups apart: by every grouping column, or by a key of the relation they
+-- come from, which determines the rest (u.id for u.name).  No warning then; a
+-- non-key column, or a grouping column of another relation, keeps it.
+CREATE TABLE ro_ku(id int PRIMARY KEY, name text);
+CREATE TABLE ro_kp(owner int, tag text);
+INSERT INTO ro_ku VALUES (1, 'a'), (2, 'b');
+INSERT INTO ro_kp VALUES (1, 'x'), (1, 'y'), (2, 'x');
+SELECT add_provenance('ro_ku');
+SELECT add_provenance('ro_kp');
+CREATE TABLE ro_kr AS
+  SELECT name, row_number() OVER (ORDER BY n DESC, id) AS rn
+  FROM (SELECT u.id, u.name, count(*) AS n
+        FROM ro_ku u JOIN ro_kp p ON p.owner = u.id GROUP BY u.id, u.name) s;
+SELECT remove_provenance('ro_kr');
+DROP TABLE ro_kr;
+CREATE TABLE ro_kr AS
+  SELECT id, row_number() OVER (ORDER BY n DESC, id) AS rn
+  FROM (SELECT u.id, p.tag, count(*) AS n
+        FROM ro_ku u JOIN ro_kp p ON p.owner = u.id GROUP BY u.id, p.tag) s;
+SELECT remove_provenance('ro_kr');
+DROP TABLE ro_kr;
+SELECT remove_provenance('ro_ku');
+SELECT remove_provenance('ro_kp');
+DROP TABLE ro_ku, ro_kp;

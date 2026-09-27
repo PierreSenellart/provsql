@@ -29867,6 +29867,101 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
 }
 
 /**
+ * @brief Whether the order of the rank window @p wc tells the groups of the
+ *        ranked aggregation apart through declared keys.
+ *
+ * Two groups differ on a grouping column.  The grouping columns taken from one
+ * relation of the aggregation are all told apart by the order where it holds
+ * them, or where it holds every column of a key of that relation (a PRIMARY
+ * KEY, or a UNIQUE over NOT NULL columns), which then determines the rest of
+ * the row: @c "ORDER BY count(*) DESC, u.id" over groups of @c "GROUP BY u.id,
+ * u.name".  A key holds in every world, a world being a part of the instance.
+ * Only grouping columns that are columns of relations are read; any other
+ * grouping expression leaves the question to @c rank_order_is_total.
+ */
+static bool rank_order_total_by_keys(rank_window_ctx *ctx,
+                                     WindowClause *wc) {
+  RangeTblEntry *rte = rt_fetch(ctx->rtindex, ctx->q->rtable);
+  Query *sq = rte->subquery;
+  List *covered = NIL, *rels = NIL;
+  ListCell *lc;
+
+  if (sq == NULL || sq->groupClause == NIL || sq->groupingSets != NIL)
+    return false;
+  /* The ordering keys, read as columns of the relations below. */
+  foreach (lc, wc->orderClause) {
+    TargetEntry *te = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
+                                              ctx->q->targetList);
+    TargetEntry *ste;
+    Var *v;
+    if (te == NULL || !IsA(te->expr, Var) ||
+        ((Var *)te->expr)->varno != (int)ctx->rtindex ||
+        ((Var *)te->expr)->varlevelsup != 0)
+      continue;
+    ste = get_tle_by_resno(sq->targetList, ((Var *)te->expr)->varattno);
+    v = group_key_var(sq, ste);   /* through PG 18's RTE_GROUP */
+    if (v != NULL)
+      covered = lappend(covered, v);
+  }
+  /* The relations the grouping columns come from. */
+  foreach (lc, sq->groupClause) {
+    Var *v = group_key_var(sq,
+      get_sortgroupclause_tle((SortGroupClause *)lfirst(lc), sq->targetList));
+    if (v == NULL || rt_fetch(v->varno, sq->rtable)->rtekind != RTE_RELATION)
+      return false;
+    rels = list_append_unique_int(rels, v->varno);
+  }
+  foreach (lc, rels) {
+    int varno = lfirst_int(lc);
+    RangeTblEntry *r = rt_fetch(varno, sq->rtable);
+    ProvenanceRelationKeys keys;
+    ListCell *gc;
+    bool all_grouping = true;
+    bool by_key = false;
+    int k;
+
+    /* Every grouping column of this relation in the order... */
+    foreach (gc, sq->groupClause) {
+      Var *g = group_key_var(sq, get_sortgroupclause_tle(
+                                   (SortGroupClause *)lfirst(gc),
+                                   sq->targetList));
+      ListCell *cc;
+      bool found = false;
+      if (g->varno != varno)
+        continue;
+      foreach (cc, covered)
+        if (((Var *)lfirst(cc))->varno == varno &&
+            ((Var *)lfirst(cc))->varattno == g->varattno)
+          found = true;
+      if (!found)
+        all_grouping = false;
+    }
+    if (all_grouping)
+      continue;
+    /* ... or every column of one of its keys. */
+    if (provsql_lookup_relation_keys(r->relid, &keys))
+      for (k = 0; k < keys.key_n && !by_key; ++k) {
+        int i;
+        bool all = true;
+        for (i = 0; i < keys.keys[k].col_n; ++i) {
+          ListCell *cc;
+          bool found = false;
+          foreach (cc, covered)
+            if (((Var *)lfirst(cc))->varno == varno &&
+                ((Var *)lfirst(cc))->varattno == keys.keys[k].cols[i])
+              found = true;
+          if (!found)
+            all = false;
+        }
+        by_key = all;
+      }
+    if (!by_key)
+      return false;
+  }
+  return rels != NIL;
+}
+
+/**
  * @brief Whether the order of the rank window @p wf tells every two rows of
  *        the relation ranked apart, so that no two of them tie.
  *
@@ -29877,12 +29972,17 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
  * about -- which is the common case once a top-k breaks the ties of its count
  * on a date or an id.
  */
+static bool rank_order_total_by_keys(rank_window_ctx *ctx,
+                                     WindowClause *wc);
+
 static bool rank_order_is_total(rank_window_ctx *ctx, WindowFunc *wf) {
   WindowClause *wc = window_clause_of(ctx->q, wf->winref);
   ListCell *lc;
 
   if (wc == NULL)
     return false;
+  if (rank_order_total_by_keys(ctx, wc))
+    return true;
   foreach (lc, ctx->identity) {
     Var *id = (Var *)lfirst(lc);
     ListCell *lc_k;
