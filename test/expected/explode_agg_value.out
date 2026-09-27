@@ -337,3 +337,26 @@ p|t|provsql
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+m|p
+5|0.625000
+7|0.500000
+|0.625000
+(3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.750000
+2|0.750000
+3|0.500000
+102|0.500000
+(4 rows)
+remove_provenance
+
+(1 row)

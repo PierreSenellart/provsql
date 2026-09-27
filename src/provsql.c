@@ -24412,7 +24412,17 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
                               src_rte->subquery->setOperations, cols)
              ? q : NULL;
 
-  base_resno = list_length(src_rte->subquery->targetList);
+  /* The companion counts are numbered after the visible columns, before the
+   * hidden ones (a GROUP BY key the query does not select), and inserted there
+   * below: the provsql column the rewriting adds later goes after the visible
+   * columns too, and would otherwise move a count placed after a hidden one. */
+  base_resno = 0;
+  {
+    ListCell *tlc;
+    foreach (tlc, src_rte->subquery->targetList)
+      if (!((TargetEntry *)lfirst(tlc))->resjunk)
+        ++base_resno;
+  }
   next_varno = 2;               /* 1 is the source; the unnests follow */
 
   /* --- Per column: its aggregate, its equality, its NULL gate --- */
@@ -24702,10 +24712,21 @@ static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
     cnt_name = psprintf("%s%d", PROVSQL_AGG_COUNT_COLNAME, (int)c->cnt_resno);
     cnt_te = makeTargetEntry((Expr *)c->nullable_count, c->cnt_resno,
                              cnt_name, false);
-    sub->targetList = lappend(sub->targetList, cnt_te);
+    /* At its resno, the hidden entries after it moving up by one. */
+    {
+      ListCell *tlc;
+      foreach (tlc, sub->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(tlc);
+        if (te->resno >= c->cnt_resno)
+          ++te->resno;
+      }
+    }
+    sub->targetList = list_insert_nth(sub->targetList, c->cnt_resno - 1,
+                                      cnt_te);
     sub->hasAggs = true;
     inner_src->eref->colnames =
-      lappend(inner_src->eref->colnames, makeString(cnt_name));
+      list_insert_nth(inner_src->eref->colnames, c->cnt_resno - 1,
+                      makeString(cnt_name));
   }
   /* The subquery is one level deeper now: what it reads of the levels above
    * (a correlated body, the row a rank compares with) is read one further

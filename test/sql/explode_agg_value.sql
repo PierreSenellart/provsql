@@ -518,3 +518,34 @@ SELECT round(power(a, 2), 4) AS p, trunc(a, 1) AS t
   FROM (SELECT sum(v)::numeric AS a FROM eavs) z;
 SELECT remove_provenance('eavs');
 DROP TABLE eavs;
+
+-- An aggregate grouped by a key the query does not select, the key then a
+-- hidden column of the subquery: the count the NULL value's row reads goes
+-- before it, where the provsql column added after the visible ones does not
+-- move it (difftest's SEDE 8508f5e44f and 7185dc4ab5: "attribute 3 of type
+-- record has wrong type").  Rows at one half; the probabilities are those of
+-- the enumeration of the 32 worlds.
+CREATE TABLE eahk(id int, k int, x int);
+INSERT INTO eahk VALUES (1, 1, 5), (2, 1, NULL), (3, 2, 7), (4, 2, 5),
+                        (5, 3, NULL);
+SELECT add_provenance('eahk');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eahk; END $$;
+-- 5: 0.625, 7: 0.5, NULL: 0.625.
+CREATE TABLE eahk_r AS
+  SELECT m, round(probability_evaluate(provenance())::numeric, 6) AS p
+    FROM (SELECT max(x) AS m FROM eahk GROUP BY k) q GROUP BY m;
+SELECT remove_provenance('eahk_r');
+SELECT m, p FROM eahk_r ORDER BY m;
+DROP TABLE eahk_r;
+-- The same in an arm of a UNION that selects an expression of the key:
+-- 1: 0.75, 2: 0.75, 3: 0.5, 102: 0.5.
+CREATE TABLE eahk_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+    FROM (SELECT k, sum(x) AS s FROM eahk GROUP BY k
+          UNION
+          SELECT k + 100 AS k, sum(x) AS s FROM eahk WHERE x > 5 GROUP BY k) u;
+SELECT remove_provenance('eahk_r');
+SELECT k, sum(p) AS p FROM eahk_r GROUP BY k ORDER BY k;
+DROP TABLE eahk_r;
+SELECT remove_provenance('eahk');
+DROP TABLE eahk;
