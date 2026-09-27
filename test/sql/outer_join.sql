@@ -425,20 +425,55 @@ DROP TABLE ojl_res;
 
 DROP TABLE ojl_l, ojl_r, ojl_o;
 
--- A chain of outer joins is lowered one join at a time, each copying the
--- joins before it into its arms: the query grows exponentially with their
--- number.  Twelve, as a generated query writes them (difftest's BEAVER), used
--- to exhaust the server's memory; the rewriting is now refused once it
--- outgrows a bound, as a gap.
+-- A chain of outer joins is lowered one join at a time, each reading the
+-- joins before it three times: from a CTE, rewritten once, as the joins
+-- before a copy would otherwise be lowered again in each copy, and the query
+-- grow as three to the power of their number.  Twelve, as a generated query
+-- writes them (difftest's BEAVER), exhausted the server's memory.
 CREATE TABLE oj_chain(id int, p int);
 INSERT INTO oj_chain VALUES (1, 1), (2, 1);
 SELECT add_provenance('oj_chain');
-SELECT t0.id FROM oj_chain t0
-  LEFT JOIN oj_chain t1 ON t1.p = t0.id LEFT JOIN oj_chain t2 ON t2.p = t0.id
-  LEFT JOIN oj_chain t3 ON t3.p = t0.id LEFT JOIN oj_chain t4 ON t4.p = t0.id
-  LEFT JOIN oj_chain t5 ON t5.p = t0.id LEFT JOIN oj_chain t6 ON t6.p = t0.id
-  LEFT JOIN oj_chain t7 ON t7.p = t0.id LEFT JOIN oj_chain t8 ON t8.p = t0.id
-  LEFT JOIN oj_chain t9 ON t9.p = t0.id LEFT JOIN oj_chain t10 ON t10.p = t0.id
-  LEFT JOIN oj_chain t11 ON t11.p = t0.id LEFT JOIN oj_chain t12 ON t12.p = t0.id;
+CREATE TABLE oj_chain_r AS SELECT t0.id FROM oj_chain t0
+  LEFT JOIN oj_chain t1 ON t1.p = t0.id + 9 LEFT JOIN oj_chain t2 ON t2.p = t0.id + 9
+  LEFT JOIN oj_chain t3 ON t3.p = t0.id + 9 LEFT JOIN oj_chain t4 ON t4.p = t0.id + 9
+  LEFT JOIN oj_chain t5 ON t5.p = t0.id + 9 LEFT JOIN oj_chain t6 ON t6.p = t0.id + 9
+  LEFT JOIN oj_chain t7 ON t7.p = t0.id + 9 LEFT JOIN oj_chain t8 ON t8.p = t0.id + 9
+  LEFT JOIN oj_chain t9 ON t9.p = t0.id + 9 LEFT JOIN oj_chain t10 ON t10.p = t0.id + 9
+  LEFT JOIN oj_chain t11 ON t11.p = t0.id + 9 LEFT JOIN oj_chain t12 ON t12.p = t0.id + 9;
+SELECT remove_provenance('oj_chain_r');
+SELECT id FROM oj_chain_r ORDER BY id;
+DROP TABLE oj_chain_r;
 SELECT remove_provenance('oj_chain');
 DROP TABLE oj_chain;
+
+-- The probabilities through a chain, and through outer joins nested on the
+-- right, whose right input is shared the same way.  Rows at one half: the
+-- probabilities are those of the enumeration of the 32 worlds.
+CREATE TABLE oj_c(id int, k int, x int);
+INSERT INTO oj_c VALUES (1, 0, 5), (2, 0, 6), (3, 1, 7), (4, 1, 8), (5, 2, NULL);
+SELECT add_provenance('oj_c');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM oj_c; END $$;
+-- 1-3-3-N: 1/4; 1-4-3-N, 1-4-N-N, 1-N-N-N, and each of the four rows of 2:
+-- 1/8; 1-3-N-N and 1-N-3-N hold in no world.
+CREATE TABLE oj_c_r AS
+  SELECT r.id::text || '-' || coalesce(s.id::text, 'N') || '-' ||
+         coalesce(t.id::text, 'N') || '-' || coalesce(u.id::text, 'N') AS o,
+         probability_evaluate(provenance()) AS p
+  FROM oj_c r LEFT JOIN oj_c s ON s.k = r.id LEFT JOIN oj_c t ON t.x = r.x + 2
+       LEFT JOIN oj_c u ON u.k = s.id
+  WHERE r.k = 0;
+SELECT remove_provenance('oj_c_r');
+SELECT o, round(sum(p)::numeric, 6) AS p FROM oj_c_r GROUP BY o ORDER BY o;
+DROP TABLE oj_c_r;
+-- 1-3-N, 1-4-N, 2-5-N, 2-N-N: 1/4; 1-N-N: 1/8.
+CREATE TABLE oj_c_r AS
+  SELECT r.id::text || '-' || coalesce(s.id::text, 'N') || '-' ||
+         coalesce(t.id::text, 'N') AS o,
+         probability_evaluate(provenance()) AS p
+  FROM oj_c r LEFT JOIN (oj_c s LEFT JOIN oj_c t ON t.k = s.id) ON s.k = r.id
+  WHERE r.k = 0;
+SELECT remove_provenance('oj_c_r');
+SELECT o, round(sum(p)::numeric, 6) AS p FROM oj_c_r GROUP BY o ORDER BY o;
+DROP TABLE oj_c_r;
+SELECT remove_provenance('oj_c');
+DROP TABLE oj_c;

@@ -3236,6 +3236,70 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
 }
 #endif
 
+/* -------------------------------------------------------------------------
+ * Shared inputs of outer joins
+ *
+ * The lowering of an outer join (lower_outer_joins) reads its left input three
+ * times, in the matched arm and on both sides of the difference of the padded
+ * arm, and its right input twice.  Where an input is itself a query holding
+ * outer joins -- the joins before this one, in a chain -- it goes in a CTE of
+ * the lowered query, which the arms read: rewritten once, planned once.
+ * Copied, it made the query grow as three to the power of the length of the
+ * chain.
+ * ------------------------------------------------------------------------- */
+
+static int outer_join_depth_query(Query *q);
+
+/** @brief Name prefix of the CTEs holding a shared input. */
+#define PROVSQL_SHARED_CTE_PREFIX "provsql_shared_"
+
+/** @brief Whether @p name names a CTE holding a shared input. */
+static bool is_shared_cte_name(const char *name) {
+  return name != NULL &&
+         strncmp(name, PROVSQL_SHARED_CTE_PREFIX,
+                 strlen(PROVSQL_SHARED_CTE_PREFIX)) == 0;
+}
+
+/** @brief A rewritten shared CTE: where its provenance column is. */
+typedef struct shared_cte_entry {
+  char *name;             ///< The CTE's name
+  AttrNumber provsql;     ///< Its provsql column, 0 before it is rewritten
+  Query *body;            ///< Its rewritten body, NULL before
+} shared_cte_entry;
+
+/** @brief The shared CTEs of the statement being rewritten. */
+static List *shared_ctes = NIL;
+/** @brief Numbering of the shared CTEs, for their names. */
+static int shared_cte_counter = 0;
+
+/** @brief The provsql column of the shared CTE @p name, or 0. */
+static AttrNumber shared_cte_provsql(const char *name) {
+  ListCell *lc;
+  foreach (lc, shared_ctes) {
+    shared_cte_entry *e = (shared_cte_entry *)lfirst(lc);
+    if (strcmp(e->name, name) == 0)
+      return e->provsql;
+  }
+  return 0;
+}
+
+/** @brief The rewritten body of the shared CTE @p name, or NULL. */
+static Query *shared_cte_body(const char *name) {
+  ListCell *lc;
+  foreach (lc, shared_ctes) {
+    shared_cte_entry *e = (shared_cte_entry *)lfirst(lc);
+    if (strcmp(e->name, name) == 0)
+      return e->body;
+  }
+  return NULL;
+}
+
+/** @brief Whether @p r reads a shared CTE, which carries provenance. */
+static bool rte_is_shared_cte(RangeTblEntry *r) {
+  return r->rtekind == RTE_CTE && !r->self_reference &&
+         is_shared_cte_name(r->ctename);
+}
+
 /**
  * @brief Inline CTE references in @p q as subqueries where the rewrite
  *        needs them, preserving CTEs whose bodies need no rewriting.
@@ -3339,7 +3403,8 @@ static void inline_ctes(const constants_t *constants, Query *q) {
     int i = 0;
     foreach (lc, q->cteList) {
       CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
-      must_inline[i++] = !cte_is_data_modifying(cte) && (cte->cterecursive ||
+      must_inline[i++] = !is_shared_cte_name(cte->ctename) &&
+        !cte_is_data_modifying(cte) && (cte->cterecursive ||
         has_provenance(constants, (Query *)cte->ctequery));
     }
     do {
@@ -3685,6 +3750,20 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       // Introduced in PostgreSQL 18, we already handle group by from
       // groupClause
 #endif
+    } else if (rte_is_shared_cte(r)) {
+      /* The shared input of an outer join, rewritten once where its
+       * WITH is (rewrite_shared_ctes): its provsql column is recorded. */
+      AttrNumber a = shared_cte_provsql(r->ctename);
+      if (a == 0)
+        provsql_error("shared CTE \"%s\" read before it is rewritten",
+                      r->ctename);
+      prov_atts = lappend(prov_atts,
+                          makeVar(rteid, a, constants->OID_TYPE_UUID, -1,
+                                  InvalidOid, 0));
+      /* An aggregate of the body is an agg_token now, as for a FROM
+       * subquery. */
+      fix_type_of_aggregation_result(constants, q, rteid,
+                                     shared_cte_body(r->ctename)->targetList);
     } else if (r->rtekind == RTE_CTE) {
       // A CTE left intact by inline_ctes: an untracked body (pure-RV
       // recursion, or a non-recursive body needing no rewriting, e.g. a
@@ -13178,6 +13257,8 @@ static bool has_provenance_walker(Node *node, void *data) {
 
           attid += func->funccolcount;
         }
+      } else if (rte_is_shared_cte(r)) {
+        return true;
       } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
         /* A FROM-source subquery contributes its provenance to ours;
          * process_query recurses on it explicitly, so we must detect
@@ -15260,6 +15341,10 @@ static bool oj_rte_has_provsql(const constants_t *constants,
   ListCell *lc;
   AttrNumber attid = 0;
 
+  if (rte_is_shared_cte(rel))
+    return true;
+  if (rel->rtekind != RTE_RELATION && rel->rtekind != RTE_SUBQUERY)
+    return false;
   if (rel->rtekind == RTE_SUBQUERY) {
     if (rel->subquery == NULL)
       return false;
@@ -15320,9 +15405,41 @@ static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
  *  A base relation carries its permission info (PG 16+), and so does a view
  *  expanded into a subquery, which keeps it so that reading through the view
  *  is checked; another subquery has none (its inner query keeps its own). */
+/** @brief The inputs the outer join being lowered reads from CTEs, and the
+ *  CTEs' names (see oj_build_union), or NULL. */
+static RangeTblEntry *oj_shared_left = NULL, *oj_shared_right = NULL;
+static char *oj_shared_left_name = NULL, *oj_shared_right_name = NULL;
+
 static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
                                   RangeTblEntry *orig, int depth) {
-  RangeTblEntry *c = copyObject(orig);
+  RangeTblEntry *c;
+  const char *oj_shared_name =
+    orig == oj_shared_left ? oj_shared_left_name
+    : orig == oj_shared_right ? oj_shared_right_name : NULL;
+  if (orig != NULL && oj_shared_name != NULL) {
+    /* A read of the CTE, which is on the lowered query, one level below
+     * the outer one. */
+    ListCell *lc;
+    c = makeNode(RangeTblEntry);
+    c->rtekind = RTE_CTE;
+    c->ctename = pstrdup(oj_shared_name);
+    c->ctelevelsup = depth - 1;
+    c->self_reference = false;
+    c->alias = copyObject(orig->alias);
+    c->eref = copyObject(orig->eref);
+    c->inFromCl = true;
+    foreach (lc, orig->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      c->coltypes = lappend_oid(c->coltypes, exprType((Node *)te->expr));
+      c->coltypmods = lappend_int(c->coltypmods, exprTypmod((Node *)te->expr));
+      c->colcollations =
+        lappend_oid(c->colcollations, exprCollation((Node *)te->expr));
+    }
+    (void)outer;
+    (void)sub;
+    return c;
+  }
+  c = copyObject(orig);
   /* @p sub is @p depth levels below @p outer: what the arm reads from outside
    * itself (a CTE kept as a CTE, an outer query) is that much further up. */
   if (c->rtekind == RTE_SUBQUERY && c->subquery != NULL)
@@ -15673,6 +15790,65 @@ static void oj_build_coltype_lists(oj_cols *Rc, oj_cols *Sc, List **types,
  *  @p jointype selects which null-padded antijoin branches are added:
  *  @c JOIN_LEFT adds the left (R-kept) branch, @c JOIN_RIGHT the right
  *  (S-kept) branch, @c JOIN_FULL both. */
+/**
+ * @brief A CTE holding the input @p R of an outer join, for the arms of its
+ *        lowering to read, or NULL where @p R is copied as ever.
+ *
+ * Only an input that is a query holding outer joins itself, which each copy
+ * would lower again: any other is cheap to copy, and the passes that read an
+ * aggregation or a rank through the subquery's structure see it as ever.  The
+ * CTE is registered in @c shared_ctes, to be rewritten once
+ * (@c rewrite_shared_ctes).
+ */
+static CommonTableExpr *oj_make_shared_cte(RangeTblEntry *R) {
+  CommonTableExpr *cte;
+  shared_cte_entry *e;
+  ListCell *lc;
+
+  if (R->rtekind != RTE_SUBQUERY || R->subquery == NULL || R->lateral ||
+#if PG_VERSION_NUM >= 160000
+      R->perminfoindex != 0 ||
+#endif
+      is_inert_subselect(R->subquery) ||
+      outer_join_depth_query(R->subquery) == 0)
+    return NULL;
+  foreach (lc, R->subquery->targetList)
+    if (((TargetEntry *)lfirst(lc))->resjunk)
+      return NULL;
+
+  cte = makeNode(CommonTableExpr);
+  cte->ctename = psprintf("%s%d", PROVSQL_SHARED_CTE_PREFIX,
+                          ++shared_cte_counter);
+  /* Moved, not copied: R is left orphaned by the lowering (see
+   * oj_neutralize_orphan_arm), and a copy of each input of a chain would
+   * make the rewriting quadratic in its length. */
+  cte->ctequery = (Node *)R->subquery;
+  /* One level further down: below the lowered query, itself below the
+   * query the join was in. */
+  IncrementVarSublevelsUp(cte->ctequery, 1, 1);
+#if PG_VERSION_NUM >= 120000
+  cte->ctematerialized = CTEMaterializeAlways;
+#endif
+  cte->location = -1;
+  foreach (lc, R->subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    cte->ctecolnames = lappend(cte->ctecolnames,
+      makeString(pstrdup(te->resname ? te->resname : "?column?")));
+    cte->ctecoltypes = lappend_oid(cte->ctecoltypes,
+                                   exprType((Node *)te->expr));
+    cte->ctecoltypmods = lappend_int(cte->ctecoltypmods,
+                                     exprTypmod((Node *)te->expr));
+    cte->ctecolcollations = lappend_oid(cte->ctecolcollations,
+                                        exprCollation((Node *)te->expr));
+  }
+  e = palloc(sizeof(shared_cte_entry));
+  e->name = cte->ctename;
+  e->provsql = 0;
+  e->body = NULL;
+  shared_ctes = lappend(shared_ctes, e);
+  return cte;
+}
+
 static Query *oj_build_union(const constants_t *constants, Query *outer,
                              RangeTblEntry *R, RangeTblEntry *S, Index R_idx,
                              Index S_idx, oj_cols *Rc, oj_cols *Sc, Node *theta,
@@ -15686,6 +15862,17 @@ static Query *oj_build_union(const constants_t *constants, Query *outer,
   ListCell *lc;
   int i, pos = 0, k;
 
+  CommonTableExpr *shared_left = oj_make_shared_cte(R);
+  CommonTableExpr *shared_right = oj_make_shared_cte(S);
+
+  /* An input that is a query holding outer joins is read by the arms from a
+   * CTE of Q rather than copied into each: see "Shared inputs of outer
+   * joins". */
+  oj_shared_left = shared_left ? R : NULL;
+  oj_shared_left_name = shared_left ? shared_left->ctename : NULL;
+  oj_shared_right = shared_right ? S : NULL;
+  oj_shared_right_name = shared_right ? shared_right->ctename : NULL;
+
   /* Matched arm (R ⋈ S), then the requested antijoin branches. */
   /* Q is in place of the join, one level below the outer query; its arms
    * two levels below. */
@@ -15698,8 +15885,15 @@ static Query *oj_build_union(const constants_t *constants, Query *outer,
     arms = lappend(arms, oj_build_antijoin(constants, outer, R, S, R_idx,
                                            S_idx, Rc, Sc, theta, false));
 
+  oj_shared_left = oj_shared_right = NULL;
+  oj_shared_left_name = oj_shared_right_name = NULL;
+
   Q->commandType = CMD_SELECT;
   Q->canSetTag = true;
+  if (shared_left != NULL)
+    Q->cteList = lappend(Q->cteList, shared_left);
+  if (shared_right != NULL)
+    Q->cteList = lappend(Q->cteList, shared_right);
   foreach (lc, arms)
     Q->rtable = lappend(Q->rtable, oj_make_subquery_rte((Query *)lfirst(lc)));
 
@@ -29919,6 +30113,30 @@ static bool rewrite_verify_walker(Node *node, void *cx) {
                                    "hasSubLinks is false"));
       return false;
     }
+    foreach (lc, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      Query *owner = NULL;
+      ListCell *cc;
+      bool found = false;
+      if (rte->rtekind != RTE_CTE || rte->self_reference)
+        continue;
+      if (rte->ctelevelsup == 0)
+        owner = q;
+      else if (rte->ctelevelsup - 1 < (Index)list_length(ctx->levels))
+        owner = (Query *)list_nth(ctx->levels, rte->ctelevelsup - 1);
+      else
+        continue;               /* a level above the query checked */
+      foreach (cc, owner->cteList)
+        if (strcmp(((CommonTableExpr *)lfirst(cc))->ctename,
+                   rte->ctename) == 0)
+          found = true;
+      if (!found) {
+        rewrite_problem(ctx, psprintf("CTE reference \"%s\" (%u levels up) "
+                                      "names no CTE of that query",
+                                      rte->ctename, rte->ctelevelsup));
+        return false;
+      }
+    }
 #if PG_VERSION_NUM >= 160000
     foreach (lc, q->rtable) {
       RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
@@ -30001,6 +30219,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
                                  bool top_level, bool in_boolean_rewrite,
                                  const InvFreeMarkerCtx *inv_ctx);
+static void rewrite_shared_ctes(const constants_t *constants, Query *q,
+                                bool in_boolean_rewrite);
 
 static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
@@ -30323,6 +30543,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(constants, q);
+  if (provsql_active)
+    rewrite_shared_ctes(constants, q, in_boolean_rewrite);
   REWRITE_STEP("inline_ctes");
 
   /* Whole-row values of tracked relations read as any row leave provsql
@@ -30928,11 +31150,6 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
   return q;
 }
 
-/** @brief Outer joins the lowering may copy one into another, where the
- *  memory of the rewriting cannot be measured (PostgreSQL before 13): see
- *  @c outer_join_depth_query. */
-#define PROVSQL_MAX_OUTER_JOIN_DEPTH 5
-
 /** @brief Memory the rewriting of one statement may take, in bytes: see
  *  @c rewrite_memory_guard. */
 #define PROVSQL_MAX_REWRITE_MEMORY ((Size)1024 * 1024 * 1024)
@@ -30997,44 +31214,329 @@ static int outer_join_depth_query(Query *q) {
   return d;
 }
 
+/** @brief Context for @c shared_cte_refs_walker. */
+typedef struct shared_cte_refs_ctx {
+  const char *name;       ///< The shared CTE
+  int depth;              ///< Levels below the query holding its WITH
+  int *offset;            ///< Shift of each former column, or NULL
+  bool *removed;          ///< Which former columns were removed, or NULL
+  Query *body;            ///< Its rewritten body
+  AttrNumber provsql;     ///< The body's provsql column
+} shared_cte_refs_ctx;
+
+/** @brief Walker: bring the reads of a shared CTE in line with its rewritten
+ *  body -- the columns it lost, and the provsql column it gained. */
+static bool shared_cte_refs_walker(Node *node, void *cx) {
+  shared_cte_refs_ctx *c = (shared_cte_refs_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *qq = (Query *)node;
+    Index i = 0;
+    ListCell *lc;
+    bool r;
+    foreach (lc, qq->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      ++i;
+      if (rte->rtekind != RTE_CTE || rte->ctelevelsup != (Index)c->depth ||
+          strcmp(rte->ctename, c->name) != 0)
+        continue;
+      if (c->removed != NULL)
+        reduce_varattno_by_offset(qq, i, c->offset, c->removed);
+      rte->eref = copyObject(rte->eref);
+      rte->eref->colnames = NIL;
+      rte->coltypes = rte->coltypmods = rte->colcollations = NIL;
+      {
+        ListCell *tc;
+        foreach (tc, c->body->targetList) {
+          TargetEntry *te = (TargetEntry *)lfirst(tc);
+          if (te->resjunk)
+            continue;
+          rte->eref->colnames = lappend(rte->eref->colnames,
+            makeString(pstrdup(te->resname ? te->resname : "?column?")));
+          rte->coltypes = lappend_oid(rte->coltypes,
+                                      exprType((Node *)te->expr));
+          rte->coltypmods = lappend_int(rte->coltypmods,
+                                        exprTypmod((Node *)te->expr));
+          rte->colcollations = lappend_oid(rte->colcollations,
+                                           exprCollation((Node *)te->expr));
+        }
+      }
+    }
+    ++c->depth;
+    r = query_tree_walker(qq, shared_cte_refs_walker, cx, 0);
+    --c->depth;
+    return r;
+  }
+  return expression_tree_walker(node, shared_cte_refs_walker, cx);
+}
+
+/**
+ * @brief Rewrite, once, the body of each shared CTE of @p q (see "Shared
+ *        inputs of outer joins"), and record where its provenance is.
+ *
+ * The body is rewritten as a FROM subquery is: it gains a provsql column and
+ * loses the ones of the relations it read, and every read of the CTE, at any
+ * depth, is renumbered to match.
+ */
+static void rewrite_shared_ctes(const constants_t *constants, Query *q,
+                                bool in_boolean_rewrite) {
+  ListCell *lc;
+  foreach (lc, q->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    Query *body, *nb;
+    bool *removed = NULL;
+    int old_len, i;
+    int *offset = NULL;
+    shared_cte_refs_ctx rc;
+    AttrNumber a = 0;
+    ListCell *tc;
+
+    if (!is_shared_cte_name(cte->ctename) || shared_cte_provsql(cte->ctename))
+      continue;
+    body = (Query *)cte->ctequery;
+    old_len = list_length(body->targetList);
+    nb = process_query(constants, body, &removed, false, false,
+                       in_boolean_rewrite, NULL);
+    if (nb == NULL)
+      provsql_error("shared CTE \"%s\" has no provenance", cte->ctename);
+    cte->ctequery = (Node *)nb;
+    foreach (tc, nb->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(tc);
+      if (te->resjunk)
+        continue;
+      ++a;
+      if (te->resname != NULL && strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0)
+        break;
+    }
+    if (tc == NULL)
+      provsql_error("shared CTE \"%s\" has no provenance column",
+                    cte->ctename);
+    {
+      ListCell *ec;
+      foreach (ec, shared_ctes) {
+        shared_cte_entry *e = (shared_cte_entry *)lfirst(ec);
+        if (strcmp(e->name, cte->ctename) == 0) {
+          e->provsql = a;
+          e->body = nb;
+        }
+      }
+    }
+    cte->ctecolnames = cte->ctecoltypes = cte->ctecoltypmods =
+      cte->ctecolcollations = NIL;
+    foreach (tc, nb->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(tc);
+      if (te->resjunk)
+        continue;
+      cte->ctecolnames = lappend(cte->ctecolnames,
+        makeString(pstrdup(te->resname ? te->resname : "?column?")));
+      cte->ctecoltypes = lappend_oid(cte->ctecoltypes,
+                                     exprType((Node *)te->expr));
+      cte->ctecoltypmods = lappend_int(cte->ctecoltypmods,
+                                       exprTypmod((Node *)te->expr));
+      cte->ctecolcollations = lappend_oid(cte->ctecolcollations,
+                                          exprCollation((Node *)te->expr));
+    }
+    if (removed != NULL) {
+      offset = (int *)palloc(old_len * sizeof(int));
+      for (i = 0; i < old_len; ++i)
+        offset[i] = (i == 0 ? 0 : offset[i - 1]) - (removed[i] ? 1 : 0);
+    }
+    rc.name = cte->ctename;
+    rc.depth = 0;
+    rc.offset = offset;
+    rc.removed = removed;
+    rc.body = nb;
+    rc.provsql = a;
+    shared_cte_refs_walker((Node *)q, &rc);
+  }
+}
+
+/** @brief Context for @c shared_body_closed_walker. */
+typedef struct shared_body_closed_ctx {
+  int depth;              ///< Levels below the body
+  bool closed;            ///< Nothing read from outside it so far
+} shared_body_closed_ctx;
+
+/** @brief Walker: does a body read nothing from outside itself but shared
+ *  CTEs, so that it can move to another level? */
+static bool shared_body_closed_walker(Node *node, void *cx) {
+  shared_body_closed_ctx *c = (shared_body_closed_ctx *)cx;
+  if (node == NULL || !c->closed)
+    return false;
+  if (IsA(node, Var) && (int)((Var *)node)->varlevelsup > c->depth)
+    c->closed = false;
+  else if (IsA(node, Aggref) &&
+           (int)((Aggref *)node)->agglevelsup > c->depth)
+    c->closed = false;
+  else if (IsA(node, GroupingFunc) &&
+           (int)((GroupingFunc *)node)->agglevelsup > c->depth)
+    c->closed = false;
+  else if (IsA(node, Query)) {
+    Query *qq = (Query *)node;
+    ListCell *lc;
+    foreach (lc, qq->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_CTE && !rte_is_shared_cte(r) &&
+          (int)r->ctelevelsup > c->depth)
+        c->closed = false;
+    }
+    ++c->depth;
+    query_tree_walker(qq, shared_body_closed_walker, cx, 0);
+    --c->depth;
+    return false;
+  }
+  return expression_tree_walker(node, shared_body_closed_walker, cx);
+}
+
+/** @brief Context for @c collect_shared_ctes_walker. */
+typedef struct collect_shared_ctes_ctx {
+  List *hoisted;          ///< Shared CTEs taken out, each after those it reads
+  bool ok;                ///< Every shared CTE could be taken out
+  bool dry;               ///< Only check, take nothing out
+} collect_shared_ctes_ctx;
+
+/** @brief Walker: take the shared CTEs out of every WITH clause, the ones
+ *  nested in a body before that body. */
+static bool collect_shared_ctes_walker(Node *node, void *cx) {
+  collect_shared_ctes_ctx *c = (collect_shared_ctes_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *qq = (Query *)node;
+    List *kept = NIL;
+    ListCell *lc;
+    foreach (lc, qq->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      collect_shared_ctes_walker(cte->ctequery, cx);
+      if (is_shared_cte_name(cte->ctename)) {
+        shared_body_closed_ctx b = {0, true};
+        /* The body itself is the level its own reads are counted from. */
+        query_tree_walker((Query *)cte->ctequery, shared_body_closed_walker,
+                          &b, 0);
+        {
+          ListCell *rc;
+          foreach (rc, ((Query *)cte->ctequery)->rtable) {
+            RangeTblEntry *r = (RangeTblEntry *)lfirst(rc);
+            if (r->rtekind == RTE_CTE && !rte_is_shared_cte(r) &&
+                r->ctelevelsup > 0)
+              b.closed = false;
+          }
+        }
+        if (b.closed) {
+          if (!c->dry) {
+            c->hoisted = lappend(c->hoisted, cte);
+            continue;
+          }
+        } else
+          c->ok = false;
+      }
+      kept = lappend(kept, cte);
+    }
+    if (!c->dry)
+      qq->cteList = kept;
+    return query_tree_walker(qq, collect_shared_ctes_walker, cx,
+                             QTW_IGNORE_CTE_SUBQUERIES);
+  }
+  return expression_tree_walker(node, collect_shared_ctes_walker, cx);
+}
+
+/** @brief Walker: point every read of a shared CTE at the statement's own
+ *  WITH clause, @c depth levels up. */
+static bool shared_cte_levels_walker(Node *node, void *cx) {
+  int *depth = (int *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *qq = (Query *)node;
+    ListCell *lc;
+    bool r;
+    ++*depth;
+    foreach (lc, qq->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      if (rte_is_shared_cte(rte))
+        rte->ctelevelsup = *depth;
+    }
+    r = query_tree_walker(qq, shared_cte_levels_walker, cx, 0);
+    --*depth;
+    return r;
+  }
+  return expression_tree_walker(node, shared_cte_levels_walker, cx);
+}
+
+/**
+ * @brief Move every shared CTE of the rewritten statement @p q to @p q's own
+ *        WITH clause.
+ *
+ * The lowering of a chain of outer joins nests them: the CTE of each join is
+ * in the query of the next one, and holds the joins before it.  PostgreSQL's
+ * planner copies the query of each CTE before planning it, which made the
+ * planning of a chain quadratic in its length -- each copy holding all the
+ * joins below.  At the top, each body reads the one before it by name and is
+ * of constant size.  Their names are unique, so each read is simply pointed at
+ * the top.  A body that reads anything else from outside itself cannot move,
+ * and the statement is then left as it is.
+ */
+static void hoist_shared_ctes(Query *q) {
+  collect_shared_ctes_ctx c;
+  int depth = -1;
+  ListCell *dl;
+
+  /* First only check that every shared body can move. */
+  c.hoisted = NIL;
+  c.ok = true;
+  c.dry = true;
+  foreach (dl, q->cteList)
+    collect_shared_ctes_walker(((CommonTableExpr *)lfirst(dl))->ctequery, &c);
+  query_tree_walker(q, collect_shared_ctes_walker, &c,
+                    QTW_IGNORE_CTE_SUBQUERIES);
+  if (!c.ok)
+    return;
+  c.dry = false;
+  {
+    /* The statement's own WITH: its shared CTEs stay, others are visited. */
+    ListCell *lc;
+    List *kept = NIL, *own = NIL;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      collect_shared_ctes_walker(cte->ctequery, &c);
+      if (is_shared_cte_name(cte->ctename))
+        own = lappend(own, cte);
+      else
+        kept = lappend(kept, cte);
+    }
+    query_tree_walker(q, collect_shared_ctes_walker, &c,
+                      QTW_IGNORE_CTE_SUBQUERIES);
+    q->cteList = list_concat(list_concat(c.hoisted, own), kept);
+  }
+  shared_cte_levels_walker((Node *)q, &depth);
+}
+
 /**
  * @brief Refuse a statement whose rewriting outgrows memory, before it takes
  *        the server down.
  *
  * Checked at each call of @c process_query, which the rewriting makes for
- * every query it builds: the memory the statement's context holds is what the
- * copies of the rewriting take, and one outer join at most triples it before
- * the next check.  Where that memory cannot be measured, the depth of the
- * outer joins is bounded instead, once, before anything is copied.
+ * every query it builds: the memory the statement's context holds is what
+ * the copies of the rewriting take.  A chain of outer joins, whose lowering
+ * copied the joins before each one three times, reached it with eight; they
+ * are shared now (see "Shared inputs of outer joins"), and this remains for
+ * what else copies a query into several places.  PostgreSQL before 13 cannot
+ * measure a context, and has no such bound.
  */
 static void rewrite_memory_guard(Query *q) {
+  (void)q;
   if (!provsql_active)
     return;
 #if PG_VERSION_NUM >= 130000
-  (void)q;
   if (rewrite_context != NULL &&
       MemoryContextMemAllocated(rewrite_context, true) >
         PROVSQL_MAX_REWRITE_MEMORY) {
     rewrite_level = 0;
-    /* The same words as the bound on the depth below, so that a refusal
-     * reads alike on every version. */
     provsql_unsupported(PROVSQL_GAP, "rewriting-too-large",
                         "the rewriting of this query grows beyond what it "
-                        "may take: outer joins in a chain each copy the "
-                        "joins before them into their arms, so that the "
-                        "query grows exponentially with their number");
-  }
-#else
-  if (rewrite_level == 1) {
-    int depth = outer_join_depth_query(q);
-    if (depth > PROVSQL_MAX_OUTER_JOIN_DEPTH) {
-      rewrite_level = 0;
-      provsql_unsupported(PROVSQL_GAP, "rewriting-too-large",
-                          "the rewriting of this query grows beyond what it "
-                          "may take: outer joins in a chain each copy the "
-                          "joins before them into their arms, so that the "
-                          "query grows exponentially with their number");
-    }
+                        "may take: it copies parts of the query into several "
+                        "places, and here they multiply");
   }
 #endif
 }
@@ -31792,7 +32294,9 @@ static PlannedStmt *provsql_planner(Query *q,
    * that failed half-way left: the outer-join guard runs at level 1. */
   int saved_rewrite_level = rewrite_level;
   MemoryContext saved_rewrite_context = rewrite_context;
+  List *saved_shared_ctes = shared_ctes;
   rewrite_level = 0;
+  shared_ctes = NIL;
   provsql_inert_subselects = NIL;
   freeze_statement = q;
   if (provsql_executor_depth == 0)
@@ -32002,6 +32506,10 @@ static PlannedStmt *provsql_planner(Query *q,
 
       if (new_query != NULL)
         q = new_query;
+      if (shared_ctes != NIL) {
+        hoist_shared_ctes(q);
+        rewrite_checkpoint(q, "hoist_shared_ctes", false);
+      }
       recount_cte_refs_walker((Node *)q, NULL);
 #if PG_VERSION_NUM < 130000
       reset_varnoold_walker((Node *)q, NULL);
@@ -32078,7 +32586,7 @@ static PlannedStmt *provsql_planner(Query *q,
   /* A planning nested in the rewriting (the fixpoint of a recursion, run
    * through SPI) measured its own context, which is gone by now. */
   rewrite_context = saved_rewrite_context;
-
+  shared_ctes = saved_shared_ctes;
   if (prev_planner)
     return prev_planner(q,
 #if PG_VERSION_NUM >= 130000

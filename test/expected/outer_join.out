@@ -300,8 +300,44 @@ j
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: the rewriting of this query grows beyond what it may take: outer joins in a chain each copy the joins before them into their arms, so that the query grows exponentially with their number
-DETAIL:  provsql-reason: rewriting-too-large; scope: gap
+remove_provenance
+
+(1 row)
+id
+1
+2
+(2 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+o|p
+1-3-3-N|0.250000
+1-3-N-N|0.000000
+1-4-3-N|0.125000
+1-4-N-N|0.125000
+1-N-3-N|0.000000
+1-N-N-N|0.125000
+2-5-4-N|0.125000
+2-5-N-N|0.125000
+2-N-4-N|0.125000
+2-N-N-N|0.125000
+(10 rows)
+remove_provenance
+
+(1 row)
+o|p
+1-3-N|0.250000
+1-4-N|0.250000
+1-N-N|0.125000
+2-5-N|0.250000
+2-N-N|0.250000
+(5 rows)
 remove_provenance
 
 (1 row)
