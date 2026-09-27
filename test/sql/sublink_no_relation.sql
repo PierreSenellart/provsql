@@ -113,5 +113,43 @@ DROP TABLE snr_cte;
 -- column: there is nothing to track.
 WITH u AS (SELECT 1 AS n) SELECT (SELECT n FROM u) AS n;
 
+-- A block whose relations are all untracked, its only tracked data being in
+-- a subquery condition: an untracked relation is given a certain provenance
+-- column, as the VALUES list above, the rows of an untracked relation being
+-- there in every world.  Customers and restaurants untracked, what they sell
+-- and like at one half: the probabilities are those of the enumeration of the
+-- 64 worlds.  The division holds for c1 at r1 in 9/16 of them.
+CREATE TABLE snr_c(cname text, area int);
+INSERT INTO snr_c VALUES ('c1', 1), ('c2', 1);
+CREATE TABLE snr_r(rname text, area int);
+INSERT INTO snr_r VALUES ('r1', 1), ('r2', 1);
+CREATE TABLE snr_s(rname text, pizza text);
+INSERT INTO snr_s VALUES ('r1', 'marg'), ('r1', 'napo'), ('r2', 'marg');
+CREATE TABLE snr_l(cname text, pizza text);
+INSERT INTO snr_l VALUES ('c1', 'marg'), ('c1', 'napo'), ('c2', 'marg');
+SELECT add_provenance('snr_s');
+SELECT add_provenance('snr_l');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM snr_s;
+  PERFORM set_prob(provenance(), 0.5) FROM snr_l;
+END $$;
+CREATE TABLE snr_cr AS
+  SELECT c.cname, r.rname,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM snr_c c JOIN snr_r r USING (area)
+  WHERE NOT EXISTS (SELECT pizza FROM snr_s WHERE rname = r.rname
+                    EXCEPT SELECT pizza FROM snr_l WHERE cname = c.cname);
+SELECT remove_provenance('snr_cr');
+SELECT cname, rname, p FROM snr_cr ORDER BY cname, rname;
+DROP TABLE snr_cr;
+-- The same block below a query that reads nothing tracked either: no warning.
+SELECT count(*) FROM (
+  SELECT c.cname FROM snr_c c JOIN snr_r r USING (area)
+  WHERE NOT EXISTS (SELECT 1 FROM snr_s WHERE rname = r.rname)
+    AND NOT EXISTS (SELECT 1 FROM snr_l WHERE cname = c.cname)) z;
+SELECT remove_provenance('snr_s');
+SELECT remove_provenance('snr_l');
+DROP TABLE snr_c, snr_r, snr_s, snr_l;
+
 DROP TABLE snr_t, snr_u, snr_plain;
 DROP TABLE snr_m;

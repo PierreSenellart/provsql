@@ -12867,6 +12867,27 @@ static bool decorr_value_sublink_walker(Node *node, void *data) {
   return expression_tree_walker(node, decorr_value_sublink_walker, data);
 }
 
+/**
+ * @brief Whether @p r is an untracked source given a certain provenance
+ *        column by @c wrap_untracked_from_for_sublink: a subquery exporting
+ *        @c "gate_one() AS provsql".
+ */
+static bool rte_is_certain_source(const constants_t *constants,
+                                  RangeTblEntry *r) {
+  ListCell *lc;
+  if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+    return false;
+  foreach (lc, r->subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (!te->resjunk && te->resname != NULL &&
+        strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0 &&
+        IsA(te->expr, FuncExpr) &&
+        ((FuncExpr *)te->expr)->funcid == constants->OID_FUNCTION_GATE_ONE)
+      return true;
+  }
+  return false;
+}
+
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -12961,6 +12982,11 @@ static bool has_provenance_walker(Node *node, void *data) {
          * one evaluated as plain SQL (plain(NULL::t)). */
         if (!is_inert_subselect(r->subquery) &&
             has_provenance_walker((Node *)r->subquery, data))
+          return true;
+        /* An untracked source given a certain provenance column
+         * (wrap_untracked_from_for_sublink): the rows are there in every
+         * world, and the block's condition is what carries a provenance. */
+        if (rte_is_certain_source(constants, r))
           return true;
       }
     }
@@ -18268,7 +18294,10 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
         i + 1)
       return false;
     rte = rt_fetch(i + 1, q->rtable);
-    if (rte->rtekind != RTE_RELATION || rte->tablesample != NULL)
+    /* A base relation, or an untracked one given a certain provenance
+     * column, which the pair block copies as it is. */
+    if ((rte->rtekind != RTE_RELATION || rte->tablesample != NULL) &&
+        !rte_is_certain_source(constants, rte))
       return false;
     if (oj_rte_has_provsql(constants, rte))
       any_tracked = true;
@@ -19813,6 +19842,119 @@ static Node *unc_membership_to_join(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief The range-table index of a base relation of @p q read in an inner
+ *        position of @p node (a @c FROM item, or either side of an inner
+ *        join), or 0.
+ */
+static Index inner_relation_of_jointree(Query *q, Node *node) {
+  if (node == NULL)
+    return 0;
+  if (IsA(node, RangeTblRef)) {
+    Index i = ((RangeTblRef *)node)->rtindex;
+    RangeTblEntry *r = rt_fetch(i, q->rtable);
+    return r->rtekind == RTE_RELATION && r->tablesample == NULL &&
+           !r->lateral ? i : 0;
+  }
+  if (IsA(node, JoinExpr) && ((JoinExpr *)node)->jointype == JOIN_INNER) {
+    Index i = inner_relation_of_jointree(q, ((JoinExpr *)node)->larg);
+    return i != 0 ? i : inner_relation_of_jointree(q, ((JoinExpr *)node)->rarg);
+  }
+  if (IsA(node, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)node)->fromlist) {
+      Index i = inner_relation_of_jointree(q, (Node *)lfirst(lc));
+      if (i != 0)
+        return i;
+    }
+  }
+  return 0;
+}
+
+/**
+ * @brief The base-relation case of @c wrap_untracked_from_for_sublink: one
+ *        untracked relation of the block, read in an inner position, becomes
+ *        @c "(SELECT t.*, gate_one() AS provsql FROM t)".
+ *
+ * Every row of an untracked relation is there in every world, which is what
+ * the certain column says: the answer is that of the same relation tracked
+ * with probability one.  One relation is enough, the rows of the others being
+ * as certain.  The subquery lists the relation's columns in their order, so
+ * what the block reads of it keeps its attribute number; a relation with a
+ * dropped column, whose place no expression can hold, is left alone.
+ *
+ * @return  Whether @p q gained the column.
+ */
+static bool wrap_untracked_relation_for_sublink(const constants_t *constants,
+                                                Query *q) {
+  Index idx = inner_relation_of_jointree(q, (Node *)q->jointree);
+  RangeTblEntry *rte, *inner;
+  Query *sub;
+  FuncExpr *one;
+  List *tl = NIL;
+  ListCell *lc;
+  AttrNumber attno = 0;
+
+  if (idx == 0)
+    return false;
+  /* Only for a subquery condition of the WHERE, which the decorrelation reads
+   * against the block's own rows: one elsewhere (nested in an expression of
+   * the target list) stays frozen, and the column would only widen the
+   * result. */
+  if (q->jointree->quals == NULL ||
+      !tracked_value_sublink_walker(q->jointree->quals, (void *)constants))
+    return false;
+  rte = rt_fetch(idx, q->rtable);
+  foreach (lc, rte->eref->colnames) {
+    Oid type, coll;
+    int32 typmod;
+    ++attno;
+    if (strVal(lfirst(lc))[0] == '\0')
+      return false;               /* a dropped column */
+    get_atttypetypmodcoll(rte->relid, attno, &type, &typmod, &coll);
+    tl = lappend(tl, makeTargetEntry(
+      (Expr *)makeVar(1, attno, type, typmod, coll, 0), attno,
+      pstrdup(strVal(lfirst(lc))), false));
+  }
+  one = makeNode(FuncExpr);
+  one->funcid = constants->OID_FUNCTION_GATE_ONE;
+  one->funcresulttype = constants->OID_TYPE_UUID;
+  one->args = NIL;
+  one->location = -1;
+  tl = lappend(tl, makeTargetEntry((Expr *)one, attno + 1,
+                                   pstrdup(PROVSQL_COLUMN_NAME), false));
+
+  sub = makeNode(Query);
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  inner = oj_copy_rel(q, sub, rte, 1);
+  sub->rtable = list_make1(inner);
+  sub->jointree = makeFromExpr(list_make1(makeNode(RangeTblRef)), NULL);
+  ((RangeTblRef *)linitial(sub->jointree->fromlist))->rtindex = 1;
+  sub->targetList = tl;
+
+  /* The entry itself becomes the subquery, at the same index: the block reads
+   * it as before, one column wider. */
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = sub;
+  rte->relid = InvalidOid;
+  rte->relkind = 0;
+  rte->inh = false;
+#if PG_VERSION_NUM >= 160000
+  rte->perminfoindex = 0;
+#else
+  rte->requiredPerms = 0;
+  rte->checkAsUser = InvalidOid;
+  rte->selectedCols = NULL;
+  rte->insertedCols = NULL;
+  rte->updatedCols = NULL;
+#endif
+  rte->eref = copyObject(rte->eref);
+  rte->eref->colnames = lappend(rte->eref->colnames,
+                                makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+  return true;
+}
+
+/**
  * @brief Give a block whose @c FROM reads no tracked relation a carrier for the
  *        provenance its condition has: a certain provenance column on the
  *        untracked source.
@@ -19841,9 +19983,6 @@ static bool wrap_untracked_from_for_sublink(const constants_t *constants,
 
   if (q->commandType != CMD_SELECT || !q->hasSubLinks || q->jointree == NULL)
     return false;
-  if (list_length(q->jointree->fromlist) != 1 ||
-      !IsA(linitial(q->jointree->fromlist), RangeTblRef))
-    return false;
   if (!query_has_tracked_sublink(constants, q))
     return false;
   /* Only where nothing of the block's own is tracked: otherwise the row has a
@@ -19851,9 +19990,14 @@ static bool wrap_untracked_from_for_sublink(const constants_t *constants,
   foreach (lc, q->rtable)
     if (oj_rte_has_provsql(constants, (RangeTblEntry *)lfirst(lc)))
       return false;
+  if (list_length(q->jointree->fromlist) != 1 ||
+      !IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return wrap_untracked_relation_for_sublink(constants, q);
 
   rte = rt_fetch(((RangeTblRef *)linitial(q->jointree->fromlist))->rtindex,
                  q->rtable);
+  if (rte->rtekind == RTE_RELATION)
+    return wrap_untracked_relation_for_sublink(constants, q);
   if (rte->rtekind != RTE_SUBQUERY || rte->lateral || rte->subquery == NULL)
     return false;
   sub = rte->subquery;
@@ -19882,6 +20026,37 @@ static bool wrap_untracked_from_for_sublink(const constants_t *constants,
   rte->eref->colnames = lappend(rte->eref->colnames,
                                 makeString(pstrdup(PROVSQL_COLUMN_NAME)));
   return true;
+}
+
+/**
+ * @brief @c wrap_untracked_from_for_sublink on @p q and on every query of its
+ *        FROM clauses and WITH, at any depth.
+ *
+ * A block of the statement that reads no tracked relation of its own is left
+ * alone by the rewriting, which only enters a query that has provenance: an
+ * untracked block with a tracked subquery condition, under an outer query
+ * that reads nothing tracked either, is only reached once its certain column
+ * makes the whole statement tracked.
+ *
+ * @return  Whether any block gained the column.
+ */
+static bool wrap_untracked_levels(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  bool any = wrap_untracked_from_for_sublink(constants, q);
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
+        wrap_untracked_levels(constants, r->subquery))
+      any = true;
+  }
+  foreach (lc, q->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    if (IsA(cte->ctequery, Query) &&
+        wrap_untracked_levels(constants, (Query *)cte->ctequery))
+      any = true;
+  }
+  return any;
 }
 
 /**
@@ -29606,6 +29781,10 @@ static Query *process_query(const constants_t *constants, Query *q,
       has_provenance(constants, q))
     return process_query(constants, rewrite_grouping_sets(q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
+  /* An untracked block with a tracked subquery condition gets its certain
+   * provenance column before the passes below ask whether it is tracked. */
+  if (provsql_active && q->hasSubLinks)
+    wrap_untracked_from_for_sublink(constants, q);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_aggregation_over_sublinks(constants, q) != NULL)
     return process_query(constants, q, removed, wrap_root, top_level,
@@ -31130,7 +31309,7 @@ static PlannedStmt *provsql_planner(Query *q,
      * dba/379ff1278c, and the difference between the two spellings was the whole
      * of it. */
     if (provsql_active && constants.ok && lifted_q == NULL &&
-        wrap_untracked_from_for_sublink(&constants, q))
+        wrap_untracked_levels(&constants, q))
       from_wrapped = true;
 
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&

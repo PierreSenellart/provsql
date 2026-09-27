@@ -93,8 +93,10 @@ The following SQL constructs are supported with full provenance tracking:
   (every row of the first arm is one of the second).
   A block that reads tracked relations only through its subqueries (a
   ``FROM``-less ``SELECT`` whose condition is an ``EXISTS``, a constant or
-  untracked left side filtered by a ``NOT EXISTS``) is tracked as well: the
-  answer carries the provenance of the semijoin or the antijoin. Where this
+  untracked left side filtered by a ``NOT EXISTS``, untracked tables whose
+  ``WHERE`` tests tracked ones) is tracked as well: the rows of the untracked
+  side count as present in every world, and the answer carries the
+  provenance of the semijoin or the antijoin. Where this
   is not possible, the block is evaluated by plain SQL, with a warning.
   A subquery condition need not be a conjunct of the ``WHERE`` clause: in
   ``WHERE name = 'NY' OR EXISTS (…)``, a row licensed by the other disjunct

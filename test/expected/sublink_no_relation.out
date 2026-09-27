@@ -56,3 +56,27 @@ below|e_below|total|e_total
 n
 1
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+cname|rname|p
+c1|r1|0.562500
+c1|r2|0.750000
+c2|r1|0.375000
+c2|r2|0.750000
+(4 rows)
+count|provsql
+0 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
