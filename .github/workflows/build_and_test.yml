@@ -82,7 +82,10 @@ jobs:
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
-      - run: PGUSER=postgres bash test/kcmcp/with-tdkc.sh make installcheck PGUSER=postgres || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
+      # provsql.verify_rewrite checks the query tree after every pass of the
+      # rewriting: an inconsistency is an error naming the pass, not a
+      # malfunction far from it.  It changes no output of a clean run.
+      - run: PGUSER=postgres PGOPTIONS="-c provsql.verify_rewrite=on" bash test/kcmcp/with-tdkc.sh make installcheck PGUSER=postgres || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
 
   docker:
     needs: test
