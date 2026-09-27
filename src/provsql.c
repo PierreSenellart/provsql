@@ -515,6 +515,74 @@ static void reduce_varattno_by_offset(Query *q, Index varno, int *offset,
   query_tree_walker(q, reduce_varattno_walker, &context, 0);
 }
 
+/** @brief A mutator over expressions, as @c query_tree_mutator takes one. */
+typedef Node *(*level_mutator_fn)(Node *node, void *context);
+
+/**
+ * @brief @c query_tree_mutator(q, m, ctx, QTW_DONT_COPY_QUERY | flags),
+ *        without the copy of the subqueries it does not enter.
+ *
+ * Given @c QTW_IGNORE_RT_SUBQUERIES or @c QTW_IGNORE_CTE_SUBQUERIES,
+ * PostgreSQL's mutator does not leave those subqueries alone: it copies them
+ * whole into the new range table.  Run at every level of a rewriting that
+ * nests queries deep -- a chain of outer joins nests one per join -- that
+ * made each level copy all the levels below it, the rewriting quadratic in
+ * the depth.  This mutates the same parts of @p q, in place, and keeps the
+ * subqueries as they are.
+ */
+static Query *query_level_mutator(Query *q, level_mutator_fn m, void *ctx,
+                                  int flags) {
+  ListCell *lc;
+  q->targetList = (List *)m((Node *)q->targetList, ctx);
+  q->withCheckOptions = (List *)m((Node *)q->withCheckOptions, ctx);
+  q->onConflict = (OnConflictExpr *)m((Node *)q->onConflict, ctx);
+#if PG_VERSION_NUM >= 150000
+  q->mergeActionList = (List *)m((Node *)q->mergeActionList, ctx);
+#endif
+  q->returningList = (List *)m((Node *)q->returningList, ctx);
+  q->jointree = (FromExpr *)m((Node *)q->jointree, ctx);
+  q->setOperations = m(q->setOperations, ctx);
+  q->havingQual = m(q->havingQual, ctx);
+  q->limitOffset = m(q->limitOffset, ctx);
+  q->limitCount = m(q->limitCount, ctx);
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    wc->startOffset = m(wc->startOffset, ctx);
+    wc->endOffset = m(wc->endOffset, ctx);
+  }
+  if (!(flags & QTW_IGNORE_CTE_SUBQUERIES))
+    q->cteList = (List *)m((Node *)q->cteList, ctx);
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+    switch (rte->rtekind) {
+      case RTE_SUBQUERY:
+        if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
+          rte->subquery = (Query *)m((Node *)rte->subquery, ctx);
+        break;
+      case RTE_JOIN:
+        rte->joinaliasvars = (List *)m((Node *)rte->joinaliasvars, ctx);
+        break;
+      case RTE_FUNCTION:
+        rte->functions = (List *)m((Node *)rte->functions, ctx);
+        break;
+      case RTE_TABLEFUNC:
+        rte->tablefunc = (TableFunc *)m((Node *)rte->tablefunc, ctx);
+        break;
+      case RTE_VALUES:
+        rte->values_lists = (List *)m((Node *)rte->values_lists, ctx);
+        break;
+#if PG_VERSION_NUM >= 180000
+      case RTE_GROUP:
+        rte->groupexprs = (List *)m((Node *)rte->groupexprs, ctx);
+        break;
+#endif
+      default:
+        break;
+    }
+  }
+  return q;
+}
+
 /** @brief Context for the @c aggregation_type_mutator tree walker. */
 typedef struct aggregation_type_mutator_context {
   Index varno;                ///< Range-table entry index of the aggregate var
@@ -1044,8 +1112,8 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
     if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
       context.varno = rteid;
       context.varattno = attno;
-      query_tree_mutator(q, aggregation_type_mutator, &context,
-                         QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+      query_level_mutator(q, aggregation_type_mutator, &context,
+                         QTW_IGNORE_RC_SUBQUERIES);
 
       /* Check if the retyped column is used in GROUP BY (an ORDER BY on it
        * sorts on its value, see sort_on_plain_values) */
@@ -11245,11 +11313,11 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
   /* First push distributive constant arithmetic into aggregate arguments
    * (sum(x)*2 -> sum(2*x)), so those become clean aggregates rather than a
    * gate_arith over the aggregate. */
-  query_tree_mutator(q, push_arith_into_agg_mutator, (void *)constants,
-                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+  query_level_mutator(q, push_arith_into_agg_mutator, (void *)constants,
+                     QTW_IGNORE_RT_SUBQUERIES);
 
-  query_tree_mutator(q, aggregation_mutator, &context,
-                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+  query_level_mutator(q, aggregation_mutator, &context,
+                     QTW_IGNORE_RT_SUBQUERIES);
 
   /* Post-processing: for target-list entries where a provenance_aggregate
    * result is nested inside an outer expression (e.g. SUM(id)+1),
@@ -11922,8 +11990,8 @@ replace_provenance_function_by_expression(const constants_t *constants,
   context.provsql_has_aggref =
     expr_contains_aggref_walker((Node *) provsql, NULL);
 
-  query_tree_mutator(q, provenance_mutator, &context,
-                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+  query_level_mutator(q, provenance_mutator, &context,
+                     QTW_IGNORE_RT_SUBQUERIES);
 }
 
 /**
@@ -21847,8 +21915,8 @@ static void reconcile_union_columns(const constants_t *constants,
     set_union_column_type((Node *)stmt, i, rctx.type);
     rctx.varno = linitial_int(leaves);
     rctx.varattno = i + 1;
-    query_tree_mutator(q, retype_union_var_mutator, &rctx,
-                       QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+    query_level_mutator(q, retype_union_var_mutator, &rctx,
+                       QTW_IGNORE_RT_SUBQUERIES);
   }
 }
 
@@ -22907,8 +22975,8 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
   Node *having = q->havingQual;
 
   q->havingQual = NULL;
-  query_tree_mutator(q, insert_agg_token_casts_mutator, &ctx,
-                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+  query_level_mutator(q, insert_agg_token_casts_mutator, &ctx,
+                     QTW_IGNORE_RC_SUBQUERIES);
   ctx.in_having = true;
   q->havingQual = insert_having_agg_token_casts_mutator(having, &ctx);
 }
@@ -28093,8 +28161,8 @@ static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
   ctx.outer_join = q->jointree != NULL &&
                    has_outer_join_walker((Node *)q->jointree->fromlist, NULL);
 
-  query_tree_mutator(q, wholerow_mutator, &ctx,
-                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES |
+  query_level_mutator(q, wholerow_mutator, &ctx,
+                     QTW_IGNORE_RT_SUBQUERIES |
                      QTW_IGNORE_CTE_SUBQUERIES);
   /* The output of the statement, when it is shown: a table created from it,
    * or the rows of a function, need the relation's own row type. */
