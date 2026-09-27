@@ -30860,6 +30860,117 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
   return q;
 }
 
+/** @brief Outer joins the lowering may copy one into another, where the
+ *  memory of the rewriting cannot be measured (PostgreSQL before 13): see
+ *  @c outer_join_depth_query. */
+#define PROVSQL_MAX_OUTER_JOIN_DEPTH 5
+
+/** @brief Memory the rewriting of one statement may take, in bytes: see
+ *  @c rewrite_memory_guard. */
+#define PROVSQL_MAX_REWRITE_MEMORY ((Size)1024 * 1024 * 1024)
+
+/** @brief The memory context the statement's rewriting allocates in. */
+static MemoryContext rewrite_context = NULL;
+
+static int outer_join_depth_query(Query *q);
+
+/** @brief The depth of outer joins of the join-tree node @p n of @p q. */
+static int outer_join_depth_node(Query *q, Node *n) {
+  if (n == NULL)
+    return 0;
+  if (IsA(n, RangeTblRef)) {
+    RangeTblEntry *r = rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable);
+    return r->rtekind == RTE_SUBQUERY && r->subquery != NULL
+             ? outer_join_depth_query(r->subquery) : 0;
+  }
+  if (IsA(n, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *)n;
+    int l = outer_join_depth_node(q, j->larg);
+    int r = outer_join_depth_node(q, j->rarg);
+    return (l > r ? l : r) + (j->jointype == JOIN_INNER ? 0 : 1);
+  }
+  if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    int d = 0;
+    foreach (lc, ((FromExpr *)n)->fromlist) {
+      int e = outer_join_depth_node(q, (Node *)lfirst(lc));
+      if (e > d)
+        d = e;
+    }
+    return d;
+  }
+  return 0;
+}
+
+/**
+ * @brief The depth of the outer joins of @p q: the number of outer joins
+ *        met on the way down to a relation, through the subqueries of the
+ *        FROM clause and the WITH queries, which are inlined.
+ *
+ * The lowering of an outer join (@c lower_outer_joins) puts its left input
+ * in each of the arms it builds, three copies of it, and a chain is lowered
+ * one join at a time, the input of each join being the joins before it: the
+ * query grows as three to the power of this depth, by 3.6 in memory per join
+ * over a chain of LEFT JOINs beside an inner join (0.8 GB at five, 3 GB at
+ * six, beyond 8 GB at seven).
+ */
+static int outer_join_depth_query(Query *q) {
+  ListCell *lc;
+  int d = q->jointree != NULL ? outer_join_depth_node(q, (Node *)q->jointree)
+                              : 0;
+  foreach (lc, q->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    if (IsA(cte->ctequery, Query)) {
+      int e = outer_join_depth_query((Query *)cte->ctequery);
+      if (e > d)
+        d = e;
+    }
+  }
+  return d;
+}
+
+/**
+ * @brief Refuse a statement whose rewriting outgrows memory, before it takes
+ *        the server down.
+ *
+ * Checked at each call of @c process_query, which the rewriting makes for
+ * every query it builds: the memory the statement's context holds is what the
+ * copies of the rewriting take, and one outer join at most triples it before
+ * the next check.  Where that memory cannot be measured, the depth of the
+ * outer joins is bounded instead, once, before anything is copied.
+ */
+static void rewrite_memory_guard(Query *q) {
+  if (!provsql_active)
+    return;
+#if PG_VERSION_NUM >= 130000
+  (void)q;
+  if (rewrite_context != NULL &&
+      MemoryContextMemAllocated(rewrite_context, true) >
+        PROVSQL_MAX_REWRITE_MEMORY) {
+    rewrite_level = 0;
+    /* The same words as the bound on the depth below, so that a refusal
+     * reads alike on every version. */
+    provsql_unsupported(PROVSQL_GAP, "rewriting-too-large",
+                        "the rewriting of this query grows beyond what it "
+                        "may take: outer joins in a chain each copy the "
+                        "joins before them into their arms, so that the "
+                        "query grows exponentially with their number");
+  }
+#else
+  if (rewrite_level == 1) {
+    int depth = outer_join_depth_query(q);
+    if (depth > PROVSQL_MAX_OUTER_JOIN_DEPTH) {
+      rewrite_level = 0;
+      provsql_unsupported(PROVSQL_GAP, "rewriting-too-large",
+                          "the rewriting of this query grows beyond what it "
+                          "may take: outer joins in a chain each copy the "
+                          "joins before them into their arms, so that the "
+                          "query grows exponentially with their number");
+    }
+  }
+#endif
+}
+
 /**
  * @brief Rewrite @p q (see @c process_query_impl), at one more level of
  *        @c process_query, with the checkpoints of the debugging settings.
@@ -30872,6 +30983,9 @@ static Query *process_query(const constants_t *constants, Query *q,
   const char *via = rewrite_restart_pass;
   rewrite_restart_pass = NULL;
   ++rewrite_level;
+  if (rewrite_level == 1)
+    rewrite_context = CurrentMemoryContext;
+  rewrite_memory_guard(q);
   rewrite_checkpoint(q, via != NULL ? psprintf("start, after %s", via)
                                     : "start", true);
   r = process_query_impl(constants, q, removed, wrap_root, top_level,
@@ -31606,6 +31720,11 @@ static PlannedStmt *provsql_planner(Query *q,
    * planner invocations save and restore their own). */
   List *saved_inert_subselects = provsql_inert_subselects;
   Query *saved_freeze_statement = freeze_statement;
+  /* Each statement's rewriting starts at level 0, whatever an earlier one
+   * that failed half-way left: the outer-join guard runs at level 1. */
+  int saved_rewrite_level = rewrite_level;
+  MemoryContext saved_rewrite_context = rewrite_context;
+  rewrite_level = 0;
   provsql_inert_subselects = NIL;
   freeze_statement = q;
   if (provsql_executor_depth == 0)
@@ -31887,6 +32006,10 @@ static PlannedStmt *provsql_planner(Query *q,
 
   provsql_inert_subselects = saved_inert_subselects;
   freeze_statement = saved_freeze_statement;
+  rewrite_level = saved_rewrite_level;
+  /* A planning nested in the rewriting (the fixpoint of a recursion, run
+   * through SPI) measured its own context, which is gone by now. */
+  rewrite_context = saved_rewrite_context;
 
   if (prev_planner)
     return prev_planner(q,

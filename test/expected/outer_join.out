@@ -297,3 +297,11 @@ remove_provenance
 j
 [{"id":1,"m":"a"}] (*)
 (1 row)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: the rewriting of this query grows beyond what it may take: outer joins in a chain each copy the joins before them into their arms, so that the query grows exponentially with their number
+DETAIL:  provsql-reason: rewriting-too-large; scope: gap
+remove_provenance
+
+(1 row)

@@ -424,3 +424,21 @@ SELECT * FROM ojl_res;
 DROP TABLE ojl_res;
 
 DROP TABLE ojl_l, ojl_r, ojl_o;
+
+-- A chain of outer joins is lowered one join at a time, each copying the
+-- joins before it into its arms: the query grows exponentially with their
+-- number.  Twelve, as a generated query writes them (difftest's BEAVER), used
+-- to exhaust the server's memory; the rewriting is now refused once it
+-- outgrows a bound, as a gap.
+CREATE TABLE oj_chain(id int, p int);
+INSERT INTO oj_chain VALUES (1, 1), (2, 1);
+SELECT add_provenance('oj_chain');
+SELECT t0.id FROM oj_chain t0
+  LEFT JOIN oj_chain t1 ON t1.p = t0.id LEFT JOIN oj_chain t2 ON t2.p = t0.id
+  LEFT JOIN oj_chain t3 ON t3.p = t0.id LEFT JOIN oj_chain t4 ON t4.p = t0.id
+  LEFT JOIN oj_chain t5 ON t5.p = t0.id LEFT JOIN oj_chain t6 ON t6.p = t0.id
+  LEFT JOIN oj_chain t7 ON t7.p = t0.id LEFT JOIN oj_chain t8 ON t8.p = t0.id
+  LEFT JOIN oj_chain t9 ON t9.p = t0.id LEFT JOIN oj_chain t10 ON t10.p = t0.id
+  LEFT JOIN oj_chain t11 ON t11.p = t0.id LEFT JOIN oj_chain t12 ON t12.p = t0.id;
+SELECT remove_provenance('oj_chain');
+DROP TABLE oj_chain;
