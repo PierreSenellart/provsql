@@ -355,3 +355,33 @@ k|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+v|p
+1|0.500000
+2|0.500000
+4|1.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+v|p
+1|0.500000
+2|0.500000
+4|1.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+g|e
+1|0.500000
+2|1.000000
+3|1.000000
+(3 rows)
+remove_provenance
+
+(1 row)

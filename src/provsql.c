@@ -17064,6 +17064,111 @@ static bool oj_syscol_walker(Node *node, void *cx) {
   return expression_tree_walker(node, oj_syscol_walker, cx);
 }
 
+/**
+ * @brief An arm of an outer join that reads no tracked relation, as the
+ *        subquery @c "(SELECT @c arm.*, @c gate_one() @c AS @c provsql
+ *        @c FROM @c arm)".
+ *
+ * A series of dates or a @c VALUES list padded by a tracked relation's rows
+ * -- the calendar a report fills -- is the same in every world, so each of
+ * its rows has provenance one, and the outer join is then one of two arms
+ * the lowering reads.  Its columns keep their numbers, the provenance column
+ * coming after them.  Only a function, a @c VALUES list or a subquery, and
+ * none reading the query around it: a relation of the database would take
+ * its permissions along.
+ *
+ * @return  Whether the arm was wrapped.
+ */
+static bool oj_wrap_certain_arm(const constants_t *constants, Query *q,
+                                Index idx) {
+  RangeTblEntry *arm = list_nth_node(RangeTblEntry, q->rtable, idx - 1);
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  Query *sub;
+  List *names = NIL, *vars = NIL, *tl = NIL, *colnames = NIL;
+  ListCell *ln, *lv;
+  AttrNumber resno = 0;
+
+  /* A reference to a WITH query of this level over no tracked relation --
+   * WITH v(id) AS (VALUES ...) -- is that query, read here. */
+  if (arm->rtekind == RTE_CTE && arm->ctelevelsup == 0 &&
+      !arm->self_reference) {
+    ListCell *lc;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      Query *cq = (Query *)cte->ctequery;
+      if (strcmp(cte->ctename, arm->ctename) != 0)
+        continue;
+      if (cte->cterecursive || !IsA(cq, Query) ||
+          cq->commandType != CMD_SELECT || has_provenance(constants, cq) ||
+          contain_volatile_functions((Node *)cq))
+        return false;
+      arm = (RangeTblEntry *)copyObject(arm);
+      arm->rtekind = RTE_SUBQUERY;
+      arm->subquery = (Query *)copyObject(cq);
+      arm->ctename = NULL;
+      arm->ctelevelsup = 0;
+      arm->coltypes = arm->coltypmods = arm->colcollations = NIL;
+      lfirst(list_nth_cell(q->rtable, idx - 1)) = arm;
+      break;
+    }
+  }
+  if (!OidIsValid(constants->OID_FUNCTION_GATE_ONE) || arm->lateral ||
+      !(arm->rtekind == RTE_FUNCTION || arm->rtekind == RTE_VALUES ||
+        arm->rtekind == RTE_SUBQUERY))
+    return false;
+  if (arm->rtekind == RTE_SUBQUERY &&
+      (arm->subquery == NULL || reads_outside_walker((Node *)arm->subquery, 0)))
+    return false;
+  /* Nor one whose rows a subquery decides: a series bounded by the min and
+   * the max of a tracked column is not the same in every world. */
+  if (arm->rtekind == RTE_FUNCTION &&
+      (contain_vars_of_level((Node *)arm->functions, 0) ||
+       checkExprHasSubLink((Node *)arm->functions)))
+    return false;
+  if (arm->rtekind == RTE_VALUES &&
+      checkExprHasSubLink((Node *)arm->values_lists))
+    return false;
+
+  arm = (RangeTblEntry *)copyObject(arm);
+  arm->inFromCl = true;
+#if PG_VERSION_NUM >= 180000
+  expandRTE(arm, 1, 0, VAR_RETURNING_DEFAULT, -1, true, &names, &vars);
+#else
+  expandRTE(arm, 1, 0, -1, true, &names, &vars);
+#endif
+  forboth (ln, names, lv, vars) {
+    char *name = strVal(lfirst(ln));
+    tl = lappend(tl, makeTargetEntry((Expr *)lfirst(lv), ++resno,
+                                     pstrdup(name), false));
+    colnames = lappend(colnames, makeString(pstrdup(name)));
+  }
+  tl = lappend(tl, makeTargetEntry(
+    (Expr *)makeFuncExpr(constants->OID_FUNCTION_GATE_ONE,
+                         constants->OID_TYPE_UUID, NIL, InvalidOid,
+                         InvalidOid, COERCE_EXPLICIT_CALL),
+    ++resno, pstrdup(PROVSQL_COLUMN_NAME), false));
+  colnames = lappend(colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+
+  sub = makeNode(Query);
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  sub->rtable = list_make1(arm);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  sub->jointree = makeFromExpr(list_make1(rtr), NULL);
+  sub->targetList = tl;
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = sub;
+  rte->alias = arm->alias != NULL ? copyObject(arm->alias) : NULL;
+  rte->eref = makeAlias(arm->eref->aliasname, colnames);
+  rte->inFromCl = true;
+  lfirst(list_nth_cell(q->rtable, idx - 1)) = rte;
+  return true;
+}
+
 static bool lower_outer_joins(const constants_t *constants, Query *q) {
   JoinExpr *je;
   RangeTblRef *lref, *rref;
@@ -17096,6 +17201,19 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   join_idx = je->rtindex;
   R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
   S_rte = list_nth_node(RangeTblEntry, q->rtable, S_idx - 1);
+
+  /* An arm that reads no tracked relation -- a series of dates, a VALUES
+   * list, a subquery over neither -- beside one that does: its rows are
+   * there in every world, which a column of provenance one says. */
+  if (oj_rte_has_provsql(constants, R_rte) !=
+      oj_rte_has_provsql(constants, S_rte)) {
+    if (!oj_rte_has_provsql(constants, R_rte) &&
+        oj_wrap_certain_arm(constants, q, R_idx))
+      R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+    if (!oj_rte_has_provsql(constants, S_rte) &&
+        oj_wrap_certain_arm(constants, q, S_idx))
+      S_rte = list_nth_node(RangeTblEntry, q->rtable, S_idx - 1);
+  }
 
   if ((R_rte->rtekind != RTE_RELATION && R_rte->rtekind != RTE_SUBQUERY) ||
       (S_rte->rtekind != RTE_RELATION && S_rte->rtekind != RTE_SUBQUERY))

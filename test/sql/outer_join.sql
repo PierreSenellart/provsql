@@ -495,3 +495,35 @@ SELECT k, round(p::numeric, 6) AS p FROM oj_c_r ORDER BY k;
 DROP TABLE oj_c_r;
 SELECT remove_provenance('oj_c');
 DROP TABLE oj_c;
+
+-- The preserved side reads no tracked relation -- a VALUES list, a series, a
+-- WITH query over neither -- and is the same in every world: provenance one
+-- for each of its rows.  Two tracked rows, k = 1 and 2, each at 1/2.  The ids
+-- of the list no row matches: 1 and 2 at 1/2, 4 always.  The rows matched up
+-- to each point of a series, on average: 1/2, then 1, then 1.
+CREATE TABLE oj_c(k int);
+INSERT INTO oj_c VALUES (1), (2);
+SELECT add_provenance('oj_c');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM oj_c; END $$;
+CREATE TABLE oj_r AS
+  SELECT t.v, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (VALUES (1), (2), (4)) t(v) LEFT JOIN oj_c c ON c.k = t.v
+  WHERE c.k IS NULL;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r ORDER BY v;
+DROP TABLE oj_r;
+CREATE TABLE oj_r AS
+  WITH w(v) AS (VALUES (1), (2), (4))
+  SELECT w.v, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM w LEFT JOIN oj_c c ON c.k = w.v WHERE c.k IS NULL;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r ORDER BY v;
+DROP TABLE oj_r;
+CREATE TABLE oj_r AS
+  SELECT g, round(expected(count(c.k))::numeric, 6) AS e
+  FROM generate_series(1, 3) g LEFT JOIN oj_c c ON c.k <= g GROUP BY g;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r ORDER BY g;
+DROP TABLE oj_r;
+SELECT remove_provenance('oj_c');
+DROP TABLE oj_c;
