@@ -32489,9 +32489,11 @@ static bool disjunction_across_groups_walker(Node *n, void *cx) {
  * The provenance of a condition over aggregate values is one sum over the
  * worlds of every group it reads, where the condition holds.  A disjunction
  * is rewritten as the sum of the provenances of its sides, each over its own
- * groups; the two agree where the sum is idempotent, the row's annotation
- * carrying the existence of each group, and part in a semiring where it is
- * not (counting, the polynomials).  The circuit keeps no trace of which sum
+ * groups; the two agree where the sum is idempotent and the existence of a
+ * group, which the row's annotation carries, is the identity -- the Boolean
+ * semirings -- and part elsewhere: counting and the polynomials count twice
+ * a world satisfying both sides, Viterbi drops the annotation of the group
+ * whose side fails.  The circuit keeps no trace of which sum
  * a disjunction is -- the same gate sums the rows of a projection -- so the
  * difference is said here, where the disjunction is still one.  Not in the
  * Boolean provenance mode, which evaluates no such semiring.
@@ -32506,8 +32508,8 @@ static void warn_disjunction_across_groups(const constants_t *constants,
       PROVSQL_GAP, "disjunction-across-groups",
       "a disjunction of conditions on the aggregates of different groups is "
       "read as the sum of the provenances of its sides, which is its "
-      "provenance only where the sum is idempotent (not in counting or the "
-      "polynomials)");
+      "provenance only in the Boolean semirings (Boolean functions, lineage, "
+      "probability)");
 }
 
 static Query *process_query_impl(const constants_t *constants, Query *q,
