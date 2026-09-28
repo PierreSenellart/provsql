@@ -17581,12 +17581,13 @@ static bool wrap_body_sublinks(Query *sub) {
  * correlated column is a grouping key, where the groups are the same either
  * way; that case is not lifted here.
  *
- * And only a body whose columns are grouping keys, never an aggregate result:
- * the value an aggregate takes is one per possible world, so @c "x @c IN
- * @c (SELECT @c max(v) @c ... @c GROUP @c BY @c g)" is a comparison against a
- * per-world value, which the semijoin's own correlation does not read (it
- * answered every row of the outer relation, where SQL answers one).  That
- * shape stays refused, and the message keeps naming the body's grouping.
+ * A column that is an aggregate result is compared with a value that is one
+ * per possible world: the correlation over the derived table reads it as the
+ * comparison of the aggregate, per pair of an outer row and a group, as the
+ * same query written as a join does.  That pair is kept in every world where
+ * it is not provably false, so an outer row no world answers comes out with
+ * provenance zero.  A membership test over aggregates whose values can be
+ * enumerated is taken as a join instead (see @c rewrite_predicate_sublinks).
  *
  * @return  True when the body was wrapped (it now groups nothing of its own).
  */
@@ -17636,13 +17637,6 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
   if (sub->groupClause == NIL)
     return false;                 /* a scalar aggregate: its column is a value
                                    * per world, see below */
-  foreach (lc, sub->targetList) {
-    TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (te->resjunk)
-      continue;
-    if (expr_contains_aggref_walker((Node *)te->expr, NULL))
-      return false;               /* compared against a per-world value */
-  }
   foreach (lc, sub->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
 #if PG_VERSION_NUM >= 180000
@@ -17664,6 +17658,7 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
   /* d is the body as it stands; sub becomes the query that reads it. */
   d = makeNode(Query);
   memcpy(d, sub, sizeof(Query));
+
 
   {
     Index attno = 0;
@@ -19304,6 +19299,48 @@ static bool having_fails_on_no_rows(Node *having) {
          (((Const *)e)->constisnull || !DatumGetBool(((Const *)e)->constvalue));
 }
 
+static bool aggref_values_explodable(const constants_t *constants, Aggref *a);
+static Node *unc_membership_to_join(const constants_t *constants, Query *q,
+                                   Node *conj);
+
+/**
+ * @brief Is @p sub, as @c wrap_body_grouping leaves it, a derived table with
+ *        at least one aggregate column, each one taking values that can be
+ *        enumerated?
+ *
+ * Deduplicating on such a column explodes it into one row per value it takes
+ * in some world (@c aggref_values_explodable); another aggregate cannot be
+ * deduplicated at all.
+ */
+static bool grouped_values_enumerable(const constants_t *constants,
+                                      Query *sub) {
+  RangeTblEntry *r;
+  ListCell *lc;
+  bool any = false;
+
+  if (list_length(sub->rtable) != 1)
+    return false;
+  r = (RangeTblEntry *)linitial(sub->rtable);
+  if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+    return false;
+  foreach (lc, r->subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk || !expr_contains_aggref_walker((Node *)te->expr, NULL))
+      continue;
+    if (!IsA(te->expr, Aggref) ||
+        !aggref_values_explodable(constants, (Aggref *)te->expr))
+      return false;
+    any = true;
+  }
+  return any;
+}
+
+/** @brief Does @p e read the query just above, and nothing of its own level? */
+static bool outer_only(Node *e) {
+  levels_read_ctx r = levels_read(e);
+  return r.above && !r.own && !r.further && !r.opaque;
+}
+
 /**
  * @brief Normalise a correlated @c EXISTS or @c IN whose body groups rows of
  *        its own into the uncorrelated membership test the grouped-body
@@ -19342,6 +19379,7 @@ static bool having_fails_on_no_rows(Node *having) {
 static bool regroup_correlated_body(SubLink *sl, bool neg, List **lifted) {
   Query *sub;
   List *keep = NIL, *lift = NIL, *inner = NIL, *outer = NIL, *ops = NIL;
+  List *hkeep = NIL, *vinner = NIL, *vouter = NIL, *vops = NIL;
   List *conjs, *tl = NIL, *junk = NIL, *parts = NIL;
   ListCell *lc, *lci, *lco, *lcp;
   Index sgref = 0;
@@ -19378,9 +19416,61 @@ static bool regroup_correlated_body(SubLink *sl, bool neg, List **lifted) {
 
   if (sub->havingQual == NULL || neg)
     return false;
-  if (reads_outside_walker((Node *)sub->targetList, 0) ||
-      reads_outside_walker(sub->havingQual, 0))
+  if (reads_outside_walker((Node *)sub->targetList, 0))
     return false;
+#if PG_VERSION_NUM >= 180000
+  /* The HAVING is read in pieces below, on the key expressions themselves. */
+  strip_group_rte_pg18(sub);
+#endif
+  /* A condition of the HAVING comparing a column of the query with a value of
+   * the group -- HAVING e1.d = min(e2.d) -- is that value compared by the
+   * test: it leaves the HAVING for the compared columns. */
+  {
+    List *hconjs = IsA(sub->havingQual, BoolExpr) &&
+                       ((BoolExpr *)sub->havingQual)->boolop == AND_EXPR
+                     ? ((BoolExpr *)sub->havingQual)->args
+                     : list_make1(sub->havingQual);
+    foreach (lc, hconjs) {
+      Node *c = (Node *)lfirst(lc);
+      OpExpr *op = (OpExpr *)c;
+      Node *l, *rt, *in = NULL, *out = NULL;
+      Oid opno;
+
+      if (!reads_outside_walker(c, 0)) {
+        hkeep = lappend(hkeep, c);
+        continue;
+      }
+      if (!IsA(op, OpExpr) || list_length(op->args) != 2 ||
+          contain_volatile_functions(c))
+        return false;
+      l = (Node *)linitial(op->args);
+      rt = (Node *)lsecond(op->args);
+      opno = op->opno;
+      if (outer_only(rt) && !reads_outside_walker(l, 0)) {
+        in = l;
+        out = rt;
+        opno = get_commutator(opno);   /* out op in, below */
+      } else if (outer_only(l) && !reads_outside_walker(rt, 0)) {
+        in = rt;
+        out = l;
+      }
+      if (in == NULL || !OidIsValid(opno))
+        return false;
+      {
+        OpExpr *t = makeNode(OpExpr);
+        t->opno = opno;
+        t->opfuncid = get_opcode(opno);
+        t->opresulttype = BOOLOID;
+        t->opretset = false;
+        t->opcollid = InvalidOid;
+        t->inputcollid = op->inputcollid;
+        t->location = -1;
+        vinner = lappend(vinner, in);
+        vouter = lappend(vouter, out);
+        vops = lappend(vops, t);
+      }
+    }
+  }
 
   conjs = sub->jointree->quals == NULL ? NIL
           : (IsA(sub->jointree->quals, BoolExpr) &&
@@ -19439,14 +19529,31 @@ static bool regroup_correlated_body(SubLink *sl, bool neg, List **lifted) {
     }
     return false;                 /* a correlation of another kind */
   }
-  if (inner == NIL && (sl->subLinkType == EXISTS_SUBLINK || lift == NIL))
+  if (inner == NIL && vinner == NIL &&
+      (sl->subLinkType == EXISTS_SUBLINK || lift == NIL))
     return false;
-  if (sub->groupClause == NIL && !having_fails_on_no_rows(sub->havingQual))
-    return false;
+  /* Over no rows, the body without a GROUP BY still has its row: the HAVING
+   * left, or one of the conditions moved out of it (a strict comparison with a
+   * value that is NULL there), has to fail. */
+  if (sub->groupClause == NIL) {
+    bool fails = hkeep != NIL &&
+                 having_fails_on_no_rows(list_length(hkeep) == 1
+                                           ? (Node *)linitial(hkeep)
+                                           : (Node *)makeBoolExpr(AND_EXPR,
+                                                                  hkeep, -1));
+    forboth (lci, vinner, lcp, vops) {
+      bool ok = true;
+      Node *e = having_over_no_rows_mutator(copyObject((Node *)lfirst(lci)),
+                                            &ok);
+      if (ok && !fails && func_strict(((OpExpr *)lfirst(lcp))->opfuncid)) {
+        e = eval_const_expressions(NULL, e);
+        fails = IsA(e, Const) && ((Const *)e)->constisnull;
+      }
+    }
+    if (!fails)
+      return false;
+  }
 
-#if PG_VERSION_NUM >= 180000
-  strip_group_rte_pg18(sub);
-#endif
   /* The target list: the columns an IN compares, then the correlated ones,
    * then everything else as junk (the keys the grouping names by reference,
    * an EXISTS's own columns). */
@@ -19488,6 +19595,30 @@ static bool regroup_correlated_body(SubLink *sl, bool neg, List **lifted) {
     t->args = list_make2(out, p);
     parts = lappend(parts, t);
   }
+  /* The values the HAVING compared, as columns of the body: no grouping key,
+   * one value per group. */
+  forthree (lci, vinner, lco, vouter, lcp, vops) {
+    Node *in = (Node *)lfirst(lci);
+    Node *out = copyObject((Node *)lfirst(lco));
+    OpExpr *t = (OpExpr *)lfirst(lcp);
+    Param *p = makeNode(Param);
+
+    tl = lappend(tl, makeTargetEntry((Expr *)copyObject(in), ++resno,
+                                     pstrdup("?column?"), false));
+    p->paramkind = PARAM_SUBLINK;
+    p->paramid = resno;
+    p->paramtype = exprType(in);
+    p->paramtypmod = exprTypmod(in);
+    p->paramcollid = exprCollation(in);
+    p->location = -1;
+    IncrementVarSublevelsUp(out, -1, 1);
+    t->args = list_make2(out, p);
+    parts = lappend(parts, t);
+  }
+  sub->havingQual = hkeep == NIL ? NULL
+                    : list_length(hkeep) == 1
+                      ? (Node *)linitial(hkeep)
+                      : (Node *)makeBoolExpr(AND_EXPR, hkeep, -1);
   foreach (lc, junk)
     ((TargetEntry *)lfirst(lc))->resno = ++resno;
   sub->targetList = list_concat(tl, junk);
@@ -19692,8 +19823,15 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
       /* A grouped body of an IN / op ANY / op ALL becomes a derived table the
        * semijoin reads; an EXISTS body is left as it is, its existence test
        * having no column to read and the uncorrelated arm no key to count. */
-      if (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK)
-        wrap_body_grouping(constants, (Query *)sl->subselect);
+      if ((sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK) &&
+          wrap_body_grouping(constants, (Query *)sl->subselect) &&
+          sl->subLinkType == ANY_SUBLINK && !neg &&
+          grouped_values_enumerable(constants, (Query *)sl->subselect))
+        /* A membership test in values of aggregates: a join against those
+         * values, one row per value an aggregate takes in some world -- each
+         * group compared only with the values it can take, where the count
+         * route would compare every group with every outer row. */
+        rewritten = unc_membership_to_join(constants, q, inner);
       /* A set operation as the body, for a MEMBERSHIP test: the derived table
        * is what the semijoin reads.  Not for an existence test, whose
        * decorrelation wants base relations in the body's FROM -- wrapping it
@@ -19702,7 +19840,9 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
        * diagnosis and not a fix. */
       if (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK)
         wrap_body_setop(constants, (Query *)sl->subselect);
-      if (sl->subLinkType == EXISTS_SUBLINK &&
+      if (rewritten != NULL) {
+        /* taken as a join above */
+      } else if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {
         /* EXISTS / NOT EXISTS: correlation already in the subselect WHERE. */
@@ -20619,52 +20759,70 @@ static Node *uncorr_qual_sublink_mutator(Node *node, void *cx) {
 }
 
 /**
- * @brief The left side of a top-level membership test @c "lhs IN (body)" whose
- *        body reads nothing outside it, or @c NULL.
+ * @brief The left sides of a top-level membership test @c "lhs IN (body)" whose
+ *        body reads nothing outside it, one per column of the body, or @c NIL.
  *
  * PostgreSQL gives @c IN an @c ANY_SUBLINK whose testexpr compares the left
- * side with a @c Param standing for the body's column.  Only equality is a
- * membership test; an @c op @c ANY with another operator is a different
+ * side with a @c Param standing for the body's column, or, for a row
+ * @c "(a, b) IN (...)", the conjunction of such comparisons.  Only equality is
+ * a membership test; an @c op @c ANY with another operator is a different
  * condition and is left alone.
  */
-static Node *unc_membership_lhs(Node *node, SubLink **sl_out) {
+static List *unc_membership_lhs(Node *node, SubLink **sl_out) {
   SubLink *sl;
-  OpExpr *op;
-  Node *lhs = NULL;
-  bool saw_param = false;
+  List *parts;
+  Node **lhs;
+  int n, i;
+  List *res = NIL;
   ListCell *lc;
 
   if (node == NULL || !IsA(node, SubLink))
-    return NULL;
+    return NIL;
   sl = (SubLink *)node;
   if (sl->subLinkType != ANY_SUBLINK || !IsA(sl->subselect, Query))
-    return NULL;
-  if (sl->testexpr == NULL || !IsA(sl->testexpr, OpExpr))
-    return NULL;
-  op = (OpExpr *)sl->testexpr;
-  if (list_length(op->args) != 2)
-    return NULL;
-  {
-    char *opname = get_opname(op->opno);
-    bool eq = opname != NULL && strcmp(opname, "=") == 0;
+    return NIL;
+  if (sl->testexpr == NULL)
+    return NIL;
+  parts = (IsA(sl->testexpr, BoolExpr) &&
+           ((BoolExpr *)sl->testexpr)->boolop == AND_EXPR)
+            ? ((BoolExpr *)sl->testexpr)->args
+            : list_make1(sl->testexpr);
+  n = list_length(parts);
+  lhs = palloc0(n * sizeof(Node *));
+  foreach (lc, parts) {
+    OpExpr *op = (OpExpr *)lfirst(lc);
+    Node *side = NULL;
+    Param *p = NULL;
+    ListCell *la;
+    char *opname;
+    bool eq;
+
+    if (!IsA(op, OpExpr) || list_length(op->args) != 2)
+      return NIL;
+    opname = get_opname(op->opno);
+    eq = opname != NULL && strcmp(opname, "=") == 0;
     if (opname != NULL)
       pfree(opname);
     if (!eq)
-      return NULL;
+      return NIL;
+    foreach (la, op->args) {
+      Node *a = (Node *)lfirst(la);
+      if (IsA(a, Param) && ((Param *)a)->paramkind == PARAM_SUBLINK)
+        p = (Param *)a;
+      else
+        side = a;
+    }
+    if (p == NULL || side == NULL || p->paramid < 1 || p->paramid > n ||
+        lhs[p->paramid - 1] != NULL)
+      return NIL;
+    lhs[p->paramid - 1] = side;
   }
-  foreach (lc, op->args) {
-    Node *a = (Node *)lfirst(lc);
-    if (IsA(a, Param) && ((Param *)a)->paramkind == PARAM_SUBLINK)
-      saw_param = true;
-    else
-      lhs = a;
-  }
-  if (!saw_param || lhs == NULL)
-    return NULL;
   if (reads_outside_walker((Node *)sl->subselect, 0))
-    return NULL; /* correlated: the decorrelation's business, not this one */
+    return NIL; /* correlated: the decorrelation's business, not this one */
+  for (i = 0; i < n; ++i)
+    res = lappend(res, lhs[i]);
   *sl_out = sl;
-  return lhs;
+  return res;
 }
 
 /**
@@ -20711,17 +20869,17 @@ static bool unc_from_has_non_relation(Query *q) {
 static Node *unc_membership_to_join(const constants_t *constants, Query *q,
                                    Node *conj) {
   SubLink *sl = NULL;
-  Node *lhs = unc_membership_lhs(conj, &sl);
+  List *lhs = unc_membership_lhs(conj, &sl);
   Query *body, *D;
   RangeTblEntry *d_rte;
   RangeTblRef *rtr;
-  TargetEntry *te;
-  SortGroupClause *sgc;
   Index d_idx;
   bool tracked = false;
-  ListCell *lc;
+  List *distinct = NIL, *eqs = NIL;
+  ListCell *lc, *ll;
+  Index ref = 0;
 
-  if (lhs == NULL)
+  if (lhs == NIL)
     return NULL;
   body = (Query *)sl->subselect;
   if (body->commandType != CMD_SELECT || body->setOperations != NULL ||
@@ -20731,9 +20889,11 @@ static Node *unc_membership_to_join(const constants_t *constants, Query *q,
       body->cteList != NIL || body->havingQual != NULL || body->hasSubLinks ||
       body->sortClause != NIL)
     return NULL;
-  if (list_length(body->targetList) != 1 ||
-      ((TargetEntry *)linitial(body->targetList))->resjunk)
+  if (list_length(body->targetList) != list_length(lhs))
     return NULL;
+  foreach (lc, body->targetList)
+    if (((TargetEntry *)lfirst(lc))->resjunk)
+      return NULL;
   foreach (lc, body->rtable)
     if (oj_rte_has_provsql(constants, (RangeTblEntry *)lfirst(lc)))
       tracked = true;
@@ -20741,15 +20901,18 @@ static Node *unc_membership_to_join(const constants_t *constants, Query *q,
     return NULL; /* untracked body: PostgreSQL's own machinery */
 
   D = (Query *)copyObject(body);
-  te = (TargetEntry *)linitial(D->targetList);
-  te->ressortgroupref = 1;
-  sgc = makeNode(SortGroupClause);
-  sgc->tleSortGroupRef = 1;
-  get_sort_group_operators(exprType((Node *)te->expr), false, true, false,
-                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
-  if (!OidIsValid(sgc->eqop))
-    return NULL;
-  D->distinctClause = list_make1(sgc);
+  foreach (lc, D->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+    te->ressortgroupref = ++ref;
+    sgc->tleSortGroupRef = ref;
+    get_sort_group_operators(exprType((Node *)te->expr), false, true, false,
+                             &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+    if (!OidIsValid(sgc->eqop))
+      return NULL;
+    distinct = lappend(distinct, sgc);
+  }
+  D->distinctClause = distinct;
   D->hasDistinctOn = false;
 
   d_rte = oj_make_subquery_rte(D);
@@ -20759,10 +20922,17 @@ static Node *unc_membership_to_join(const constants_t *constants, Query *q,
   rtr->rtindex = d_idx;
   q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
 
-  return build_binop("=", (Node *)copyObject(lhs),
-                     (Node *)makeVar(d_idx, 1, exprType((Node *)te->expr),
-                                     exprTypmod((Node *)te->expr),
-                                     exprCollation((Node *)te->expr), 0));
+  forboth (lc, D->targetList, ll, lhs) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    eqs = lappend(eqs, build_binop("=", (Node *)copyObject(lfirst(ll)),
+                                   (Node *)makeVar(d_idx, te->resno,
+                                                   exprType((Node *)te->expr),
+                                                   exprTypmod((Node *)te->expr),
+                                                   exprCollation((Node *)te->expr),
+                                                   0)));
+  }
+  return list_length(eqs) == 1 ? (Node *)linitial(eqs)
+                               : (Node *)makeBoolExpr(AND_EXPR, eqs, -1);
 }
 
 /**

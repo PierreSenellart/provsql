@@ -95,8 +95,36 @@ remove_provenance
 k|p
 2|0.125000
 (1 row)
-ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own and the value compared is an aggregate of them, which is one value per possible world
-DETAIL:  provsql-reason: body-groups-aggregate; scope: gap
+remove_provenance
+
+(1 row)
+k|p
+1|0.125000
+2|0.375000
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.375000
+2|0.125000
+3|0.500000
+(3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.031250
+2|0.125000
+3|0.015625
+(3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.250000
+2|0.375000
+(2 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own
 DETAIL:  provsql-reason: body-groups; scope: gap
 remove_provenance

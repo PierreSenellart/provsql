@@ -7,9 +7,10 @@
 -- any FROM subquery -- one row per group, annotated by the group -- and what is
 -- left outside is the existence test the decorrelation already lowers.
 --
--- Sound only where the compared column is a grouping KEY.  Against an
--- aggregate result the comparison reads a value that is one per world, which
--- the semijoin's correlation does not, so those stay refused.
+-- Against an aggregate result the comparison reads a value that is one per
+-- world, per pair of an outer row and a group, as the same query written as a
+-- join does; a membership test in values that can be enumerated is taken as a
+-- join against those values.
 -- ----------------------------------------------------------------------
 
 CREATE TABLE bgt(k int, x int);
@@ -146,9 +147,43 @@ SELECT remove_provenance('bg_r');
 SELECT * FROM bg_r ORDER BY k;
 DROP TABLE bg_r;
 
--- Compared against an aggregate result: refused, and the message still names
--- the body's grouping rather than the derived table the wrap would have made.
-SELECT k FROM bgt WHERE x IN (SELECT max(v) FROM bgu GROUP BY g);
+-- Compared against an aggregate result, a value per world.  The groups by g:
+-- v 2 and 5 (rows a, b), 3 and 3 (c, d), 9 (e).  k=1, x=2 is the max of the
+-- first when a is there and b is not, 0.5 * 0.25; k=2, x=3 that of the second
+-- when c or d is, 0.5 * 0.75; k=3, x=1 is no max in any world, and no answer.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE x IN (SELECT max(v) FROM bgu GROUP BY g);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- Its negation: 0.5 * 0.75, 0.5 * 0.25, and k=3 wherever its row is, 0.5.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE x NOT IN (SELECT max(v) FROM bgu GROUP BY g);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- At least every max, a condition true over no group at all.  k=1, x=2: b
+-- absent, c, d and e absent, 0.5 * 0.5 * 0.25 * 0.5; k=2, x=3: b and e absent,
+-- 0.5 * 0.5 * 0.5; k=3, x=1: every row of bgu absent, 0.5 * 0.5^5.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE x >= ALL (SELECT max(v) FROM bgu GROUP BY g);
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
+-- A HAVING comparing a column of the outer row with an aggregate of the group
+-- is that aggregate compared by the test, beside the correlated key.  k=1:
+-- min 2 needs a, 0.5 * 0.5; k=2: min 3 needs c or d, 0.5 * 0.75; k=3: min 9
+-- is never 1.
+CREATE TABLE bg_r AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE EXISTS (SELECT FROM bgu WHERE bgu.k = bgt.k GROUP BY bgu.k
+                         HAVING bgt.x = min(bgu.v));
+SELECT remove_provenance('bg_r');
+SELECT * FROM bg_r ORDER BY k;
+DROP TABLE bg_r;
 -- An uncorrelated EXISTS body whose groups a HAVING reads: refused as before
 -- (its existence test has no column to read, and no correlation to key by).
 SELECT k FROM bgt WHERE EXISTS (SELECT 1 FROM bgu GROUP BY g HAVING count(*) > 1);
