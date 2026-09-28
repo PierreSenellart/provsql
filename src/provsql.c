@@ -31632,8 +31632,278 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool top_level, bool in_boolean_rewrite,
                                  const InvFreeMarkerCtx *inv_ctx);
 static bool push_agg_conditions_into_subquery(Query *q);
+static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
+                                                 Query *q);
 static void rewrite_shared_ctes(const constants_t *constants, Query *q,
                                 bool in_boolean_rewrite);
+
+/** @brief Is @p sl a subquery over tracked relations that reads nothing of
+ *  the query around it and aggregates without grouping, so that it has
+ *  exactly one row? */
+static bool one_row_uncorrelated_sublink(const constants_t *constants,
+                                         SubLink *sl) {
+  Query *b;
+  if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query) ||
+      sublink_is_inert(sl))
+    return false;
+  b = (Query *)sl->subselect;
+  if (b->commandType != CMD_SELECT || !b->hasAggs || b->groupClause != NIL ||
+      b->groupingSets != NIL || b->havingQual != NULL ||
+      b->setOperations != NULL || b->limitCount != NULL ||
+      b->limitOffset != NULL || b->hasWindowFuncs || b->hasTargetSRFs ||
+      b->targetList == NIL ||
+      ((TargetEntry *)linitial(b->targetList))->resjunk)
+    return false;
+  if (reads_outside_walker((Node *)b, 0))
+    return false;
+  return oj_body_has_tracked_relation(constants, b);
+}
+
+/** @brief Walker: the subqueries of an expression, and whether one of them
+ *  is not a one-row uncorrelated one. */
+typedef struct tl_sublinks_ctx {
+  const constants_t *constants;
+  List *found;
+  bool other;
+} tl_sublinks_ctx;
+
+static bool tl_sublinks_walker(Node *n, void *cx) {
+  tl_sublinks_ctx *c = (tl_sublinks_ctx *)cx;
+  if (n == NULL)
+    return false;
+  if (IsA(n, SubLink)) {
+    if (one_row_uncorrelated_sublink(c->constants, (SubLink *)n))
+      c->found = lappend(c->found, n);
+    else
+      c->other = true;
+    return false;
+  }
+  if (IsA(n, Query))
+    return false;
+  return expression_tree_walker(n, tl_sublinks_walker, cx);
+}
+
+/** @brief Walker: the aggregates of this level of an expression, each once
+ *  (by @c equal). */
+static bool collect_aggrefs_walker(Node *n, void *cx) {
+  List **out = (List **)cx;
+  if (n == NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, SubLink))
+    return expression_tree_walker(((SubLink *)n)->testexpr,
+                                  collect_aggrefs_walker, cx);
+  if (IsA(n, Aggref)) {
+    if (((Aggref *)n)->agglevelsup == 0 && !list_member(*out, n))
+      *out = lappend(*out, n);
+    return false;
+  }
+  return expression_tree_walker(n, collect_aggrefs_walker, cx);
+}
+
+/** @brief Mutator: the aggregates and the grouping keys of a query, as the
+ *  columns of the subquery computing them (range-table entry 1). */
+typedef struct over_grouped_ctx {
+  List *aggs;       /* the aggregates, column n+1 onwards */
+  List *keys;       /* the key expressions, columns 1..n */
+  bool leftover;    /* a column of the query outside them */
+} over_grouped_ctx;
+
+static Node *over_grouped_mutator(Node *n, void *cx) {
+  over_grouped_ctx *c = (over_grouped_ctx *)cx;
+  ListCell *lc;
+  int i;
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, SubLink) || IsA(n, Query))
+    return n;                     /* uncorrelated: nothing of this level */
+  i = 0;
+  foreach (lc, c->keys) {
+    ++i;
+    if (equal(n, lfirst(lc)))
+      return (Node *)makeVar(1, i, exprType(n), exprTypmod(n),
+                             exprCollation(n), 0);
+  }
+  if (IsA(n, Aggref)) {
+    i = list_length(c->keys);
+    foreach (lc, c->aggs) {
+      ++i;
+      if (equal(n, lfirst(lc)))
+        return (Node *)makeVar(1, i, exprType(n), exprTypmod(n),
+                               exprCollation(n), 0);
+    }
+  }
+  if (IsA(n, Var) && ((Var *)n)->varlevelsup == 0)
+    c->leftover = true;
+  return expression_tree_mutator(n, over_grouped_mutator, cx);
+}
+
+/** @brief Mutator: every subquery equal to one of @c from by the column of
+ *  its table. */
+typedef struct sublink_to_var_ctx {
+  List *from;       /* the distinct subqueries */
+  List *vars;       /* the columns that replace them */
+} sublink_to_var_ctx;
+
+static Node *sublink_to_var_mutator(Node *n, void *cx) {
+  sublink_to_var_ctx *c = (sublink_to_var_ctx *)cx;
+  ListCell *lf, *lv;
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, SubLink))
+    forboth (lf, c->from, lv, c->vars)
+      if (equal(n, lfirst(lf)))
+        return copyObject((Node *)lfirst(lv));
+  if (IsA(n, Query))
+    return n;
+  return expression_tree_mutator(n, sublink_to_var_mutator, cx);
+}
+
+/**
+ * @brief An uncorrelated aggregate subquery of the select list as a one-row
+ *        table joined to the query.
+ *
+ * @c "SELECT @c COUNT(a.id) @c * @c 100.0 @c / @c (SELECT @c COUNT(*)
+ * @c FROM @c users) @c FROM @c ..." divides an aggregate of the query by one
+ * of another relation: a subquery that reads nothing around it and
+ * aggregates without grouping has exactly one row, so it is a table of one
+ * row joined to every row of the query, and its value that table's column.
+ * Where the query aggregates, the join has to come after its grouping: the
+ * query's aggregates and grouping keys are computed in a subquery of their
+ * own, with its @c WHERE, @c GROUP @c BY and @c HAVING, and the query reads
+ * them there, joined to the one-row tables.  The expression is then one over
+ * aggregates at one level, arithmetic over them read per world.
+ *
+ * Declined where the select list holds another subquery, the query has a
+ * window, a @c WITH, or reads a column that is neither a grouping key nor
+ * under an aggregate.
+ */
+static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
+                                                 Query *q) {
+  tl_sublinks_ctx tc = {constants, NIL, false};
+  List *distinct = NIL, *vars = NIL;
+  ListCell *lc;
+  sublink_to_var_ctx sc;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks ||
+      q->setOperations != NULL || q->hasWindowFuncs || q->cteList != NIL ||
+      q->groupingSets != NIL || q->hasTargetSRFs || q->jointree == NULL)
+    return false;
+  tl_sublinks_walker((Node *)q->targetList, &tc);
+  if (tc.found == NIL || tc.other)
+    return false;
+
+  if (q->hasAggs || q->groupClause != NIL) {
+    Query *a = (Query *)copyObject(q);
+    over_grouped_ctx oc = {NIL, NIL, false};
+    List *atl = NIL, *otl = NIL;
+    AttrNumber resno = 0;
+    RangeTblEntry *rte;
+    RangeTblRef *rtr;
+    List *colnames = NIL;
+
+#if PG_VERSION_NUM >= 180000
+    strip_group_rte_pg18(a);
+#endif
+    if (a->havingQual != NULL && checkExprHasSubLink(a->havingQual))
+      return false;
+    foreach (lc, a->groupClause) {
+      TargetEntry *te = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
+                                                a->targetList);
+      TargetEntry *nte = (TargetEntry *)copyObject(te);
+      nte->resno = ++resno;
+      nte->resjunk = false;
+      if (nte->resname == NULL)
+        nte->resname = psprintf("key%d", resno);
+      atl = lappend(atl, nte);
+      oc.keys = lappend(oc.keys, te->expr);
+    }
+    collect_aggrefs_walker((Node *)a->targetList, &oc.aggs);
+    foreach (lc, oc.aggs) {
+      ++resno;
+      atl = lappend(atl, makeTargetEntry((Expr *)copyObject(lfirst(lc)),
+                                         resno, psprintf("agg%d", resno),
+                                         false));
+    }
+    foreach (lc, a->targetList) {
+      TargetEntry *te = (TargetEntry *)copyObject(lfirst(lc));
+      te->expr = (Expr *)over_grouped_mutator((Node *)te->expr, &oc);
+      otl = lappend(otl, te);
+    }
+    if (oc.leftover)
+      return false;               /* a column not grouped, read as is */
+
+    a->targetList = atl;
+    a->sortClause = NIL;
+    a->distinctClause = NIL;
+    a->hasDistinctOn = false;
+    a->limitCount = NULL;
+    a->limitOffset = NULL;
+    a->hasSubLinks = checkExprHasSubLink((Node *)a->jointree) ||
+                     checkExprHasSubLink(a->havingQual);
+    foreach (lc, atl)
+      colnames = lappend(colnames, makeString(pstrdup(
+        ((TargetEntry *)lfirst(lc))->resname)));
+
+    rte = makeNode(RangeTblEntry);
+    rte->rtekind = RTE_SUBQUERY;
+    rte->subquery = a;
+    rte->eref = makeAlias("grouped", colnames);
+    rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+    rte->requiredPerms = ACL_SELECT;
+#endif
+    rtr = makeNode(RangeTblRef);
+    rtr->rtindex = 1;
+
+    q->rtable = list_make1(rte);
+#if PG_VERSION_NUM >= 160000
+    q->rteperminfos = NIL;        /* they travel with a's range table */
+#endif
+    q->jointree = makeFromExpr(list_make1(rtr), NULL);
+    q->targetList = otl;
+    q->groupClause = NIL;
+    q->havingQual = NULL;
+    q->hasAggs = false;
+#if PG_VERSION_NUM >= 180000
+    q->hasGroupRTE = false;
+#endif
+  }
+
+  /* Each distinct subquery a one-row table of the FROM clause. */
+  foreach (lc, tc.found)
+    if (!list_member(distinct, lfirst(lc)))
+      distinct = lappend(distinct, lfirst(lc));
+  foreach (lc, distinct) {
+    Query *b = (Query *)copyObject(((SubLink *)lfirst(lc))->subselect);
+    TargetEntry *te = (TargetEntry *)linitial(b->targetList);
+    RangeTblEntry *rte = makeNode(RangeTblEntry);
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+    List *colnames = NIL;
+    ListCell *lt;
+    foreach (lt, b->targetList)
+      colnames = lappend(colnames, makeString(pstrdup(
+        ((TargetEntry *)lfirst(lt))->resname != NULL
+          ? ((TargetEntry *)lfirst(lt))->resname : "?column?")));
+    rte->rtekind = RTE_SUBQUERY;
+    rte->subquery = b;
+    rte->eref = makeAlias("scalar", colnames);
+    rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+    rte->requiredPerms = ACL_SELECT;
+#endif
+    q->rtable = lappend(q->rtable, rte);
+    rtr->rtindex = list_length(q->rtable);
+    q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+    vars = lappend(vars, makeVar(rtr->rtindex, 1, exprType((Node *)te->expr),
+                                 exprTypmod((Node *)te->expr),
+                                 exprCollation((Node *)te->expr), 0));
+  }
+  sc.from = distinct;
+  sc.vars = vars;
+  q->targetList = (List *)sublink_to_var_mutator((Node *)q->targetList, &sc);
+  q->hasSubLinks = query_has_own_sublinks(q);
+  return true;
+}
 
 /** @brief Context of @c single_subquery_reader_walker. */
 typedef struct single_subquery_ctx {
@@ -32108,6 +32378,11 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
    * into its rows. */
   if (provsql_active && push_agg_conditions_into_subquery(q))
     REWRITE_STEP("push_agg_conditions_into_subquery");
+
+  /* An uncorrelated aggregate subquery in the select list, as a one-row
+   * table joined to the query, the query's own aggregates computed below. */
+  if (provsql_active && join_uncorrelated_aggregate_sublinks(constants, q))
+    REWRITE_STEP("join_uncorrelated_aggregate_sublinks");
 
   /* Whole-row values of tracked relations read as any row leave provsql
    * out, before the rewritings below meet them. */

@@ -1646,3 +1646,38 @@ SELECT id, p FROM qi_r ORDER BY id;
 DROP TABLE qi_r;
 SELECT remove_provenance('qi');
 DROP TABLE qi;
+
+-- An uncorrelated aggregate subquery in the select list of a query that
+-- aggregates -- a share of a total -- is a table of one row joined to the
+-- query, its own aggregates computed below the join.  Every row at 1/2: the
+-- count of k = 1 is 0, 1, 2 with 1/4, 1/2, 1/4, the divisor 1, 2, 3 likewise
+-- and independently, so the share is 1 * (1/4 + 1/4 + 1/12) = 7/12; grouped,
+-- a group being there, its count is 4/3 on average for k = 1 (two rows) and
+-- 1 for k = 2 (one).
+CREATE TABLE sq_s(k int);
+CREATE TABLE sq_u(id int);
+INSERT INTO sq_s VALUES (1), (1), (2);
+INSERT INTO sq_u VALUES (1), (2);
+SELECT add_provenance('sq_s');
+SELECT add_provenance('sq_u');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM sq_s;
+  PERFORM set_prob(provenance(), 0.5) FROM sq_u;
+END $$;
+CREATE TABLE sq_r AS
+  SELECT round(expected(count(*) * 1.0
+                        / (SELECT count(*) + 1 FROM sq_u))::numeric, 6) AS e
+  FROM sq_s WHERE k = 1;
+SELECT remove_provenance('sq_r');
+SELECT * FROM sq_r;
+DROP TABLE sq_r;
+CREATE TABLE sq_r AS
+  SELECT k, round(expected(count(*) * 1.0
+                           / (SELECT count(*) + 1 FROM sq_u))::numeric, 6) AS e
+  FROM sq_s GROUP BY k;
+SELECT remove_provenance('sq_r');
+SELECT * FROM sq_r ORDER BY k;
+DROP TABLE sq_r;
+SELECT remove_provenance('sq_s');
+SELECT remove_provenance('sq_u');
+DROP TABLE sq_s, sq_u;

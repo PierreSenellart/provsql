@@ -1026,3 +1026,28 @@ id|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+e
+0.583333
+(1 row)
+remove_provenance
+
+(1 row)
+k|e
+1|0.777778
+2|0.583333
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
