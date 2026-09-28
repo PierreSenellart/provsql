@@ -69,7 +69,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cn_t; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional, comparison-of-aggregates
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 remove_provenance
 
 (1 row)
@@ -77,9 +77,15 @@ WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 tag|s|e_s|d
 a|20|20.0000|01-01-2021
+a|20|20.0000|01-01-2020
+a|20|20.0000|01-01-2021
+b|||
+b|||01-01-2019
 b|||
 c|||
-(3 rows)
+c|||
+c|||
+(9 rows)
 remove_provenance
 
 (1 row)

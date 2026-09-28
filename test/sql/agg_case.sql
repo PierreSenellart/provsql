@@ -168,8 +168,9 @@ SET provsql.active = on;
 DROP TABLE pickf; DROP TABLE cf;
 
 -- A branch whose value is NULL -- an aggregate over the padded rows of an
--- outer join only, a NULL constant -- is NULL in every world; a CASE of a
--- type other than a number (a timestamp) is evaluated as plain SQL.
+-- outer join only, a NULL constant -- is NULL in every world.  A CASE of a
+-- type other than a number (a timestamp) has the truth of its condition
+-- exploded into rows, one per truth, the branch it picks read as plain SQL.
 CREATE TABLE cn_t(tag text, e int, w int);
 CREATE TABLE cn_p(id int, score int, d date);
 INSERT INTO cn_t VALUES ('a', 1, 2), ('b', 3, NULL), ('c', NULL, 4);

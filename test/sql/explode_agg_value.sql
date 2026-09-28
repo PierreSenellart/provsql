@@ -370,16 +370,28 @@ CREATE TABLE ect_case AS
 SELECT remove_provenance('ect_case');
 SELECT g, lbl, round(p::numeric, 6) AS p FROM ect_case ORDER BY g, lbl;
 DROP TABLE ect_case;
+-- Two aggregates compared with each other: exploded as against a constant,
+-- the unknown row being where either has no value.  count(v) > sum(v) is
+-- false wherever the first group has a row, 0.75, and the single row of the
+-- third, 0.5; the second holds only NULLs, whose sum is NULL, so unknown
+-- wherever it has a row, 0.75.
+CREATE TABLE ect_two AS
+  SELECT g, count(v) > sum(v) AS f, probability(provenance()) AS p
+  FROM ect GROUP BY g;
+SELECT remove_provenance('ect_two');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_two WHERE p > 0 ORDER BY g, f;
+DROP TABLE ect_two;
 -- Declined, and the value read as plain SQL reads it (one row per group, no
--- (*) marker): two aggregates compared with each other, and an aggregate whose
--- NULL-ness is not the reading of "no value" (stddev over a single row).
+-- (*) marker): an aggregate whose NULL-ness is not the reading of "no value"
+-- (stddev over a single row).
 SET client_min_messages = error;
 CREATE TABLE ect_no AS
-  SELECT g, count(v) > sum(v) AS f1, stddev(v) > 1 AS f2
+  SELECT g, stddev(v) > 1 AS f2
   FROM ect GROUP BY g;
 RESET client_min_messages;
 SELECT remove_provenance('ect_no');
-SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2
+SELECT g, coalesce(f2::text,'NULL') AS f2
 FROM ect_no ORDER BY g;
 DROP TABLE ect_no;
 -- A comparison against a grouping column is one value per group, the same in

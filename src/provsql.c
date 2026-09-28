@@ -25280,6 +25280,19 @@ static bool varies_in_group_walker(Node *n, void *ctx) {
   return expression_tree_walker(n, varies_in_group_walker, ctx);
 }
 
+/** @brief Is @p ar an aggregate whose comparison the explosion of a truth
+ *  reads (the kinds @c agg_cmp_against_constant accepts)? */
+static bool aggref_truth_comparable(Aggref *ar) {
+  char *name = get_func_name(ar->aggfnoid);
+  bool ok = name != NULL &&
+            (strcmp(name, "count") == 0 || strcmp(name, "sum") == 0 ||
+             strcmp(name, "avg") == 0 || strcmp(name, "min") == 0 ||
+             strcmp(name, "max") == 0 || strcmp(name, "choose") == 0);
+  if (name != NULL)
+    pfree(name);
+  return ok;
+}
+
 static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
                                      bool *nullable, Node **other_out) {
   OpExpr *op;
@@ -25298,14 +25311,26 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
   r = (Node *)lsecond(op->args);
   l_agg = contain_aggs_of_level(l, 0);
   r_agg = contain_aggs_of_level(r, 0);
-  if (l_agg == r_agg)  /* two aggregates, or none */
+  if (!l_agg && !r_agg)
     return false;
-  /* The other side must be one value per group, the same in every world: a
-   * constant, or an expression over the grouping columns (a target to meet),
-   * but no subquery, parameter or volatile function. */
-  other = l_agg ? r : l;
-  if (varies_in_group_walker(other, NULL) || contain_volatile_functions(other))
-    return false;
+  if (l_agg && r_agg) {
+    /* Two aggregates compared with each other -- SUM(u) >= SUM(g) -- each
+     * bare: the comparison is unknown where either has no value, which the
+     * unknown row tests on both (agg_cmp_unknown_condition). */
+    Node *pr = peel_agg_casts(r);
+    if (pr == NULL || !IsA(pr, Aggref) ||
+        !aggref_truth_comparable((Aggref *)pr))
+      return false;
+    other = r;
+  } else {
+    /* The other side must be one value per group, the same in every world: a
+     * constant, or an expression over the grouping columns (a target to
+     * meet), but no subquery, parameter or volatile function. */
+    other = l_agg ? r : l;
+    if (varies_in_group_walker(other, NULL) ||
+        contain_volatile_functions(other))
+      return false;
+  }
 
   agg_side = peel_agg_casts(l_agg ? l : r);
   if (agg_side == NULL || !IsA(agg_side, Aggref))
@@ -31309,8 +31334,152 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
                                  bool top_level, bool in_boolean_rewrite,
                                  const InvFreeMarkerCtx *inv_ctx);
+static bool push_agg_conditions_into_subquery(Query *q);
 static void rewrite_shared_ctes(const constants_t *constants, Query *q,
                                 bool in_boolean_rewrite);
+
+/** @brief Context of @c single_subquery_reader_walker. */
+typedef struct single_subquery_ctx {
+  Index rt;          /**< The one range-table entry read, or 0 */
+  bool other;        /**< Something else is read: another entry, an outer
+                          level, a subquery, a volatile function */
+} single_subquery_ctx;
+
+static bool single_subquery_reader_walker(Node *n, void *cx) {
+  single_subquery_ctx *c = (single_subquery_ctx *)cx;
+  if (n == NULL)
+    return false;
+  if (IsA(n, Var)) {
+    Var *v = (Var *)n;
+    if (v->varlevelsup != 0 || v->varattno <= 0 ||
+        (c->rt != 0 && c->rt != v->varno))
+      c->other = true;
+    else
+      c->rt = v->varno;
+    return false;
+  }
+  if (IsA(n, SubLink) || IsA(n, Aggref) || IsA(n, WindowFunc) ||
+      IsA(n, Param) || IsA(n, GroupingFunc) || IsA(n, PlaceHolderVar)) {
+    c->other = true;
+    return false;
+  }
+  return expression_tree_walker(n, single_subquery_reader_walker, cx);
+}
+
+/** @brief Walker: a comparison, or a @c CASE, below @p n. */
+static bool has_condition_walker(Node *n, void *cx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, CaseExpr) ||
+      (IsA(n, OpExpr) && ((OpExpr *)n)->opresulttype == BOOLOID))
+    return true;
+  return expression_tree_walker(n, has_condition_walker, cx);
+}
+
+/** @brief Mutator: the columns of the subquery @c rt as its own expressions. */
+typedef struct subst_sub_cols_ctx {
+  Index rt;
+  List *tl;
+} subst_sub_cols_ctx;
+
+static Node *subst_sub_cols_mutator(Node *n, void *cx) {
+  subst_sub_cols_ctx *c = (subst_sub_cols_ctx *)cx;
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, Var) && ((Var *)n)->varno == c->rt &&
+      ((Var *)n)->varlevelsup == 0)
+    return copyObject((Node *)list_nth_node(TargetEntry, c->tl,
+                                            ((Var *)n)->varattno - 1)->expr);
+  return expression_tree_mutator(n, subst_sub_cols_mutator, cx);
+}
+
+/**
+ * @brief Compute in a grouped subquery a condition the query reads over its
+ *        aggregates.
+ *
+ * @c "SELECT @c CASE @c WHEN @c closed @c > @c reopened @c THEN @c 'closed'
+ * @c ELSE @c 'open' @c END @c FROM @c (SELECT @c ..., @c sum(...) @c AS
+ * @c closed, @c sum(...) @c AS @c reopened @c ... @c GROUP @c BY @c ...)
+ * @c t": the expression reads the one subquery and nothing else, so it is the
+ * same computed there, as a column of its own, and read as that column here
+ * -- one row of the query per row of the subquery.  In the subquery the
+ * comparison is one of its aggregates, whose truth per world explodes into
+ * its rows as it does in any grouped query, where read here it would be the
+ * value on the database as it is.
+ *
+ * Only a select-list expression holding a comparison or a @c CASE that reads
+ * an aggregate column of that subquery, which groups and holds no @c LIMIT,
+ * @c DISTINCT, set operation, window, or column that is not its own.
+ *
+ * @return  Whether an expression moved.
+ */
+static bool push_agg_conditions_into_subquery(Query *q) {
+  ListCell *lc;
+  bool moved = false;
+
+  if (q->commandType != CMD_SELECT || q->hasAggs || q->groupClause != NIL ||
+      q->hasWindowFuncs || q->setOperations != NULL)
+    return false;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    single_subquery_ctx c = {0, false};
+    RangeTblEntry *rte;
+    Query *d;
+    ListCell *ld;
+    bool reads_agg = false;
+    subst_sub_cols_ctx sc;
+    TargetEntry *nte;
+
+    if (te->resjunk || te->ressortgroupref != 0 ||
+        !has_condition_walker((Node *)te->expr, NULL))
+      continue;
+    single_subquery_reader_walker((Node *)te->expr, &c);
+    if (c.other || c.rt == 0 || contain_volatile_functions((Node *)te->expr))
+      continue;
+    rte = rt_fetch(c.rt, q->rtable);
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || rte->lateral)
+      continue;
+    d = rte->subquery;
+    if (d->commandType != CMD_SELECT || !d->hasAggs ||
+        d->setOperations != NULL || d->hasWindowFuncs ||
+        d->distinctClause != NIL || d->limitCount != NULL ||
+        d->limitOffset != NULL || d->groupingSets != NIL ||
+        d->hasTargetSRFs)
+      continue;
+    foreach (ld, d->targetList)
+      if (((TargetEntry *)lfirst(ld))->resjunk)
+        break;
+    if (ld != NULL)
+      continue;                   /* a junk column: the numbering would move */
+    {
+      /* The columns the expression reads: one an aggregate at least. */
+      List *vars = pull_var_clause((Node *)te->expr, 0);
+      ListCell *lv;
+      foreach (lv, vars) {
+        TargetEntry *dte = list_nth_node(TargetEntry, d->targetList,
+                                         ((Var *)lfirst(lv))->varattno - 1);
+        if (contain_aggs_of_level((Node *)dte->expr, 0))
+          reads_agg = true;
+      }
+    }
+    if (!reads_agg)
+      continue;
+    sc.rt = c.rt;
+    sc.tl = d->targetList;
+    nte = makeTargetEntry(
+      (Expr *)subst_sub_cols_mutator(copyObject((Node *)te->expr), &sc),
+      list_length(d->targetList) + 1,
+      pstrdup(te->resname != NULL ? te->resname : "?column?"), false);
+    d->targetList = lappend(d->targetList, nte);
+    rte->eref->colnames = lappend(rte->eref->colnames,
+                                  makeString(pstrdup(nte->resname)));
+    te->expr = (Expr *)makeVar(c.rt, nte->resno, exprType((Node *)nte->expr),
+                               exprTypmod((Node *)nte->expr),
+                               exprCollation((Node *)nte->expr), 0);
+    moved = true;
+  }
+  return moved;
+}
 
 static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
@@ -31636,6 +31805,12 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
   if (provsql_active)
     rewrite_shared_ctes(constants, q, in_boolean_rewrite);
   REWRITE_STEP("inline_ctes");
+
+  /* A condition over the aggregates of a grouped subquery, read here: computed
+   * in that subquery, where the truth of a comparison of aggregates explodes
+   * into its rows. */
+  if (provsql_active && push_agg_conditions_into_subquery(q))
+    REWRITE_STEP("push_agg_conditions_into_subquery");
 
   /* Whole-row values of tracked relations read as any row leave provsql
    * out, before the rewritings below meet them. */
