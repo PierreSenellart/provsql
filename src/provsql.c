@@ -31752,8 +31752,284 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
 static bool push_agg_conditions_into_subquery(Query *q);
 static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
                                                  Query *q);
+static bool unlateral_left_joins(Query *q);
 static void rewrite_shared_ctes(const constants_t *constants, Query *q,
                                 bool in_boolean_rewrite);
+
+/** @brief Mutator: a conjunct of a lateral body moved to the @c ON of its
+ *  join -- the body's columns as those of the join's arm, the query's own
+ *  one level down. */
+typedef struct lateral_on_ctx {
+  Index s_idx;      /* the arm */
+  Query *body;      /* the body, whose select list gains what it lacks */
+  RangeTblEntry *rte; /* the arm's entry, whose column names follow */
+  bool failed;      /* a column of the body it cannot show */
+} lateral_on_ctx;
+
+static Node *lateral_on_mutator(Node *n, void *cx) {
+  lateral_on_ctx *c = (lateral_on_ctx *)cx;
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, Var)) {
+    Var *v = (Var *)n;
+    if (v->varlevelsup == 1) {
+      Var *nv = (Var *)copyObject(v);
+      nv->varlevelsup = 0;
+      return (Node *)nv;
+    }
+    if (v->varlevelsup == 0) {
+      ListCell *lc;
+      TargetEntry *nte;
+      foreach (lc, c->body->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc);
+        if (!te->resjunk && equal(te->expr, v))
+          return (Node *)makeVar(c->s_idx, te->resno, v->vartype,
+                                 v->vartypmod, v->varcollid, 0);
+      }
+      /* A column the body reads but does not show: shown, after the others
+       * (a junk column would come after it, and move). */
+      foreach (lc, c->body->targetList)
+        if (((TargetEntry *)lfirst(lc))->resjunk) {
+          c->failed = true;
+          return n;
+        }
+      nte = makeTargetEntry((Expr *)copyObject(v),
+                            list_length(c->body->targetList) + 1,
+                            pstrdup("provsql_lateral_key"), false);
+      c->body->targetList = lappend(c->body->targetList, nte);
+      c->rte->eref->colnames = lappend(c->rte->eref->colnames,
+                                       makeString(pstrdup(nte->resname)));
+      return (Node *)makeVar(c->s_idx, nte->resno, v->vartype, v->vartypmod,
+                             v->varcollid, 0);
+    }
+    c->failed = true;
+    return n;
+  }
+  return expression_tree_mutator(n, lateral_on_mutator, cx);
+}
+
+/** @brief Mutator: each column of the arm @c s_idx as the scalar subquery
+ *  giving it. */
+typedef struct lateral_scalar_ctx {
+  Index s_idx;
+  Query *body;
+  bool failed;      /* a whole-row reference */
+} lateral_scalar_ctx;
+
+static Node *lateral_scalar_mutator(Node *n, void *cx) {
+  lateral_scalar_ctx *c = (lateral_scalar_ctx *)cx;
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, Var) && ((Var *)n)->varno == c->s_idx &&
+      ((Var *)n)->varlevelsup == 0) {
+    Var *v = (Var *)n;
+    Query *b;
+    TargetEntry *te;
+    SubLink *sl;
+    if (v->varattno < 1 || v->varattno > list_length(c->body->targetList)) {
+      c->failed = true;
+      return n;
+    }
+    b = (Query *)copyObject(c->body);
+    te = (TargetEntry *)copyObject(list_nth(b->targetList, v->varattno - 1));
+    te->resjunk = false;
+    if (b->limitCount == NULL) {
+      te->resno = 1;
+      b->targetList = list_make1(te);
+      b->sortClause = NIL;
+    } else {
+      /* The value, then what the order reads, as junk. */
+      List *tl = list_make1(te);
+      ListCell *lk;
+      AttrNumber r = 1;
+      te->resno = 1;
+      foreach (lk, b->targetList) {
+        TargetEntry *k = (TargetEntry *)lfirst(lk);
+        if (k->ressortgroupref != 0 &&
+            k->ressortgroupref != te->ressortgroupref) {
+          TargetEntry *jk = (TargetEntry *)copyObject(k);
+          jk->resno = ++r;
+          jk->resjunk = true;
+          tl = lappend(tl, jk);
+        }
+      }
+      b->targetList = tl;
+    }
+    sl = makeNode(SubLink);
+    sl->subLinkType = EXPR_SUBLINK;
+    sl->subLinkId = 0;
+    sl->testexpr = NULL;
+    sl->operName = NIL;
+    sl->subselect = (Node *)b;
+    sl->location = -1;
+    return (Node *)sl;
+  }
+  return expression_tree_mutator(n, lateral_scalar_mutator, cx);
+}
+
+/**
+ * @brief @c unlateral_left_joins over a join-tree node; returns what replaces
+ *        it.
+ */
+static Node *unlateral_node(Query *q, Node *n, bool *changed) {
+  JoinExpr *je;
+  RangeTblEntry *rte;
+  Query *sub;
+  Index s_idx;
+
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)n)->fromlist)
+      lfirst(lc) = unlateral_node(q, (Node *)lfirst(lc), changed);
+    return n;
+  }
+  if (!IsA(n, JoinExpr))
+    return n;
+  je = (JoinExpr *)n;
+  je->larg = unlateral_node(q, je->larg, changed);
+  je->rarg = unlateral_node(q, je->rarg, changed);
+  if (je->jointype != JOIN_LEFT || !IsA(je->rarg, RangeTblRef))
+    return n;
+  s_idx = ((RangeTblRef *)je->rarg)->rtindex;
+  rte = rt_fetch(s_idx, q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || !rte->lateral || rte->subquery == NULL)
+    return n;
+  sub = rte->subquery;
+
+  /* Reading nothing around it: an ordinary join. */
+  if (!reads_outside_walker((Node *)sub, 0)) {
+    rte->lateral = false;
+    *changed = true;
+    return n;
+  }
+  if (sub->commandType != CMD_SELECT || sub->setOperations != NULL ||
+      sub->hasWindowFuncs || sub->hasTargetSRFs || sub->cteList != NIL ||
+      sub->limitOffset != NULL || sub->distinctClause != NIL ||
+      sub->groupingSets != NIL || sub->jointree == NULL)
+    return n;
+  /* ORDER BY ... LIMIT 1: at most one row, the first in that order. */
+  if (sub->limitCount != NULL &&
+      (!oj_limit_count_is_one(sub->limitCount) || sub->sortClause == NIL ||
+       sub->hasAggs))
+    return n;
+
+  /* A select-project-join body correlated by conjuncts of its WHERE: those
+   * conjuncts are conditions of the join, the body then reading nothing
+   * around it. */
+  if (!sub->hasAggs && sub->groupClause == NIL && sub->havingQual == NULL &&
+      sub->limitCount == NULL && !sub->hasSubLinks &&
+      sub->jointree->quals != NULL &&
+      !reads_outside_walker((Node *)sub->targetList, 0)) {
+    Node *quals = sub->jointree->quals;
+    List *conjs = IsA(quals, BoolExpr) &&
+                      ((BoolExpr *)quals)->boolop == AND_EXPR
+                    ? ((BoolExpr *)quals)->args : list_make1(quals);
+    List *keep = NIL, *moved = NIL;
+    lateral_on_ctx lc = {s_idx, sub, rte, false};
+    ListCell *l;
+    Query *saved = (Query *)copyObject(sub);
+    List *saved_names = list_copy(rte->eref->colnames);
+    foreach (l, conjs) {
+      Node *cj = (Node *)lfirst(l);
+      if (!reads_outside_walker(cj, 0)) {
+        keep = lappend(keep, cj);
+        continue;
+      }
+      moved = lappend(moved, lateral_on_mutator(copyObject(cj), &lc));
+    }
+    sub->jointree->quals = keep == NIL ? NULL
+                           : list_length(keep) == 1 ? (Node *)linitial(keep)
+                           : (Node *)makeBoolExpr(AND_EXPR, keep, -1);
+    if (!lc.failed && !reads_outside_walker((Node *)sub, 0)) {
+      if (je->quals != NULL &&
+          !(IsA(je->quals, Const) &&
+            !((Const *)je->quals)->constisnull &&
+            DatumGetBool(((Const *)je->quals)->constvalue)))
+        moved = lcons(je->quals, moved);
+      je->quals = list_length(moved) == 1 ? (Node *)linitial(moved)
+                  : (Node *)makeBoolExpr(AND_EXPR, moved, -1);
+      rte->lateral = false;
+      *changed = true;
+      return n;
+    }
+    rte->subquery = saved;        /* not this shape after all */
+    rte->eref->colnames = saved_names;
+    sub = saved;
+  }
+
+  /* An aggregate without grouping has exactly one row, and a body ORDER BY
+   * ... LIMIT 1 at most one: joined ON TRUE, with the NULLs of the padding
+   * where there is none, each of its columns is the scalar subquery giving
+   * it. */
+  if (((sub->hasAggs && sub->groupClause == NIL && sub->havingQual == NULL) ||
+       (sub->limitCount != NULL && !sub->hasAggs && sub->groupClause == NIL)) &&
+      !q->hasSubLinks && !oj_refs_join_index(q, je->rtindex) &&
+      (je->quals == NULL ||
+       (IsA(je->quals, Const) && !((Const *)je->quals)->constisnull &&
+        DatumGetBool(((Const *)je->quals)->constvalue)))) {
+    lateral_scalar_ctx sc = {s_idx, sub, false};
+    List *tl = (List *)lateral_scalar_mutator(
+      copyObject((Node *)q->targetList), &sc);
+    Node *larg = lateral_scalar_mutator(copyObject(je->larg), &sc);
+    Node *where = q->jointree->quals != NULL
+                    ? lateral_scalar_mutator(copyObject(q->jointree->quals), &sc)
+                    : NULL;
+    Node *having = q->havingQual != NULL
+                     ? lateral_scalar_mutator(copyObject(q->havingQual), &sc)
+                     : NULL;
+    if (sc.failed)
+      return n;
+    q->targetList = tl;
+    q->jointree->quals = where;
+    q->havingQual = having;
+    q->hasSubLinks = true;
+    oj_neutralize_orphan_arm(rte);
+    /* The join is gone from the tree, and nothing reads it
+     * (oj_refs_join_index): its range-table entry, which the planner counts
+     * outer joins by and whose columns name the arm's, is no join any more. */
+    {
+      RangeTblEntry *jr = rt_fetch(je->rtindex, q->rtable);
+#if PG_VERSION_NUM >= 120000
+      jr->rtekind = RTE_RESULT;
+      jr->eref = makeAlias("*RESULT*", NIL);
+#else
+      jr->eref = makeAlias(jr->eref->aliasname, NIL);
+#endif
+      jr->jointype = JOIN_INNER;
+      jr->joinaliasvars = NIL;
+#if PG_VERSION_NUM >= 130000
+      jr->joinleftcols = jr->joinrightcols = NIL;
+      jr->joinmergedcols = 0;
+#endif
+    }
+    *changed = true;
+    return larg;
+  }
+  return n;
+}
+
+/**
+ * @brief A @c LEFT @c JOIN @c LATERAL written as what it is.
+ *
+ * Three shapes are an ordinary construct written as a lateral join: a body
+ * that reads nothing of the query around it is an outer join; a body that
+ * only selects, projects and joins, correlated by conjuncts of its
+ * @c WHERE, is the outer join of its relations on those conjuncts; and a body
+ * that aggregates without grouping, joined @c ON @c TRUE, has exactly one
+ * row, so its columns are the scalar subqueries giving them.  Each is then
+ * lowered as the construct it is.
+ *
+ * @return  Whether a join changed.
+ */
+static bool unlateral_left_joins(Query *q) {
+  bool changed = false;
+  if (q->commandType != CMD_SELECT || q->jointree == NULL)
+    return false;
+  unlateral_node(q, (Node *)q->jointree, &changed);
+  return changed;
+}
 
 /** @brief Is @p sl a subquery over tracked relations that reads nothing of
  *  the query around it and aggregates without grouping, so that it has
@@ -32501,6 +32777,11 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
    * table joined to the query, the query's own aggregates computed below. */
   if (provsql_active && join_uncorrelated_aggregate_sublinks(constants, q))
     REWRITE_STEP("join_uncorrelated_aggregate_sublinks");
+
+  /* A LEFT JOIN LATERAL that is an ordinary outer join, or a scalar
+   * subquery, written so. */
+  if (provsql_active && unlateral_left_joins(q))
+    REWRITE_STEP("unlateral_left_joins");
 
   /* Whole-row values of tracked relations read as any row leave provsql
    * out, before the rewritings below meet them. */

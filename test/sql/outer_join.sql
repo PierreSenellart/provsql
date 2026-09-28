@@ -527,3 +527,48 @@ SELECT * FROM oj_r ORDER BY g;
 DROP TABLE oj_r;
 SELECT remove_provenance('oj_c');
 DROP TABLE oj_c;
+
+-- A LEFT JOIN LATERAL whose body only selects and joins, correlated by its
+-- WHERE, is the outer join on that correlation; one whose body aggregates
+-- without grouping, joined ON TRUE, has exactly one row, each column the
+-- scalar subquery giving it.  oj_l certain, both rows of oj_m at 1/2: key 1
+-- meets 10 and 20 at 1/2 each, no row at 1/4; key 2 never meets one.  The
+-- keys matched by no row: 1 at 1/4, 2 always.
+CREATE TABLE oj_l(k int);
+CREATE TABLE oj_m(k int, v int);
+INSERT INTO oj_l VALUES (1), (2);
+INSERT INTO oj_m VALUES (1, 10), (1, 20);
+SELECT add_provenance('oj_l');
+SELECT add_provenance('oj_m');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM oj_m; END $$;
+CREATE TABLE oj_r AS
+  SELECT l.k, m.v, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM oj_l l LEFT JOIN LATERAL (SELECT * FROM oj_m m WHERE m.k = l.k) m
+       ON true;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r ORDER BY k, v;
+DROP TABLE oj_r;
+CREATE TABLE oj_r AS
+  SELECT l.k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM oj_l l
+  LEFT JOIN LATERAL (SELECT count(*) AS c FROM oj_m m WHERE m.k = l.k) a
+       ON true
+  WHERE a.c = 0;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r ORDER BY k;
+DROP TABLE oj_r;
+-- A body ORDER BY ... LIMIT 1 has at most one row, the first in that order:
+-- each column the scalar subquery giving it.  The greatest v of key 1 is 20
+-- where the row of 20 is there, 1/2; key 2 has none.
+CREATE TABLE oj_r AS
+  SELECT l.k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM oj_l l
+  LEFT JOIN LATERAL (SELECT m.v FROM oj_m m WHERE m.k = l.k
+                     ORDER BY m.v DESC LIMIT 1) t ON true
+  WHERE t.v > 15;
+SELECT remove_provenance('oj_r');
+SELECT * FROM oj_r WHERE p > 0 ORDER BY k;
+DROP TABLE oj_r;
+SELECT remove_provenance('oj_l');
+SELECT remove_provenance('oj_m');
+DROP TABLE oj_l, oj_m;
