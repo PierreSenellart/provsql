@@ -13836,6 +13836,28 @@ static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
  * -- Postgres evaluates the sublink normally (correct value), the row keeps the
  * outer relation's provenance, and the subquery's data is treated as certain.
  */
+/** @brief The subquery of @c "COALESCE((SELECT ...), d, ...)" whose other
+ *  arguments are the same in every world (constants, columns of the row), or
+ *  @c NULL. */
+static SubLink *coalesced_sublink(Node *n) {
+  CoalesceExpr *co;
+  Node *first;
+  ListCell *lc;
+  if (n == NULL || !IsA(n, CoalesceExpr))
+    return NULL;
+  co = (CoalesceExpr *)n;
+  first = (Node *)linitial(co->args);
+  if (IsA(first, RelabelType))
+    first = (Node *)((RelabelType *)first)->arg;
+  if (!IsA(first, SubLink) || ((SubLink *)first)->subLinkType != EXPR_SUBLINK)
+    return NULL;
+  for_each_from(lc, co->args, 1)
+    if (checkExprHasSubLink((Node *)lfirst(lc)) ||
+        contain_volatile_functions((Node *)lfirst(lc)))
+      return NULL;
+  return (SubLink *)first;
+}
+
 static void collect_direct_qual_sublinks(Node *node, List **out) {
   if (node == NULL)
     return;
@@ -13852,16 +13874,30 @@ static void collect_direct_qual_sublinks(Node *node, List **out) {
   }
   if (IsA(node, OpExpr)) {
     /* A comparison whose direct operand is the sublink (a coercion in between is
-     * fine, but arithmetic is not -- that makes the sublink nested). */
+     * fine, but arithmetic is not -- that makes the sublink nested), or a
+     * COALESCE of it with a default: the HAVING it moves into reads a COALESCE
+     * over an aggregate as it does in any query. */
     ListCell *lc;
     foreach (lc, ((OpExpr *)node)->args) {
       Node *a = (Node *)lfirst(lc);
+      SubLink *d;
       if (IsA(a, RelabelType))
         a = (Node *)((RelabelType *)a)->arg;
       if (IsA(a, SubLink))
         *out = lappend(*out, a);
+      else if ((d = coalesced_sublink(a)) != NULL)
+        *out = lappend(*out, d);
     }
     return;
+  }
+  /* (SELECT v ...) IS [NOT] NULL: whether the value is there, which the HAVING
+   * it moves into reads on the aggregate that value is. */
+  if (IsA(node, NullTest) && !((NullTest *)node)->argisrow) {
+    Node *a = (Node *)((NullTest *)node)->arg;
+    if (IsA(a, RelabelType))
+      a = (Node *)((RelabelType *)a)->arg;
+    if (IsA(a, SubLink))
+      *out = lappend(*out, a);
   }
 }
 
@@ -21838,6 +21874,10 @@ static bool oj_tl_sublink_in_arith(Node *node, SubLink *sl) {
       if (oj_tl_sublink_in_arith((Node *)lfirst(lc), sl))
         return true;
   }
+  /* COALESCE((SELECT ...), 0): the COALESCE over the aggregate the value is,
+   * which the subquery's lowering reads as it does in any query. */
+  if (coalesced_sublink(node) == sl)
+    return true;
   /* A term over the value: CASE WHEN <the comparison above> THEN ... .  The
    * lifted aggregate then sits in the CASE, which the agg_case lowering and the
    * explosion of a comparison's truth both read. */
