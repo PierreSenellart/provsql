@@ -39,6 +39,7 @@
 #include "executor/executor.h"
 #if PG_VERSION_NUM >= 120000
 #include "optimizer/optimizer.h"
+#include "optimizer/clauses.h"          /* contain_nonstrict_functions */
 #else
 #include "optimizer/var.h"              /* contain_vars_of_level */
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
@@ -8138,6 +8139,262 @@ static Node *deviation_mutator(Node *node, void *cx) {
     return node;    /* its argument is of the level below: leave it alone */
   }
   return expression_tree_mutator(node, deviation_mutator, cx);
+}
+
+/** @brief Walker: the aggregates of this level below @p n, counted, the
+ *  first kept (none descended into). */
+typedef struct count_aggs_ctx {
+  int n;
+  Aggref *first;
+} count_aggs_ctx;
+
+static bool count_aggs_walker(Node *n, void *cx) {
+  count_aggs_ctx *c = (count_aggs_ctx *)cx;
+  if (n == NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, Aggref)) {
+    if (((Aggref *)n)->agglevelsup == 0 && c->n++ == 0)
+      c->first = (Aggref *)n;
+    return false;
+  }
+  return expression_tree_walker(n, count_aggs_walker, cx);
+}
+
+/** @brief Walker: a step of @p n that is not arithmetic over numbers -- an
+ *  operation, a function or a cast whose value or argument is of another type
+ *  (a date, a text, an interval).  Arithmetic over numbers is carried by the
+ *  arithmetic gate, which the moments read; the rest is lifted into a
+ *  @c choose() (@c lift_min_max_mutator). */
+static bool non_numeric_step_walker(Node *n, void *cx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, FuncExpr) || IsA(n, OpExpr) || IsA(n, CoerceViaIO) ||
+      IsA(n, RelabelType) || IsA(n, CoerceToDomain) || IsA(n, ArrayCoerceExpr)) {
+    ListCell *lc;
+    List *args = IsA(n, FuncExpr) ? ((FuncExpr *)n)->args
+                 : IsA(n, OpExpr) ? ((OpExpr *)n)->args : NIL;
+    if (TypeCategory(exprType(n)) != TYPCATEGORY_NUMERIC)
+      return true;
+    foreach (lc, args)
+      if (TypeCategory(exprType((Node *)lfirst(lc))) != TYPCATEGORY_NUMERIC)
+        return true;
+    if (IsA(n, CoerceViaIO) &&
+        TypeCategory(exprType((Node *)((CoerceViaIO *)n)->arg)) !=
+          TYPCATEGORY_NUMERIC)
+      return true;
+  }
+  return expression_tree_walker(n, non_numeric_step_walker, cx);
+}
+
+/** @brief Mutator: every copy of @c from (an Aggref) replaced by @c to. */
+typedef struct replace_node_ctx {
+  Node *from;
+  Node *to;
+} replace_node_ctx;
+
+static Node *replace_node_mutator(Node *n, void *cx) {
+  replace_node_ctx *c = (replace_node_ctx *)cx;
+  if (n == NULL)
+    return NULL;
+  if (n == c->from)
+    return copyObject(c->to);
+  return expression_tree_mutator(n, replace_node_mutator, cx);
+}
+
+/** @brief Is @p a a @c min or a @c max of PostgreSQL's over one value, with
+ *  no @c DISTINCT, @c ORDER @c BY or @c FILTER?  @p is_max says which. */
+static bool plain_min_max(Aggref *a, bool *is_max) {
+  char *name;
+  bool ok;
+  if (list_length(a->args) != 1 || a->aggdistinct != NIL ||
+      a->aggorder != NIL || a->aggfilter != NULL ||
+      a->aggkind != AGGKIND_NORMAL ||
+      get_func_namespace(a->aggfnoid) != PG_CATALOG_NAMESPACE)
+    return false;
+  name = get_func_name(a->aggfnoid);
+  ok = name != NULL && (strcmp(name, "min") == 0 || strcmp(name, "max") == 0);
+  if (ok)
+    *is_max = strcmp(name, "max") == 0;
+  if (name != NULL)
+    pfree(name);
+  return ok;
+}
+
+/**
+ * @brief @c EXTRACT(EPOCH @c FROM @c a @c - @c b) over timestamps, as
+ *        @c EXTRACT(EPOCH @c FROM @c a) @c - @c EXTRACT(EPOCH @c FROM @c b).
+ *
+ * The difference of two timestamps is an interval of days and time, whose
+ * seconds are the difference of their seconds: the two are equal.  Read so,
+ * each side is a function of one aggregate, which
+ * @c lift_min_max_functions carries.  Only where a side holds an aggregate.
+ */
+static Node *distribute_epoch_mutator(Node *n, void *cx) {
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, FuncExpr) && list_length(((FuncExpr *)n)->args) == 2) {
+    FuncExpr *fe = (FuncExpr *)n;
+    Node *field = (Node *)linitial(fe->args);
+    Node *arg = (Node *)lsecond(fe->args);
+    char *fname = get_func_name(fe->funcid);
+    if (fname != NULL &&
+        (strcmp(fname, "extract") == 0 || strcmp(fname, "date_part") == 0) &&
+        get_func_namespace(fe->funcid) == PG_CATALOG_NAMESPACE &&
+        IsA(field, Const) && !((Const *)field)->constisnull &&
+        exprType(field) == TEXTOID && IsA(arg, OpExpr) &&
+        list_length(((OpExpr *)arg)->args) == 2 &&
+        exprType(arg) == INTERVALOID &&
+        contain_aggs_of_level(arg, 0)) {
+      char *f = TextDatumGetCString(((Const *)field)->constvalue);
+      OpExpr *minus = (OpExpr *)arg;
+      char *oname = get_opname(minus->opno);
+      Node *a = (Node *)linitial(minus->args), *b = (Node *)lsecond(minus->args);
+      Oid ta = exprType(a), tb = exprType(b);
+      if (pg_strcasecmp(f, "epoch") == 0 && oname != NULL &&
+          strcmp(oname, "-") == 0 && ta == tb &&
+          (ta == TIMESTAMPOID || ta == TIMESTAMPTZOID)) {
+        Oid argtypes[2] = {TEXTOID, ta};
+        Oid fid = LookupFuncName(list_make1(makeString(fname)), 2, argtypes,
+                                 true);
+        if (OidIsValid(fid)) {
+          Oid rt = get_func_rettype(fid);
+          Oid mop = OpernameGetOprid(list_make1(makeString("-")), rt, rt);
+          if (OidIsValid(mop)) {
+            Node *ea = (Node *)makeFuncExpr(fid, rt,
+                         list_make2(copyObject(field),
+                                    distribute_epoch_mutator(a, cx)),
+                         InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+            Node *eb = (Node *)makeFuncExpr(fid, rt,
+                         list_make2(copyObject(field),
+                                    distribute_epoch_mutator(b, cx)),
+                         InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+            OpExpr *d = makeNode(OpExpr);
+            d->opno = mop;
+            d->opfuncid = get_opcode(mop);
+            d->opresulttype = get_op_rettype(mop);
+            d->opretset = false;
+            d->opcollid = InvalidOid;
+            d->inputcollid = InvalidOid;
+            d->args = list_make2(ea, eb);
+            d->location = -1;
+            return (Node *)d;
+          }
+        }
+      }
+    }
+  }
+  return expression_tree_mutator(n, distribute_epoch_mutator, cx);
+}
+
+/**
+ * @brief A function of a @c min or a @c max, as the ordered @c choose() of
+ *        that function of the values.
+ *
+ * @c f(max(x)) is @c f of the value the maximum is, that of a row present:
+ * @c choose(f(x) @c ORDER @c BY @c x @c DESC) @c FILTER @c (WHERE @c x
+ * @c IS @c NOT @c NULL), the first value present in that order -- in every
+ * world, where @c f(max(x)) read as a plain value is the one of the database
+ * as it is.  Rows of equal @c x give it one value.  @c f has to be strict (a
+ * group without a value gives @c NULL either way) and immutable, and the
+ * expression lifted is the largest holding that one aggregate and no other:
+ * @c "count(*) @c / @c EXTRACT(DAY @c FROM @c date_trunc('month', @c min(d)))"
+ * lifts the divisor, and the division is then of two aggregates.
+ */
+static Node *lift_min_max_mutator(Node *n, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  count_aggs_ctx c = {0, NULL};
+  bool is_max;
+
+  if (n == NULL || IsA(n, Aggref) || IsA(n, Query))
+    return n;
+  /* Not an expression of its own: what it holds is. */
+  if (IsA(n, List) || IsA(n, TargetEntry) || IsA(n, CaseWhen))
+    return expression_tree_mutator(n, lift_min_max_mutator, cx);
+  count_aggs_walker(n, &c);
+  if (c.n == 0)
+    return n;
+  if (c.n == 1 && plain_min_max(c.first, &is_max) &&
+      !checkExprHasSubLink(n) && !contain_windowfuncs(n)) {
+    Node *x = (Node *)((TargetEntry *)linitial(c.first->args))->expr;
+    replace_node_ctx rc = {NULL, x};
+    Node *val;
+    Oid vt, xt = exprType(x), sortop = InvalidOid;
+    Aggref *ch;
+    SortGroupClause *sgc;
+    TargetEntry *vte, *xte;
+    NullTest *nt;
+    Oid eqop;
+    bool hashable;
+
+    /* The function of the values: the aggregate of a copy replaced by what
+     * it aggregates, which has to be strict and immutable (an aggregate
+     * counts as neither, so it is tested once gone). */
+    {
+      count_aggs_ctx c2 = {0, NULL};
+      Node *cp = copyObject(n);
+      count_aggs_walker(cp, &c2);
+      rc.from = (Node *)c2.first;
+      val = replace_node_mutator(cp, &rc);
+    }
+    /* Not over an aggregate result of a subquery (a max of counts): what
+     * it aggregates is then a token, whose value the function would read
+     * as the bytes of the token. */
+    if (contain_nonstrict_functions(val) || contain_mutable_functions(val) ||
+        exprType(val) == BOOLOID || !non_numeric_step_walker(val, NULL) ||
+        agg_token_var_walker(x, (void *)constants))
+      return expression_tree_mutator(n, lift_min_max_mutator, cx);
+    vt = exprType(val);
+    get_sort_group_operators(xt, !is_max, true, is_max, is_max ? NULL : &sortop,
+                             &eqop, is_max ? &sortop : NULL, &hashable);
+    if (!OidIsValid(sortop) || !OidIsValid(constants->OID_FUNCTION_CHOOSE))
+      return n;
+    vte = makeTargetEntry((Expr *)val, 1, NULL, false);
+    xte = makeTargetEntry((Expr *)copyObject(x), 2, NULL, true);
+    xte->ressortgroupref = 1;
+    sgc = makeNode(SortGroupClause);
+    sgc->tleSortGroupRef = 1;
+    sgc->sortop = sortop;
+    sgc->eqop = eqop;
+#if PG_VERSION_NUM >= 180000
+    sgc->reverse_sort = is_max;   /* a ">" operator: descending */
+#endif
+    sgc->nulls_first = false;
+    sgc->hashable = hashable;
+    nt = makeNode(NullTest);
+    nt->arg = (Expr *)copyObject(x);
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    ch = makeNode(Aggref);
+    ch->aggfnoid = constants->OID_FUNCTION_CHOOSE;
+    ch->aggtype = vt;
+    ch->aggcollid = exprCollation(val);
+    ch->inputcollid = exprCollation(val);
+    ch->aggtranstype = InvalidOid;
+    ch->aggargtypes = list_make1_oid(vt);   /* the sort key is no argument */
+    ch->args = list_make2(vte, xte);
+    ch->aggorder = list_make1(sgc);
+    ch->aggfilter = (Expr *)nt;
+    ch->aggkind = AGGKIND_NORMAL;
+    ch->aggsplit = AGGSPLIT_SIMPLE;
+    ch->location = -1;
+#if PG_VERSION_NUM >= 140000
+    ch->aggno = ch->aggtransno = -1;
+#endif
+    return (Node *)ch;
+  }
+  return expression_tree_mutator(n, lift_min_max_mutator, cx);
+}
+
+/** @brief @c distribute_epoch_mutator then @c lift_min_max_mutator over the
+ *  select list of @p q, which aggregates. */
+static void lift_min_max_functions(const constants_t *constants, Query *q) {
+  if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
+    return;
+  q->targetList = (List *)distribute_epoch_mutator((Node *)q->targetList,
+                                                   NULL);
+  q->targetList = (List *)lift_min_max_mutator((Node *)q->targetList,
+                                               (void *)constants);
 }
 
 /**
@@ -32289,6 +32546,9 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
          * count: read them as that before the aggregates are lowered, so the
          * pass below carries them like any other. */
         rewrite_deviation_aggregates(constants, q);
+        /* A function of a min or a max, as the choose() of that function of
+         * the values, which the pass below carries. */
+        lift_min_max_functions(constants, q);
         // Compute aggregation expressions
         replace_aggregations_by_provenance_aggregate(
           constants, q, prov_atts,

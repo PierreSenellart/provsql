@@ -159,6 +159,35 @@ SELECT remove_provenance('agg_arith_cg');
 SELECT city, s, g, n FROM agg_arith_cg ORDER BY city;
 DROP TABLE agg_arith_cg;
 
+-- A function of a min or a max that is not arithmetic over numbers -- over
+-- dates, timestamps, intervals -- is that of the row holding the extreme: the
+-- choose() of the function of the values, in their order, per world.  The
+-- seconds between two timestamps are the difference of their seconds, each
+-- such a function.  Every row at 1/2.  Two days apart, the span is 0 with one
+-- row and 172800 s with both: 172800/3 given a row (and 26 days, 748800).  The
+-- rows per day of the month of the earliest date, as a rate is written: in
+-- January only, (1/31 + 1/31 + 2/31)/3; January or February 2020,
+-- (1/31 + 1/29 + 2/31)/3.
+CREATE TABLE agg_arith_ts(k int, ts timestamp);
+INSERT INTO agg_arith_ts VALUES (1, '2020-01-01'), (1, '2020-01-03'),
+                                (2, '2020-01-15'), (2, '2020-02-10');
+SELECT add_provenance('agg_arith_ts');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_arith_ts; END $$;
+CREATE TABLE agg_arith_ts_r AS
+  SELECT k,
+         round(expected(extract(epoch from max(ts) - min(ts)))::numeric, 6)
+           AS e_span,
+         round(expected((count(*) + 0.0)
+                        / extract(day from date_trunc('month', min(ts))
+                                  + interval '1 month' - interval '1 day'))
+               ::numeric, 6) AS e_rate
+  FROM agg_arith_ts GROUP BY k;
+SELECT remove_provenance('agg_arith_ts_r');
+SELECT * FROM agg_arith_ts_r ORDER BY k;
+DROP TABLE agg_arith_ts_r;
+SELECT remove_provenance('agg_arith_ts');
+DROP TABLE agg_arith_ts;
+
 -- A boolean aggregate where a boolean is read (a CASE condition, AND, OR,
 -- NOT) or compared: the agg_token is cast back to boolean, not read as one.
 CREATE TABLE agg_arith_bool AS
@@ -184,7 +213,10 @@ DROP TABLE agg_arith_div;
 
 -- An aggregate of a type agg_token has no cast to (a date) is read through
 -- the text of its value: casts of it, in the query and on a subquery column,
--- and a series bounded by such aggregates.
+-- and a series bounded by such aggregates.  A cast that does not depend on
+-- the session (min(d)::timestamp) is the min of the values cast, the choose()
+-- of the cast value of the least d, per world; min(d)::text, which depends on
+-- the date style, stays a reading of the plain value.
 CREATE TABLE agg_arith_dates(label text, d date);
 INSERT INTO agg_arith_dates VALUES
   ('a','2020-01-15'),('a','2020-03-10'),('b','2020-02-01');

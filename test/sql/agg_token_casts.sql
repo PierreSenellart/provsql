@@ -154,9 +154,10 @@ SELECT m, a::text AS a, round(expected(a)::numeric, 6) AS e_a,
        b::text AS b, round(expected(b)::numeric, 6) AS e_b
 FROM atc_bool_r ORDER BY m;
 DROP TABLE atc_bool_r;
--- A text-valued aggregate cast to a number, and one read through a text
--- operator, have no such indicator behind them and stay a reading of the
--- plain value.
+-- A text-valued aggregate cast to a number has no such indicator behind it
+-- and stays a reading of the plain value.  One read through a text operator
+-- is the max of the values read so, max(gn) || '!' the value of the row whose
+-- gn is the greatest: choose(gn || '!' ORDER BY gn DESC), per world.
 SELECT min(gn)::int AS n FROM atc_bool WHERE gn ~ '^[0-9]+$';
 SELECT max(gn) || '!' AS shout FROM atc_bool;
 SELECT remove_provenance('atc_bool');

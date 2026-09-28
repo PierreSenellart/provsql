@@ -139,15 +139,11 @@ m|a|e_a|b|e_b
 1|1|0.666667|1|0.666667
 2|1|1.000000|0|0.000000
 (2 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
 n|provsql
 |d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
 shout|provsql
-B!|d265daa9-f206-561d-845c-2a85fa0fa72c
+B! (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
 remove_provenance
 
