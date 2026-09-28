@@ -32442,6 +32442,74 @@ static bool push_agg_conditions_into_subquery(Query *q) {
   return moved;
 }
 
+/** @brief Walker: the range-table entries whose aggregate results an
+ *  expression reads (Vars of type @c agg_token of this level). */
+typedef struct agg_sources_ctx {
+  const constants_t *constants;
+  Bitmapset *rels;
+} agg_sources_ctx;
+
+static bool agg_sources_walker(Node *n, void *cx) {
+  agg_sources_ctx *c = (agg_sources_ctx *)cx;
+  if (n == NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, Var) && ((Var *)n)->varlevelsup == 0 &&
+      ((Var *)n)->vartype == c->constants->OID_TYPE_AGG_TOKEN)
+    c->rels = bms_add_member(c->rels, ((Var *)n)->varno);
+  return expression_tree_walker(n, agg_sources_walker, cx);
+}
+
+/** @brief Walker: whether a disjunction of @p n reads, in two of its
+ *  disjuncts, the aggregates of different subqueries. */
+static bool disjunction_across_groups_walker(Node *n, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (n == NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, BoolExpr) && ((BoolExpr *)n)->boolop == OR_EXPR) {
+    Bitmapset *first = NULL;
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *)n)->args) {
+      agg_sources_ctx c = {constants, NULL};
+      agg_sources_walker((Node *)lfirst(lc), &c);
+      if (c.rels == NULL)
+        continue;
+      if (first == NULL)
+        first = c.rels;
+      else if (!bms_equal(first, c.rels))
+        return true;
+    }
+  }
+  return expression_tree_walker(n, disjunction_across_groups_walker, cx);
+}
+
+/**
+ * @brief Warn of a disjunction whose sides read the aggregates of different
+ *        subqueries.
+ *
+ * The provenance of a condition over aggregate values is one sum over the
+ * worlds of every group it reads, where the condition holds.  A disjunction
+ * is rewritten as the sum of the provenances of its sides, each over its own
+ * groups; the two agree where the sum is idempotent, the row's annotation
+ * carrying the existence of each group, and part in a semiring where it is
+ * not (counting, the polynomials).  The circuit keeps no trace of which sum
+ * a disjunction is -- the same gate sums the rows of a projection -- so the
+ * difference is said here, where the disjunction is still one.  Not in the
+ * Boolean provenance mode, which evaluates no such semiring.
+ */
+static void warn_disjunction_across_groups(const constants_t *constants,
+                                           Query *q) {
+  if ((q->jointree != NULL &&
+       disjunction_across_groups_walker(q->jointree->quals,
+                                        (void *)constants)) ||
+      disjunction_across_groups_walker(q->havingQual, (void *)constants))
+    provsql_warning_tagged(
+      PROVSQL_GAP, "disjunction-across-groups",
+      "a disjunction of conditions on the aggregates of different groups is "
+      "read as the sum of the provenances of its sides, which is its "
+      "provenance only where the sum is idempotent (not in counting or the "
+      "polynomials)");
+}
+
 static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
                                  bool top_level, bool in_boolean_rewrite,
@@ -33105,6 +33173,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
     // by calling process_query (threading each subquery's marker sub-context)
     prov_atts = get_provenance_attributes(constants, q, in_boolean_rewrite,
                                           top_level, local_inv_ctx);
+    if (provsql_active && !provsql_boolean_provenance)
+      warn_disjunction_across_groups(constants, q);
     retype_lifted_event_refs(q);
     REWRITE_STEP("get_provenance_attributes");
 

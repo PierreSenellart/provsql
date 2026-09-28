@@ -180,3 +180,35 @@ SELECT q, v FROM hbr_r ORDER BY q;
 DROP TABLE hbr_r, hbr_v;
 SELECT remove_provenance('hbr');
 DROP TABLE hbr;
+
+-- A disjunction of conditions on the aggregates of two different groups is
+-- read as the sum of the provenances of its sides, where the semantics takes
+-- one sum over the worlds of both groups: the two agree where the sum is
+-- idempotent, and the rewriting says so where they need not.  No warning in
+-- the Boolean provenance mode, nor for a disjunction over one group's
+-- aggregates.
+CREATE TABLE hbd1(k int);
+CREATE TABLE hbd2(k int);
+INSERT INTO hbd1 VALUES (1);
+INSERT INTO hbd2 VALUES (1);
+SELECT add_provenance('hbd1');
+SELECT add_provenance('hbd2');
+CREATE TABLE hbd_r AS
+  SELECT a.k FROM (SELECT k, count(*) c FROM hbd1 GROUP BY k) a
+  JOIN (SELECT k, count(*) d FROM hbd2 GROUP BY k) b ON a.k = b.k
+  WHERE a.c >= 1 OR b.d >= 1;
+DROP TABLE hbd_r;
+SET provsql.provenance = 'boolean';
+CREATE TABLE hbd_r AS
+  SELECT a.k FROM (SELECT k, count(*) c FROM hbd1 GROUP BY k) a
+  JOIN (SELECT k, count(*) d FROM hbd2 GROUP BY k) b ON a.k = b.k
+  WHERE a.c >= 1 OR b.d >= 1;
+DROP TABLE hbd_r;
+RESET provsql.provenance;
+CREATE TABLE hbd_r AS
+  SELECT a.k FROM (SELECT k, count(*) c, sum(k) s FROM hbd1 GROUP BY k) a
+  WHERE a.c >= 1 OR a.s >= 1;
+DROP TABLE hbd_r;
+SELECT remove_provenance('hbd1');
+SELECT remove_provenance('hbd2');
+DROP TABLE hbd1, hbd2;
