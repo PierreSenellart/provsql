@@ -7536,6 +7536,19 @@ agg_arm_to_uuid_or_null(Node *arm, const constants_t *constants)
 }
 
 
+/** @brief Walker: does @p node hold an expression of type @c agg_token -- a
+ *  column of a subquery's aggregate, or an aggregate this query computes? */
+static bool reads_agg_token_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query))
+    return false;
+  if (!IsA(node, List) && exprType(node) == constants->OID_TYPE_AGG_TOKEN)
+    return true;
+  return expression_tree_walker(node, reads_agg_token_walker, cx);
+}
+
 /* True for a searched CASE whose branches carry aggregate tokens -- the
  * aggregate-carrier analogue of case_has_rv_cmp, checked after the aggregate
  * pass has lowered the branch aggregates to agg_token. */
@@ -7555,7 +7568,16 @@ case_is_agg_carrier(CaseExpr *ce, const constants_t *constants)
     if (node_is_agg_token((Node *)cw->result, constants))
       return true;
   }
-  return node_is_agg_token((Node *)ce->defresult, constants);
+  if (node_is_agg_token((Node *)ce->defresult, constants))
+    return true;
+  /* Branches that are values of the row, chosen by a condition over an
+   * aggregate -- CASE WHEN count(*) >= 50 THEN 1 END -- are one value per
+   * world as well: the branch the condition picks in it. */
+  foreach (lc, ce->args)
+    if (reads_agg_token_walker((Node *)((CaseWhen *)lfirst(lc))->expr,
+                               (void *)constants))
+      return true;
+  return false;
 }
 
 /* Build an agg_case(ARRAY[...]) -> agg_token from a searched CASE whose
@@ -7638,9 +7660,12 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
     return NULL;
   agg = (Node *)linitial(co->args);
   stripped = strip_agg_cast(agg);
-  if (stripped == NULL || !IsA(stripped, FuncExpr) ||
-      ((FuncExpr *)stripped)->funcid !=
-        constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+  if (stripped == NULL ||
+      !((IsA(stripped, FuncExpr) &&
+         ((FuncExpr *)stripped)->funcid ==
+           constants->OID_FUNCTION_PROVENANCE_AGGREGATE) ||
+        (IsA(stripped, Var) &&
+         ((Var *)stripped)->vartype == constants->OID_TYPE_AGG_TOKEN)))
     return NULL;
   /* The default may be any expression of the row that holds no aggregate of its
    * own: a constant, a grouping column, an expression over them.  Its value is
@@ -7967,6 +7992,33 @@ static void swap_agg_arith_arms(List *args, const constants_t *constants) {
     lfirst(lc) = swap_agg_arith_arm((Node *)lfirst(lc), constants);
 }
 
+/** @brief @c swap_agg_arith_arm over the operands of the comparisons of a
+ *  CASE condition, through its @c AND, @c OR and @c NOT: @c "max(x) @c -
+ *  @c min(x) @c > @c 1" compares the arithmetic of two aggregates, which the
+ *  condition's lowering reads as it does in a @c HAVING clause. */
+static Node *swap_guard_arith(Node *node, const constants_t *constants) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, BoolExpr)) {
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *)node)->args)
+      lfirst(lc) = swap_guard_arith((Node *)lfirst(lc), constants);
+    return node;
+  }
+  if (IsA(node, OpExpr) && ((OpExpr *)node)->opresulttype == BOOLOID) {
+    ListCell *lc;
+    foreach (lc, ((OpExpr *)node)->args) {
+      /* Through the cast back to the column's type the arithmetic of two
+       * aggregates is wrapped in, which the lowering reads through too. */
+      Node *a = swap_agg_arith_arm(strip_agg_cast((Node *)lfirst(lc)),
+                                   constants);
+      if (exprType(a) == constants->OID_TYPE_AGG_TOKEN)
+        lfirst(lc) = a;
+    }
+  }
+  return node;
+}
+
 /* Target-list mutator: lower each aggregate-carrier searched CASE into an
  * agg_case gate_case.  Sub-expressions are mutated first so a CASE nested in a
  * branch value lowers before its parent wraps it. */
@@ -7977,20 +8029,36 @@ rewrite_agg_case_mutator(Node *node, void *context)
 
   if (node == NULL)
     return NULL;
+  /* What an aggregate reads is a value of each row it aggregates, not one per
+   * world: the CASE the count of a column is written as (CASE WHEN c IS NOT
+   * NULL THEN 1 ELSE 0 END, c a subquery's aggregate) stays as it is. */
+  if (IsA(node, Aggref))
+    return node;
   if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg == NULL) {
     CaseExpr *ce = (CaseExpr *)expression_tree_mutator(
       node, rewrite_agg_case_mutator, context);
     ListCell *lc;
     Node *lowered;
+    List *guards = NIL;
     foreach (lc, ce->args) {
       CaseWhen *cw = (CaseWhen *)lfirst(lc);
       cw->result = (Expr *)swap_agg_arith_arm((Node *)cw->result, constants);
+      guards = lappend(guards, cw->expr);
+      cw->expr = (Expr *)swap_guard_arith(copyObject((Node *)cw->expr),
+                                          constants);
     }
     ce->defresult = (Expr *)swap_agg_arith_arm((Node *)ce->defresult, constants);
-    if (!case_is_agg_carrier(ce, constants))
-      return (Node *)ce;
-    lowered = build_agg_case(ce, constants);
-    return lowered != NULL ? lowered : (Node *)ce;
+    lowered = case_is_agg_carrier(ce, constants)
+                ? build_agg_case(ce, constants) : NULL;
+    if (lowered != NULL)
+      return lowered;
+    /* Declined: the conditions as they were, typed as the query reads them. */
+    {
+      ListCell *lg;
+      forboth (lc, ce->args, lg, guards)
+        ((CaseWhen *)lfirst(lc))->expr = (Expr *)lfirst(lg);
+    }
+    return (Node *)ce;
   }
   if (IsA(node, MinMaxExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     MinMaxExpr *mm = (MinMaxExpr *)expression_tree_mutator(
@@ -8112,6 +8180,22 @@ static Node *lower_agg_cases_outside_windows(Node *node, void *context) {
                                  context);
 }
 
+/** @brief Is @p ref the sort-group reference of a key some window of @p q
+ *  partitions or orders by? */
+static bool is_window_key(Query *q, Index ref) {
+  ListCell *lc, *lk;
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    foreach (lk, wc->partitionClause)
+      if (((SortGroupClause *)lfirst(lk))->tleSortGroupRef == ref)
+        return true;
+    foreach (lk, wc->orderClause)
+      if (((SortGroupClause *)lfirst(lk))->tleSortGroupRef == ref)
+        return true;
+  }
+  return false;
+}
+
 static void
 rewrite_agg_cases_ex(const constants_t *constants, Query *q,
                      bool outside_windows)
@@ -8122,6 +8206,11 @@ rewrite_agg_cases_ex(const constants_t *constants, Query *q,
     return;
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
+    /* A key a window partitions or orders by is sorted by PostgreSQL on the
+     * plain value, and so is what a dense_rank() counts: lowered to an
+     * agg_token, it would be compared as one. */
+    if (te->ressortgroupref != 0 && is_window_key(q, te->ressortgroupref))
+      continue;
     /* After the windows are lowered, a key of a window, an ORDER BY or a
      * GROUP BY is sorted or compared by PostgreSQL on the plain value, and so
      * is what a window call reads: lowered to an agg_token, it would be
@@ -23501,6 +23590,7 @@ static Oid orig_agg_arg_of_column(Query *sub, AttrNumber attno,
   if (sub->setOperations != NULL) {
     List *leaves = NIL;
     ListCell *lc;
+    Oid found = InvalidOid;
     union_leaves(sub->setOperations, &leaves);
     foreach (lc, leaves) {
       RangeTblEntry *rte = rt_fetch(lfirst_int(lc), sub->rtable);
@@ -23509,10 +23599,30 @@ static Oid orig_agg_arg_of_column(Query *sub, AttrNumber attno,
         continue;
       t = orig_agg_arg_of_column(rte->subquery, attno, constants, depth + 1,
                                  argno);
-      if (OidIsValid(t))
-        return t;
+      if (argno != 0) {
+        if (OidIsValid(t))
+          return t;
+        continue;
+      }
+      /* The aggregate the column is, which every arm has to be: an arm whose
+       * column is something else (a CASE over an aggregate) makes it none.
+       * The NULL an arm pads with, as that of a lowered outer join, is no
+       * value of its own. */
+      if (!OidIsValid(t)) {
+        Node *e = attno <= list_length(rte->subquery->targetList)
+                    ? strip_implicit_coercions((Node *)list_nth_node(
+                        TargetEntry, rte->subquery->targetList,
+                        attno - 1)->expr)
+                    : NULL;
+        if (e != NULL && IsA(e, Const) && ((Const *)e)->constisnull)
+          continue;
+        return InvalidOid;
+      }
+      if (OidIsValid(found) && found != t)
+        return InvalidOid;
+      found = t;
     }
-    return InvalidOid;
+    return found;
   }
   te = list_nth_node(TargetEntry, sub->targetList, attno - 1);
   if (IsA(te->expr, FuncExpr) &&
@@ -32016,6 +32126,12 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
          * the aggregate pass and before insert_agg_token_casts, so the result
          * stays an agg_token instead of being cast to numeric (which would
          * discard the provenance and corrupt the CASE). */
+        rewrite_agg_cases(constants, q);
+      } else if (agg_token_var_walker((Node *)q->targetList,
+                                      (void *)constants)) {
+        /* The same over aggregate results a subquery gives: a CASE, a
+         * COALESCE over a column that is one reads it per world, as it does
+         * in the query that aggregates. */
         rewrite_agg_cases(constants, q);
       }
 

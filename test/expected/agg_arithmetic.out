@@ -77,25 +77,21 @@ Berlin|2 (*)|7
 New York|2 (*)|7
 Paris|3 (*)|7
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 remove_provenance
 
 (1 row)
 city|cnt
-Berlin|2
-New York|2
-Paris|3
+Berlin|2 (*)
+New York|2 (*)
+Paris|3 (*)
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 remove_provenance
 
 (1 row)
 city|at_least_3
-Berlin|3
-New York|3
-Paris|3
+Berlin|3 (*)
+New York|3 (*)
+Paris|3 (*)
 (3 rows)
 remove_provenance
 
@@ -256,14 +252,14 @@ r
 2.333 (*)
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
-DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional, comparison
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
 remove_provenance
 
 (1 row)
 city|v|d
-Berlin|0|no
-New York|0|yes
-Paris|6|no
+Berlin|0 (*)|no
+New York|0 (*)|yes
+Paris|6 (*)|no
 (3 rows)
 remove_provenance
 
