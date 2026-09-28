@@ -18408,7 +18408,8 @@ static bool drop_semijoin_distinct_walker(Node *node, void *cx) {
 typedef struct bool_exists_ctx {
   const constants_t *constants;
   int lowered;     /**< how many subquery conditions were rewritten */
-  bool declined;   /**< one was met that cannot be, or a second one */
+  bool declined;   /**< one was met that cannot be */
+  int negations;   /**< how many NOTs above the node visited */
 } bool_exists_ctx;
 
 /**
@@ -18428,10 +18429,53 @@ typedef struct bool_exists_ctx {
  * becoming its indicator.  The annotation is then
  * @c "α⊗(ψ̂ @c ⊕ @c δ(⊕β))".
  *
- * One condition per combination: two would need the counts of both bodies on
- * one tuple, which the grouping of one @c G does not carry into the other, and
- * the decorrelation takes one sublink per level anyway.
+ * Several conditions in one combination each become the count of their own
+ * body, which @c decorrelate_scalar_sublinks lowers one at a time, each into a
+ * subquery of its own; the combination then stays in the @c WHERE clause, over
+ * their values.  A scalar subquery of the combination is left as it is, for
+ * the same lowering.
+ *
+ * A membership test @c "x @c IN @c (SELECT @c k @c FROM @c Q @c WHERE @c c)"
+ * in a positive position -- under no @c NOT -- is the existence test
+ * @c "EXISTS @c (SELECT @c 1 @c FROM @c Q @c WHERE @c c @c AND @c k @c = @c x)":
+ * the two differ only where the first is unknown and the second false, which
+ * no combination of @c AND and @c OR tells apart when it asks for true.
  */
+/**
+ * @brief The body of the existence test a membership test
+ *        @c "x @c op @c ANY @c (SELECT @c k @c FROM @c Q ...)" is, its
+ *        comparison moved into its @c WHERE, or @c NULL.
+ */
+static Query *in_as_exists_body(SubLink *sl) {
+  Query *b = (Query *)copyObject(sl->subselect);
+  Node *test;
+  TargetEntry *te;
+  oj_param_repl_ctx pc;
+
+  if (sl->testexpr == NULL || !IsA(sl->testexpr, OpExpr) ||
+      list_length(b->targetList) != 1 || b->jointree == NULL ||
+      b->groupClause != NIL || b->hasAggs || b->havingQual != NULL ||
+      b->setOperations != NULL || b->limitCount != NULL ||
+      b->limitOffset != NULL || b->hasWindowFuncs)
+    return NULL;
+  te = (TargetEntry *)linitial(b->targetList);
+  if (te->resjunk)
+    return NULL;
+  test = copyObject(sl->testexpr);
+  IncrementVarSublevelsUp(test, 1, 0);
+  pc.paramid = 1;
+  pc.replacement = (Node *)te->expr;
+  test = oj_param_repl_mut(test, &pc);
+  b->jointree->quals = b->jointree->quals == NULL
+                         ? test
+                         : (Node *)makeBoolExpr(AND_EXPR,
+                                                list_make2(b->jointree->quals,
+                                                           test), -1);
+  b->distinctClause = NIL;
+  b->sortClause = NIL;
+  return b;
+}
+
 static Node *bool_exists_mutator(Node *node, void *cx) {
   bool_exists_ctx *ctx = (bool_exists_ctx *)cx;
   bool neg = false;
@@ -18446,19 +18490,28 @@ static Node *bool_exists_mutator(Node *node, void *cx) {
   }
   if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
     SubLink *sl = (SubLink *)inner;
+    Query *body = (Query *)sl->subselect;
 
-    if (sl->subLinkType != EXISTS_SUBLINK ||
-        !predicate_subselect_decorrelatable(ctx->constants,
-                                            (Query *)sl->subselect, false)) {
+    if (sl->subLinkType == EXPR_SUBLINK && !neg)
+      return node;            /* a value, lowered as it is */
+    if (sl->subLinkType == ANY_SUBLINK && !neg && ctx->negations == 0)
+      body = in_as_exists_body(sl);
+    else if (sl->subLinkType != EXISTS_SUBLINK)
+      body = NULL;
+    if (body == NULL ||
+        !predicate_subselect_decorrelatable(ctx->constants, body, false)) {
       ctx->declined = true;   /* not a shape this reading covers */
       return node;
     }
-    if (ctx->lowered > 0) {
-      ctx->declined = true;   /* a second subquery condition */
-      return node;
-    }
     ctx->lowered++;
-    return build_count_predicate((Query *)sl->subselect, NULL, neg);
+    return build_count_predicate(body, NULL, neg);
+  }
+  if (IsA(node, BoolExpr) && ((BoolExpr *)node)->boolop == NOT_EXPR) {
+    Node *r;
+    ctx->negations++;
+    r = expression_tree_mutator(node, bool_exists_mutator, cx);
+    ctx->negations--;
+    return r;
   }
   return expression_tree_mutator(node, bool_exists_mutator, cx);
 }
@@ -19886,8 +19939,9 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
       bctx.constants = constants;
       bctx.lowered = 0;
       bctx.declined = false;
+      bctx.negations = 0;
       lowered = bool_exists_mutator((Node *)copyObject(c), (void *)&bctx);
-      if (bctx.lowered == 1 && !bctx.declined)
+      if (bctx.lowered >= 1 && !bctx.declined)
         rewritten = lowered;
     }
     newconjs = lappend(newconjs, rewritten ? rewritten : c);
@@ -21715,6 +21769,32 @@ static Var *oj_add_lateral(Query *q, Query *L) {
                  exprTypmod((Node *)val), exprCollation((Node *)val), 0);
 }
 
+/** @brief How many subqueries @p node holds, at its own level. */
+static int count_sublinks(Node *node) {
+  oj_sublink_scan scan;
+  memset(&scan, 0, sizeof(scan));
+  oj_sublink_scan_walker(node, &scan);
+  return scan.n_sublinks;
+}
+
+/** @brief Context for @c oj_same_sublink_mut. */
+typedef struct oj_same_sublink_ctx {
+  SubLink *target; /* the subquery lowered (its copies are equal to it) */
+  Node *repl;      /* the Var reading its value */
+} oj_same_sublink_ctx;
+
+/** @brief Replace every subquery equal to @c target by @c repl. */
+static Node *oj_same_sublink_mut(Node *node, void *cx) {
+  oj_same_sublink_ctx *c = (oj_same_sublink_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, SubLink) && equal(node, c->target))
+    return copyObject(c->repl);
+  if (IsA(node, Query))
+    return node;
+  return expression_tree_mutator(node, oj_same_sublink_mut, cx);
+}
+
 /**
  * @brief Decorrelate scalar subqueries into LATERAL subqueries, or into a
  *        LEFT JOIN with grouping.
@@ -21777,6 +21857,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
   bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
   bool coalesce = false; /* >1 target-list sublinks sharing one (Q, corr) */
+  bool several = false; /* >1 sublinks, lowered one at a time */
   bool nested_in_tl = false; /* the lone sublink is nested in target-list arithmetic */
   bool agg_expr_body = false; /* the body's value is an expression over its aggregates */
   List *co_sls = NIL, *co_tes = NIL; /* parallel: each sublink + its target entry */
@@ -21812,33 +21893,55 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
    * builds one R ⟕ Q group with a choose() per sublink and a single count gate. */
   if (scan.n_sublinks > 1) {
     Query *rep = NULL;
-    if (n_tl_sublinks != scan.n_sublinks)
-      return false; /* a WHERE sublink in the mix: not coalescible */
+    bool coalescible = n_tl_sublinks == scan.n_sublinks;
     foreach (lc, q->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
       SubLink *e;
+      if (!coalescible)
+        break;
       if (te->expr == NULL || !IsA(te->expr, SubLink))
         continue; /* plain column / expression: kept as a GROUP BY key below */
       e = (SubLink *)te->expr;
-      if (e->subLinkType != EXPR_SUBLINK || !IsA(e->subselect, Query))
-        return false;
+      if (e->subLinkType != EXPR_SUBLINK || !IsA(e->subselect, Query) ||
+          (rep != NULL &&
+           !oj_sub_bodies_coalescible(rep, (Query *)e->subselect))) {
+        coalescible = false;
+        break;
+      }
       if (rep == NULL)
         rep = (Query *)e->subselect;
-      else if (!oj_sub_bodies_coalescible(rep, (Query *)e->subselect))
-        return false;
       co_sls = lappend(co_sls, e);
       co_tes = lappend(co_tes, te);
     }
     /* All sublinks must be direct target entries (none nested in an expression). */
-    if (list_length(co_sls) != scan.n_sublinks)
-      return false;
-    coalesce = true;
-    sl = (SubLink *)linitial(co_sls);
-    sl_te = (TargetEntry *)linitial(co_tes);
-  } else {
-  if (scan.n_sublinks != 1)
+    if (coalescible && list_length(co_sls) == scan.n_sublinks) {
+      coalesce = true;
+      sl = (SubLink *)linitial(co_sls);
+      sl_te = (TargetEntry *)linitial(co_tes);
+    } else
+      several = true;
+  }
+  if (!coalesce) {
+  /* Several subqueries that do not share one body: each is a LATERAL subquery
+   * of its own, lowered one at a time (the caller calls again).  A direct
+   * select-list entry first, so that the same subquery repeated in the WHERE
+   * reads the value it gives (see below). */
+  if (several) {
+    sl = NULL;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->expr != NULL && IsA(te->expr, SubLink) &&
+          !sublink_is_inert((SubLink *)te->expr)) {
+        sl = (SubLink *)te->expr;
+        break;
+      }
+    }
+    if (sl == NULL)
+      sl = scan.found_sublink;
+  } else if (scan.n_sublinks != 1)
     return false;
-  sl = scan.found_sublink;
+  else
+    sl = scan.found_sublink;
   if (sl == NULL || sl->subLinkType != EXPR_SUBLINK ||
       !IsA(sl->subselect, Query))
     return false;
@@ -21949,7 +22052,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     rc.outer = q;
     rc.depth = 0;
     if (query_tree_walker(sub, reads_outer_aggregate_walker, &rc, 0)) {
-      if (agg_expr_body)
+      if (agg_expr_body || several)
         return false;
       goto join;
     }
@@ -22008,7 +22111,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
         oc.constants = constants;
         oc.q = q;
         oc.skip = (SubLink *)hole;
-        if (reads_own_aggregate_walker(pred, &oc)) {
+        /* So does one holding another subquery, lowered on its own. */
+        if (reads_own_aggregate_walker(pred, &oc) ||
+            checkExprHasSubLink(pred)) {
           rc.target = (SubLink *)hole;
           rc.repl = (Node *)oj_add_lateral(q, L);
           pred = oj_replace_sublink_mut(pred, &rc);
@@ -22049,7 +22154,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       oc.skip = sl;
       /* An expression reading an aggregate column of this level stays here,
        * over the subquery's value, as a comparison in WHERE does above. */
-      if (reads_own_aggregate_walker((Node *)sl_te->expr, &oc)) {
+      /* So does one holding another subquery, lowered on its own. */
+      if (reads_own_aggregate_walker((Node *)sl_te->expr, &oc) ||
+          (several && count_sublinks((Node *)sl_te->expr) > 1)) {
         rc.target = sl;
         rc.repl = (Node *)oj_add_lateral(q, L);
         sl_te->expr = (Expr *)oj_replace_sublink_mut((Node *)sl_te->expr, &rc);
@@ -22063,6 +22170,18 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       rc.repl = (Node *)lte->expr;
       lte->expr = (Expr *)oj_replace_sublink_mut(e, &rc);
       sl_te->expr = (Expr *)oj_add_lateral(q, L);
+      /* The same subquery elsewhere in the block -- SELECT (…) AS n … WHERE
+       * (…) > 1000 -- is the same value: it reads this one, rather than
+       * compute it again in a subquery whose provenance would count twice. */
+      if (several && (Node *)e == (Node *)hole) {
+        oj_same_sublink_ctx sc;
+        sc.target = sl;
+        sc.repl = (Node *)sl_te->expr;
+        q->targetList = (List *)oj_same_sublink_mut((Node *)q->targetList,
+                                                    &sc);
+        if (q->jointree->quals != NULL)
+          q->jointree->quals = oj_same_sublink_mut(q->jointree->quals, &sc);
+      }
     }
     return true;
   }
@@ -31443,7 +31562,12 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
     REWRITE_STEP("move_uncorrelated_sublinks_to_from");
     rewrite_target_list_exists(constants, q);
     REWRITE_STEP("rewrite_target_list_exists");
-    decorrelate_scalar_sublinks(constants, q);
+    {
+      /* One subquery at a time, as many as the block holds. */
+      int k;
+      for (k = 0; k < 64 && decorrelate_scalar_sublinks(constants, q); ++k)
+        ;
+    }
     REWRITE_STEP("decorrelate_scalar_sublinks");
   }
 
@@ -32913,7 +33037,11 @@ static Query *lift_tracked_sublinks(const constants_t *constants, Query *q) {
   rewrite_predicate_sublinks(constants, lifted);
   move_uncorrelated_where_predicates(constants, lifted);
   move_uncorrelated_sublinks_to_from(constants, lifted);
-  decorrelate_scalar_sublinks(constants, lifted);
+  {
+    int k;
+    for (k = 0; k < 64 && decorrelate_scalar_sublinks(constants, lifted); ++k)
+      ;
+  }
   /* The lift is worth taking only if it left NO tracked sublink behind: a
    * block whose sublinks the rewrites decline -- several scalar subqueries
    * over a tracked relation, a body they cannot decorrelate -- would reach the

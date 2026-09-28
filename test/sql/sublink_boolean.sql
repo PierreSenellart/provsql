@@ -79,25 +79,57 @@ FROM sb_r ORDER BY pid, lbl;
 SET provsql.active = on;
 DROP TABLE sb_r;
 
--- Refused, as the semantics says: two subquery conditions in one combination
--- would need the counts of both bodies on one tuple, which the grouping of one
--- of them does not carry into the other; and IN as a value is not the EXISTS
--- line, SQL giving it unknown where no row matches and a comparison is unknown,
--- which a count does not tell from false.
-SELECT a.id FROM sb_div a
-WHERE EXISTS (SELECT 1 FROM sb_syn s WHERE s.name = a.name)
-   OR EXISTS (SELECT 1 FROM sb_syn s WHERE s.syn = a.name);
+-- Two subquery conditions in one combination: each is the count of its own
+-- body, in a subquery of its own, and the disjunction reads both.  NY is only
+-- a synonym, of the first row, 0.5; CA only a name, of either row, 0.75.
+CREATE TABLE sb_r AS
+  SELECT a.id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM sb_div a
+  WHERE EXISTS (SELECT 1 FROM sb_syn s WHERE s.name = a.name)
+     OR EXISTS (SELECT 1 FROM sb_syn s WHERE s.syn = a.name);
+SELECT remove_provenance('sb_r');
+SELECT * FROM sb_r ORDER BY id;
+DROP TABLE sb_r;
+-- Refused, as the semantics says: IN as a value is not the EXISTS line, SQL
+-- giving it unknown where no row matches and a comparison is unknown, which a
+-- count does not tell from false.
 SELECT a.id, a.name IN (SELECT s.syn FROM sb_syn s) AS is_syn FROM sb_div a;
--- And two EXISTS values in one select list: the decorrelation groups the outer
--- rows once, for one body, so the second is read as a plain value with the
--- warning that says so.
+-- And two EXISTS values in one select list, each the explosion of its own
+-- truth: one row per pair of truths either may take.  Both read one body, so
+-- the pairs that contradict each other are there with provenance zero, and
+-- the others as above: 0.75 and 0.25 for the parent of two children, 1 for
+-- the childless one.
 CREATE TABLE sb_r AS
   SELECT p.pid,
          EXISTS (SELECT FROM sb_c c WHERE c.pid = p.pid) AS has_child,
-         NOT EXISTS (SELECT FROM sb_c c WHERE c.pid = p.pid) AS childless
+         NOT EXISTS (SELECT FROM sb_c c WHERE c.pid = p.pid) AS childless,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
   FROM sb_p p;
 SELECT remove_provenance('sb_r');
-SELECT pid, has_child, childless FROM sb_r ORDER BY pid;
+SELECT pid, has_child, childless, p FROM sb_r ORDER BY pid, has_child, childless;
+DROP TABLE sb_r;
+
+-- The same subquery in the select list and in the WHERE clause is one value,
+-- computed once and read by both.  At least two children: both of the first
+-- parent's, 0.25; the second has none in any world.
+CREATE TABLE sb_r AS
+  SELECT pid, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT p.pid,
+               (SELECT count(*) FROM sb_c c WHERE c.pid = p.pid) AS n
+        FROM sb_p p
+        WHERE (SELECT count(*) FROM sb_c c WHERE c.pid = p.pid) >= 2) t;
+SELECT remove_provenance('sb_r');
+SELECT * FROM sb_r WHERE p > 0 ORDER BY pid;
+DROP TABLE sb_r;
+-- Two different subqueries compared with each other, each lowered on its own:
+-- fewer children named a than children at all needs b, 0.5.
+CREATE TABLE sb_r AS
+  SELECT p.pid, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM sb_p p
+  WHERE (SELECT count(*) FROM sb_c c WHERE c.pid = p.pid AND c.name = 'a')
+      < (SELECT count(*) FROM sb_c c WHERE c.pid = p.pid);
+SELECT remove_provenance('sb_r');
+SELECT * FROM sb_r WHERE p > 0 ORDER BY pid;
 DROP TABLE sb_r;
 
 DROP TABLE sb_div, sb_syn, sb_p, sb_c;
