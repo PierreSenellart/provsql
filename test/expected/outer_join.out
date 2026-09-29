@@ -437,6 +437,12 @@ g|l
 remove_provenance
 
 (1 row)
+v
+0 rows
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

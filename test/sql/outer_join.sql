@@ -600,6 +600,15 @@ RESET client_min_messages;
 SELECT remove_provenance('oj_r');
 SELECT g, l FROM oj_r ORDER BY g;
 DROP TABLE oj_r;
+-- Not an aggregate without grouping: its one row is there in every world,
+-- over no row too, where the count is 0 -- '0 rows', as in SQL.
+SET client_min_messages = error;
+CREATE TABLE oj_r AS
+  SELECT count(*) || ' rows' AS v FROM oj_la WHERE g > 5;
+RESET client_min_messages;
+SELECT remove_provenance('oj_r');
+SELECT v FROM oj_r;
+DROP TABLE oj_r;
 SELECT remove_provenance('oj_la');
 SELECT remove_provenance('oj_lb');
 DROP TABLE oj_la, oj_lb;

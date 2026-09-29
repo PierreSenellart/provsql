@@ -32625,7 +32625,11 @@ static Node *strip_one_cast(Node *n) {
 static void guard_frozen_readers(const constants_t *constants, Query *q,
                                  Expr *per_row) {
   ListCell *lc;
+  /* Only where the groups are those of keys: an aggregate without grouping
+   * has its one row in every world, over no row too (a count of 0), which
+   * is the row of the data as it is. */
   if (per_row == NULL || !q->hasAggs ||
+      (q->groupClause == NIL && q->groupingSets == NIL) ||
       !OidIsValid(constants->OID_FUNCTION_PLAIN_TRUTH) ||
       !OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE))
     return;
