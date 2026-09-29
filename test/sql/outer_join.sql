@@ -569,6 +569,13 @@ CREATE TABLE oj_r AS
 SELECT remove_provenance('oj_r');
 SELECT * FROM oj_r WHERE p > 0 ORDER BY k;
 DROP TABLE oj_r;
+-- Not in a query that groups by the lateral column: read there, the scalar
+-- subquery it is would be a grouping key, and the join stays a refusal.
+SELECT l.k, a.c, count(*)
+FROM oj_l l
+LEFT JOIN LATERAL (SELECT count(*) AS c FROM oj_m m WHERE m.k = l.k) a
+     ON true
+GROUP BY l.k, a.c;
 SELECT remove_provenance('oj_l');
 SELECT remove_provenance('oj_m');
 DROP TABLE oj_l, oj_m;

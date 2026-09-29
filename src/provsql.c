@@ -31966,6 +31966,10 @@ static Node *unlateral_node(Query *q, Node *n, bool *changed) {
   if (((sub->hasAggs && sub->groupClause == NIL && sub->havingQual == NULL) ||
        (sub->limitCount != NULL && !sub->hasAggs && sub->groupClause == NIL)) &&
       !q->hasSubLinks && !oj_refs_join_index(q, je->rtindex) &&
+      /* Not in a query that groups: a column of the arm read as a key or
+       * under an aggregate would be a subquery there. */
+      !q->hasAggs && q->groupClause == NIL && q->groupingSets == NIL &&
+      !q->hasWindowFuncs &&
       (je->quals == NULL ||
        (IsA(je->quals, Const) && !((Const *)je->quals)->constisnull &&
         DatumGetBool(((Const *)je->quals)->constvalue)))) {
