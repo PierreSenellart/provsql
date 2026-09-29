@@ -54,3 +54,20 @@ CREATE TABLE gs_r6 AS
 SELECT remove_provenance('gs_r6');
 SELECT n::text AS n, k, p FROM gs_r6;
 DROP TABLE gs_r6;
+
+-- A window over the groups of a ROLLUP runs over the rows of every set
+-- together: computed above their union, not in each set's branch, where its
+-- keys (a GROUPING() among them) were left without the column they name.
+-- The ranks are those of plain SQL.
+CREATE TABLE gs_r7 AS
+  SELECT city, grouping(city) AS g,
+         rank() OVER (PARTITION BY grouping(city) ORDER BY city) AS r
+  FROM personnel GROUP BY ROLLUP (city);
+SELECT remove_provenance('gs_r7');
+SELECT city, g, r FROM gs_r7 ORDER BY g, city;
+DROP TABLE gs_r7;
+SET provsql.active = off;
+SELECT city, grouping(city) AS g,
+       rank() OVER (PARTITION BY grouping(city) ORDER BY city) AS r
+FROM personnel GROUP BY ROLLUP (city) ORDER BY g, city;
+SET provsql.active = on;

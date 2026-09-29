@@ -13050,10 +13050,32 @@ static Node *grouping_set_mutator(Node *node, void *cx) {
 static Query *rewrite_grouping_sets(Query *q) {
   List *sets, *arms = NIL;
   ListCell *lc, *lc2;
+  Query *outer;
 
 #if PG_VERSION_NUM >= 180000
   strip_group_rte_pg18(q);
 #endif
+  /* A window runs over the rows of every set together, so over the union of
+   * the arms, not in each: a window call of the select list is computed by
+   * the enclosing query, its keys -- columns of the list -- coming from the
+   * arms.  Only a call that reads nothing of the rows (rank(), row_number()):
+   * its arguments would otherwise have to be columns of the arms too. */
+  if (q->hasWindowFuncs) {
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      WindowFunc *wf = (WindowFunc *)te->expr;
+      if (!contain_windowfuncs((Node *)te->expr))
+        continue;
+      if (!IsA(wf, WindowFunc) || wf->aggfilter != NULL ||
+          contain_vars_of_level((Node *)wf->args, 0) ||
+          contain_aggs_of_level((Node *)wf->args, 0))
+        provsql_unsupported(PROVSQL_GAP, "window-over-grouping-sets",
+                            "a window function over the groups of GROUPING "
+                            "SETS, ROLLUP or CUBE is supported only as a call "
+                            "reading no column (rank(), row_number(), ...), "
+                            "not within an expression");
+    }
+  }
 #if PG_VERSION_NUM >= 140000
   sets = expand_grouping_sets(q->groupingSets, q->groupDistinct, -1);
 #else
@@ -13098,10 +13120,31 @@ static Query *rewrite_grouping_sets(Query *q) {
     }
     arm->havingQual = grouping_set_mutator(arm->havingQual, &ctx);
     arm->hasAggs = true;
+    if (arm->hasWindowFuncs) {
+      /* The window is the enclosing query's: a placeholder here. */
+      foreach (lct, arm->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lct);
+        if (IsA(te->expr, WindowFunc))
+          te->expr = (Expr *)makeNullConst(exprType((Node *)te->expr),
+                                           exprTypmod((Node *)te->expr),
+                                           exprCollation((Node *)te->expr));
+      }
+      arm->windowClause = NIL;
+      arm->hasWindowFuncs = false;
+    }
     arms = lappend(arms, arm);
   }
 
-  return union_all_of_arms(q, arms);
+  outer = union_all_of_arms(q, arms);
+  if (q->hasWindowFuncs) {
+    forboth (lc, q->targetList, lc2, outer->targetList)
+      if (IsA(((TargetEntry *)lfirst(lc))->expr, WindowFunc))
+        ((TargetEntry *)lfirst(lc2))->expr =
+          (Expr *)copyObject(((TargetEntry *)lfirst(lc))->expr);
+    outer->windowClause = (List *)copyObject(q->windowClause);
+    outer->hasWindowFuncs = true;
+  }
+  return outer;
 }
 
 /**
