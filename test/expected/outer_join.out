@@ -446,3 +446,30 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+month|total|p
+Apr|0|0.2500
+Apr|430|0.7500
+Feb|0|0.5000
+Feb|240|0.5000
+Jan|0|0.5000
+Jan|100|0.5000
+Mar|0|1.0000
+(7 rows)
+remove_provenance
+
+(1 row)
+total|p
+0|0.0625
+100|0.0625
+240|0.1250
+430|0.7500
+(4 rows)
+remove_provenance
+
+(1 row)

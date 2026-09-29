@@ -612,3 +612,49 @@ DROP TABLE oj_r;
 SELECT remove_provenance('oj_la');
 SELECT remove_provenance('oj_lb');
 DROP TABLE oj_la, oj_lb;
+-- The months padded by generate_series over the minimum and maximum of a
+-- grouped subquery: several rows per group, so the unmatched arm compares
+-- them. Jan and Apr are there with probability 1/2 and 3/4, Mar always
+-- padded with 0.
+CREATE TABLE oj_sales(d date, amount int);
+INSERT INTO oj_sales VALUES ('2020-01-10', 100), ('2020-02-10', 240),
+  ('2020-04-05', 200), ('2020-04-20', 230);
+SELECT add_provenance('oj_sales');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM oj_sales; END $$;
+SET client_min_messages = error;
+CREATE TABLE oj_r AS
+  WITH w AS (SELECT month, sum(amount) AS total
+             FROM (SELECT date_trunc('month', d) AS month, amount
+                   FROM oj_sales) z GROUP BY month)
+  SELECT to_char(month, 'fmMon') AS month, coalesce(total, 0) AS total,
+         probability_evaluate(provenance()) AS p
+  FROM (SELECT generate_series(min(month), max(month), '1 month'::interval)
+               AS month FROM w) m
+  LEFT JOIN w USING (month);
+RESET client_min_messages;
+SELECT remove_provenance('oj_r');
+SET client_min_messages = error;
+SELECT month, total::text, round(p::numeric, 4) AS p
+FROM oj_r ORDER BY month, total::text;
+RESET client_min_messages;
+DROP TABLE oj_r;
+-- The latest month only, an aggregate result: the unmatched arm compares no
+-- column and counts every group of w against it, so it is there only when
+-- there is no sale at all (1/16). The rewritten query is deparsed at verbose
+-- level 20, written to the log only.
+SET client_min_messages = error;
+SET log_min_messages = notice;
+SET provsql.verbose_level = 20;
+CREATE TABLE oj_r AS
+  WITH w AS (SELECT date_trunc('month', d) AS month, sum(amount) AS total
+             FROM oj_sales GROUP BY 1)
+  SELECT coalesce(total, 0) AS total, probability_evaluate(provenance()) AS p
+  FROM (SELECT max(month) AS month FROM w) m LEFT JOIN w USING (month);
+RESET provsql.verbose_level;
+RESET log_min_messages;
+SELECT remove_provenance('oj_r');
+SELECT total::text, round(p::numeric, 4) AS p FROM oj_r ORDER BY p, total::text;
+RESET client_min_messages;
+DROP TABLE oj_r;
+SELECT remove_provenance('oj_sales');
+DROP TABLE oj_sales;

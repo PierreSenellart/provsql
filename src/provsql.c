@@ -15712,7 +15712,13 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
   je->larg = setOps->larg;
   je->rarg = setOps->rarg;
-  je->quals = (Node *)expr;
+  /* No column compared (every one a token or an aggregate result, matched
+   * otherwise): the condition is true, not an AND of nothing, which the
+   * deparser cannot print. */
+  je->quals = expr->args == NIL
+                ? (Node *)makeBoolConst(true, false)
+                : list_length(expr->args) == 1 ? (Node *)linitial(expr->args)
+                                               : (Node *)expr;
   je->rtindex = list_length(q->rtable);
 
   fe->fromlist = list_make1(je);
@@ -23205,7 +23211,9 @@ static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
     if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
       TargetEntry *te = get_tle_by_resno(rte->subquery->targetList,
                                          v->varattno);
-      if (te == NULL)
+      /* A set-returning function over aggregates (generate_series(min(x),
+       * max(x))) gives several rows per group, told apart by nothing else. */
+      if (te == NULL || expression_returns_set((Node *)te->expr))
         return false;
       if (rte->subquery->hasAggs &&
           contain_aggs_of_level((Node *)te->expr, 0))
@@ -23345,10 +23353,24 @@ static void group_set_difference_right_arm(const constants_t *constants,
     kte->resno = list_length(tl) + 1;
     tl = lappend(tl, kte);
   }
+  if (!any_group) {
+    /* Every column an aggregate result: nothing to group on, and nothing
+     * compared either, so every row of the arm counts against every left
+     * row; one group, on a constant, sums them. */
+    TargetEntry *kte;
+    SortGroupClause *sgc;
+    if (tl == NIL)
+      return;
+    kte = makeTargetEntry((Expr *)makeBoolConst(true, false),
+                          list_length(tl) + 1, NULL, true);
+    tl = lappend(tl, kte);
+    sgc = makeNode(SortGroupClause);
+    sgc->tleSortGroupRef = kte->ressortgroupref = ++sgref;
+    get_sort_group_operators(BOOLOID, false, true, false, &sgc->sortop,
+                             &sgc->eqop, NULL, &sgc->hashable);
+    G->groupClause = list_make1(sgc);
+  }
   G->targetList = tl;
-
-  if (!any_group)
-    return; /* nothing to group on; leave the arm unchanged */
 
   rarg_rte->subquery = G;
 }
