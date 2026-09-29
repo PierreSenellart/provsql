@@ -13894,9 +13894,10 @@ static SubLink *coalesced_sublink(Node *n) {
     first = (Node *)((RelabelType *)first)->arg;
   if (!IsA(first, SubLink) || ((SubLink *)first)->subLinkType != EXPR_SUBLINK)
     return NULL;
-  for_each_from(lc, co->args, 1)
-    if (checkExprHasSubLink((Node *)lfirst(lc)) ||
-        contain_volatile_functions((Node *)lfirst(lc)))
+  foreach (lc, co->args)
+    if (lfirst(lc) != linitial(co->args) &&
+        (checkExprHasSubLink((Node *)lfirst(lc)) ||
+         contain_volatile_functions((Node *)lfirst(lc))))
       return NULL;
   return (SubLink *)first;
 }
