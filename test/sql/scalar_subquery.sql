@@ -1678,6 +1678,18 @@ CREATE TABLE sq_r AS
 SELECT remove_provenance('sq_r');
 SELECT * FROM sq_r ORDER BY k;
 DROP TABLE sq_r;
+-- A subquery that only reads a one-row aggregate -- (SELECT n FROM c), c a
+-- count -- has one row too: the same join.  Two rows of sq_u at 1/2, so n is
+-- 1 on average and the value 2, where read on the data as it is it would be
+-- 3.
+CREATE TABLE sq_r AS
+  WITH c AS (SELECT count(*) AS n FROM sq_u)
+  SELECT k, round(expected(((SELECT n FROM c) + 1) * 1.0, provenance())
+                  ::numeric, 6) AS e
+  FROM sq_s WHERE k = 2;
+SELECT remove_provenance('sq_r');
+SELECT * FROM sq_r;
+DROP TABLE sq_r;
 SELECT remove_provenance('sq_s');
 SELECT remove_provenance('sq_u');
 DROP TABLE sq_s, sq_u;

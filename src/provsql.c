@@ -32038,6 +32038,28 @@ static bool unlateral_left_joins(Query *q) {
 /** @brief Is @p sl a subquery over tracked relations that reads nothing of
  *  the query around it and aggregates without grouping, so that it has
  *  exactly one row? */
+/** @brief Has @p b exactly one row: an aggregate without grouping, or a
+ *  projection of one such subquery with nothing that could drop its row? */
+static bool one_row_query(Query *b) {
+  RangeTblEntry *r;
+  if (b->commandType != CMD_SELECT || b->setOperations != NULL ||
+      b->limitCount != NULL || b->limitOffset != NULL || b->hasWindowFuncs ||
+      b->hasTargetSRFs || b->groupingSets != NIL || b->distinctClause != NIL ||
+      b->groupClause != NIL || b->havingQual != NULL || b->jointree == NULL)
+    return false;
+  if (b->hasAggs)
+    return true;
+  /* SELECT count FROM counts, counts a one-row aggregate: one row too. */
+  if (b->jointree->quals != NULL || b->hasSubLinks ||
+      list_length(b->jointree->fromlist) != 1 ||
+      !IsA(linitial(b->jointree->fromlist), RangeTblRef))
+    return false;
+  r = rt_fetch(((RangeTblRef *)linitial(b->jointree->fromlist))->rtindex,
+               b->rtable);
+  return r->rtekind == RTE_SUBQUERY && !r->lateral && r->subquery != NULL &&
+         one_row_query(r->subquery);
+}
+
 static bool one_row_uncorrelated_sublink(const constants_t *constants,
                                          SubLink *sl) {
   Query *b;
@@ -32045,7 +32067,9 @@ static bool one_row_uncorrelated_sublink(const constants_t *constants,
       sublink_is_inert(sl))
     return false;
   b = (Query *)sl->subselect;
-  if (b->commandType != CMD_SELECT || !b->hasAggs || b->groupClause != NIL ||
+  if (!one_row_query(b))
+    return false;
+  if (b->commandType != CMD_SELECT || b->groupClause != NIL ||
       b->groupingSets != NIL || b->havingQual != NULL ||
       b->setOperations != NULL || b->limitCount != NULL ||
       b->limitOffset != NULL || b->hasWindowFuncs || b->hasTargetSRFs ||
@@ -32187,7 +32211,11 @@ static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
       q->groupingSets != NIL || q->hasTargetSRFs || q->jointree == NULL)
     return false;
   tl_sublinks_walker((Node *)q->targetList, &tc);
-  if (tc.found == NIL || tc.other)
+  /* Another subquery stays where it is, for the passes after this one --
+   * unless the query aggregates, whose select list moves above its
+   * grouping. */
+  if (tc.found == NIL ||
+      (tc.other && (q->hasAggs || q->groupClause != NIL)))
     return false;
 
   if (q->hasAggs || q->groupClause != NIL) {
