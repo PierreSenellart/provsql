@@ -66,3 +66,23 @@ SELECT remove_provenance('insert_agg_tracked_eval');
 SELECT * FROM insert_agg_tracked_eval;
 DROP TABLE insert_agg_tracked_eval;
 DROP TABLE insert_agg_tracked;
+
+-- An INSERT ... SELECT over a chain of outer joins: the lowering of the chain
+-- shares its inputs through CTEs, which go to the WITH clause of the source
+-- SELECT, the statement's top level, as they go to a SELECT's.  Into a
+-- tracked target, the rows of every world, each with its provenance: those
+-- of the data as it is, every input row being certain, are plain SQL's 7.
+CREATE TABLE insert_oj (id int, city text, other int);
+SELECT add_provenance('insert_oj');
+INSERT INTO insert_oj
+  SELECT p.id, p.city, q.id
+  FROM personnel p LEFT JOIN personnel q ON q.id = p.id + 1
+                   LEFT JOIN personnel r ON r.id = q.id + 1;
+CREATE TABLE insert_oj_r AS
+  SELECT count(*) FILTER (WHERE probability_evaluate(provenance()) > 0) AS n
+  FROM insert_oj;
+SELECT remove_provenance('insert_oj_r');
+SELECT n::text AS n FROM insert_oj_r;
+DROP TABLE insert_oj_r;
+SELECT remove_provenance('insert_oj');
+DROP TABLE insert_oj;

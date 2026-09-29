@@ -34182,6 +34182,13 @@ static void process_insert_select(const constants_t *constants, Query *q) {
                     NULL);
     if (new_subquery == NULL)
       return;
+    /* The source SELECT is the statement's top level: the CTEs the lowering
+     * of its outer joins shares go to its WITH clause, as they go to a
+     * SELECT's, or nothing plans them. */
+    if (shared_ctes != NIL) {
+      hoist_shared_ctes(new_subquery);
+      recount_cte_refs_walker((Node *)new_subquery, NULL);
+    }
     src_rte->subquery = new_subquery;
 
     /* The rewrite strips a provsql column the source projects: ProvSQL manages

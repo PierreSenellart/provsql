@@ -47,3 +47,17 @@ remove_provenance
 n|token_kind
 3|one
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+n
+7
+(1 row)
+remove_provenance
+
+(1 row)
