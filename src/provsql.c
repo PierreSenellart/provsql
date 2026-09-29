@@ -32593,6 +32593,106 @@ static void warn_disjunction_across_groups(const constants_t *constants,
       "functions, used for probability computation");
 }
 
+/** @brief @p n without the one cast around it, or @p n itself. */
+static Node *strip_one_cast(Node *n) {
+  if (IsA(n, RelabelType))
+    return (Node *)((RelabelType *)n)->arg;
+  if (IsA(n, CoerceViaIO))
+    return (Node *)((CoerceViaIO *)n)->arg;
+  if (IsA(n, FuncExpr) &&
+      (((FuncExpr *)n)->funcformat == COERCE_IMPLICIT_CAST ||
+       ((FuncExpr *)n)->funcformat == COERCE_EXPLICIT_CAST) &&
+      list_length(((FuncExpr *)n)->args) >= 1)
+    return (Node *)linitial(((FuncExpr *)n)->args);
+  return n;
+}
+
+/**
+ * @brief Evaluate a reading of a frozen value only on the groups of the data
+ *        as it is.
+ *
+ * A value read as plain SQL (under its warning) is the one of the database as
+ * it is, and the groups of the result are those of every world: a group only
+ * other worlds form, from the rows an outer join pads, has on the data as it
+ * is a count of 0, and log(10, count(*)) raised where SQL, which has no such
+ * group, answers.  On such a group the value is undefined: NULL, the reading
+ * not evaluated.  A group is one of the data as it is when one of its rows is
+ * (@p per_row, the provenance of an input row).  Only a computation over the
+ * value, not a cast of it; not a grouping or sorting key, which PostgreSQL
+ * matches by its expression.
+ */
+static void guard_frozen_readers(const constants_t *constants, Query *q,
+                                 Expr *per_row) {
+  ListCell *lc;
+  if (per_row == NULL || !q->hasAggs ||
+      !OidIsValid(constants->OID_FUNCTION_PLAIN_TRUTH) ||
+      !OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE))
+    return;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Node *core;
+    CaseExpr *ce;
+    CaseWhen *cw;
+    Aggref *cnt;
+    Oid ge;
+    if (te->ressortgroupref != 0 ||
+        !frozen_agg_value_walker((Node *)te->expr, (void *)constants))
+      continue;
+    /* Down the casts, to the frozen value itself (a cast too) or to what
+     * computes over it. */
+    core = (Node *)te->expr;
+    while (!(IsA(core, FuncExpr) &&
+             ((FuncExpr *)core)->funcid ==
+               constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE)) {
+      Node *next = strip_one_cast(core);
+      if (next == core)
+        break;
+      core = next;
+    }
+    if (IsA(core, FuncExpr) &&
+        ((FuncExpr *)core)->funcid ==
+          constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE)
+      continue;
+    /* count(*) FILTER (WHERE plain_truth(per_row)) > 0 */
+    cnt = makeNode(Aggref);
+    cnt->aggfnoid = F_COUNT_;
+    cnt->aggtype = INT8OID;
+    cnt->aggstar = true;
+    cnt->aggkind = AGGKIND_NORMAL;
+    cnt->aggsplit = AGGSPLIT_SIMPLE;
+    cnt->aggfilter = (Expr *)makeFuncExpr(constants->OID_FUNCTION_PLAIN_TRUTH,
+                                          BOOLOID,
+                                          list_make1(copyObject(per_row)),
+                                          InvalidOid, InvalidOid,
+                                          COERCE_EXPLICIT_CALL);
+    cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+    cnt->aggno = cnt->aggtransno = -1;
+#endif
+    ge = OpernameGetOprid(list_make1(makeString(">")), INT8OID, INT8OID);
+    cw = makeNode(CaseWhen);
+    cw->expr = (Expr *)make_opclause(ge, BOOLOID, false, (Expr *)cnt,
+                                     (Expr *)makeConst(INT8OID, -1, InvalidOid,
+                                                       sizeof(int64),
+                                                       Int64GetDatum(0), false,
+                                                       FLOAT8PASSBYVAL),
+                                     InvalidOid, InvalidOid);
+    ((OpExpr *)cw->expr)->opfuncid = get_opcode(ge);
+    cw->result = te->expr;
+    cw->location = -1;
+    ce = makeNode(CaseExpr);
+    ce->casetype = exprType((Node *)te->expr);
+    ce->casecollid = exprCollation((Node *)te->expr);
+    ce->arg = NULL;
+    ce->args = list_make1(cw);
+    ce->defresult = (Expr *)makeNullConst(exprType((Node *)te->expr),
+                                          exprTypmod((Node *)te->expr),
+                                          exprCollation((Node *)te->expr));
+    ce->location = -1;
+    te->expr = (Expr *)ce;
+  }
+}
+
 static Query *process_query_impl(const constants_t *constants, Query *q,
                                  bool **removed, bool wrap_root,
                                  bool top_level, bool in_boolean_rewrite,
@@ -33528,6 +33628,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
         foreach (lc_ev, given_evidence)
           provenance = wrap_in_cond(constants, provenance, (Expr *)lfirst(lc_ev));
       }
+
+      guard_frozen_readers(constants, q, per_row);
 
       add_to_select(q, provenance);
       replace_provenance_function_by_expression(constants, q, provenance,

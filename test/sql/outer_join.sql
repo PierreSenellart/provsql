@@ -579,3 +579,27 @@ GROUP BY l.k, a.c;
 SELECT remove_provenance('oj_l');
 SELECT remove_provenance('oj_m');
 DROP TABLE oj_l, oj_m;
+
+-- A computation over an aggregate read as plain SQL (under its warning) is
+-- evaluated only on the groups of the data as it is.  Every row of oj_la is
+-- matched there, so the groups of the unmatched rows are those of other
+-- worlds only, where on the data as it is the count is 0: its logarithm is
+-- NULL there, where it raised -- SQL, which has no such group, answers.
+CREATE TABLE oj_la(id int, g int);
+CREATE TABLE oj_lb(id int);
+INSERT INTO oj_la VALUES (1, 1), (2, 2);
+INSERT INTO oj_lb VALUES (1), (2);
+SELECT add_provenance('oj_la');
+SELECT add_provenance('oj_lb');
+SET client_min_messages = error;
+CREATE TABLE oj_r AS
+  SELECT a.g, log(10, count(*)) AS l
+  FROM oj_la a LEFT JOIN oj_lb b ON b.id = a.id
+  WHERE b.id IS NULL GROUP BY a.g;
+RESET client_min_messages;
+SELECT remove_provenance('oj_r');
+SELECT g, l FROM oj_r ORDER BY g;
+DROP TABLE oj_r;
+SELECT remove_provenance('oj_la');
+SELECT remove_provenance('oj_lb');
+DROP TABLE oj_la, oj_lb;
