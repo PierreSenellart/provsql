@@ -95,7 +95,7 @@ add_provenance
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: a disjunction of conditions on the aggregates of different groups is read as the sum of the provenances of its sides, which is its provenance only in the Boolean semirings (Boolean functions, lineage, probability)
+WARNING:  ProvSQL: a disjunction of conditions on the aggregates of different groups is read as the sum of the provenances of its sides, which is its provenance only in the Boolean semiring and in that of Boolean functions, used for probability computation
 DETAIL:  provsql-reason: disjunction-across-groups; scope: gap
 remove_provenance
 

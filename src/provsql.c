@@ -32493,11 +32493,17 @@ static bool disjunction_across_groups_walker(Node *n, void *cx) {
  * The provenance of a condition over aggregate values is one sum over the
  * worlds of every group it reads, where the condition holds.  A disjunction
  * is rewritten as the sum of the provenances of its sides, each over its own
- * groups; the two agree where the sum is idempotent and the existence of a
- * group, which the row's annotation carries, is the identity -- the Boolean
- * semirings -- and part elsewhere: counting and the polynomials count twice
- * a world satisfying both sides, Viterbi drops the annotation of the group
- * whose side fails.  The circuit keeps no trace of which sum
+ * groups.  The two agree only where the existence of a group, which the
+ * row's annotation carries, is the identity (δ = id, necessary: Lean
+ * chain_row_ne), with a sum that is idempotent: the Boolean semiring and that
+ * of Boolean functions.  Elsewhere they part: counting and the polynomials
+ * count twice a world satisfying both sides, and where δ is not the identity
+ * -- Viterbi, lineage, whose δ of a present group is 1 -- the annotation of
+ * the group whose side fails is dropped (Lean chain_row_structural,
+ * chain_row_joint).  δ is the identity also in interval union and MinMax,
+ * whose sufficiency is not established: the message names only the two
+ * checked, which can only warn where it need not -- the safe direction for
+ * whoever widens it.  The circuit keeps no trace of which sum
  * a disjunction is -- the same gate sums the rows of a projection -- so the
  * difference is said here, where the disjunction is still one.  Not in the
  * Boolean provenance mode, which evaluates no such semiring.
@@ -32512,8 +32518,8 @@ static void warn_disjunction_across_groups(const constants_t *constants,
       PROVSQL_GAP, "disjunction-across-groups",
       "a disjunction of conditions on the aggregates of different groups is "
       "read as the sum of the provenances of its sides, which is its "
-      "provenance only in the Boolean semirings (Boolean functions, lineage, "
-      "probability)");
+      "provenance only in the Boolean semiring and in that of Boolean "
+      "functions, used for probability computation");
 }
 
 static Query *process_query_impl(const constants_t *constants, Query *q,

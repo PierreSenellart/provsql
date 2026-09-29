@@ -83,7 +83,7 @@ DROP TABLE sb_r;
 -- body, in a subquery of its own, and the disjunction reads both.  NY is only
 -- a synonym, of the first row, 0.5; CA only a name, of either row, 0.75.  The
 -- disjunction reads two different groups, which the warning says: exact here,
--- in probability, not in counting or Viterbi.
+-- in probability, not in counting, Viterbi or lineage.
 CREATE TABLE sb_r AS
   SELECT a.id, round(probability_evaluate(provenance())::numeric, 6) AS p
   FROM sb_div a

@@ -184,7 +184,8 @@ DROP TABLE hbr;
 -- A disjunction of conditions on the aggregates of two different groups is
 -- read as the sum of the provenances of its sides, where the semantics takes
 -- one sum over the worlds of both groups: the two agree in the Boolean
--- semirings, and the rewriting says so where they need not.  No warning in
+-- semiring and that of Boolean functions, and the rewriting says so where
+-- they need not.  No warning in
 -- the Boolean provenance mode, nor for a disjunction over one group's
 -- aggregates.
 CREATE TABLE hbd1(k int);
