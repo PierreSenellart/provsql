@@ -335,3 +335,20 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1234|0.000000
+1235|0.000000
+2345|0.500000
+2346|0.250000
+3456|0.000000
+3457|0.125000
+(6 rows)
+remove_provenance
+
+(1 row)

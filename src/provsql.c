@@ -1115,6 +1115,21 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
       context.varattno = attno;
       query_level_mutator(q, aggregation_type_mutator, &context,
                          QTW_IGNORE_RC_SUBQUERIES);
+      /* A LATERAL subquery reads it from above too (a correlated EXISTS
+       * decorrelated into one): at its own level, as a subquery expression
+       * would be */
+      {
+        ListCell *lr;
+        foreach (lr, q->rtable) {
+          RangeTblEntry *r = (RangeTblEntry *)lfirst(lr);
+          if (r->rtekind == RTE_SUBQUERY && r->lateral && r->subquery != NULL) {
+            context.depth = 1;
+            query_tree_mutator(r->subquery, aggregation_type_mutator,
+                               &context, QTW_DONT_COPY_QUERY);
+            context.depth = 0;
+          }
+        }
+      }
 
       /* Check if the retyped column is used in GROUP BY (an ORDER BY on it
        * sorts on its value, see sort_on_plain_values) */
@@ -24605,7 +24620,10 @@ static bool join_qual_has_agg_token_walker(Node *node,
     left = strip_agg_cast(left);
     right = strip_agg_cast(right);
 
-    if (IsA(left, Var) && IsA(right, Var)) {
+    /* An agg_token of this level: one read from above (a LATERAL subquery
+     * correlated on it) is a value here, of a row of the query above */
+    if (IsA(left, Var) && IsA(right, Var) &&
+        ((Var *)left)->varlevelsup == 0 && ((Var *)right)->varlevelsup == 0) {
       Var *left_var = (Var *)left;
       Var *right_var = (Var *)right;
       if (left_var->vartype == ctx->constants->OID_TYPE_AGG_TOKEN &&

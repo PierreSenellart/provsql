@@ -350,3 +350,24 @@ DROP TABLE wa_lr;
 SELECT remove_provenance('wa_l');
 SELECT remove_provenance('wa_r');
 DROP TABLE wa_l, wa_r;
+-- A correlated EXISTS on a window count, of the row and of the rows it
+-- reads (decorrelated into a LATERAL subquery, which reads the count from
+-- above). grp counts the rows of known kind up to the row; only 2345 is of
+-- kind x. 2345 matches itself (1/2), 2346 needs 2345 there (1/4), 3457 needs
+-- 2345 there and 3456 not (1/8), the rest never match.
+CREATE TABLE wa_x(id int, seq int, kind text);
+INSERT INTO wa_x VALUES (1234, 345, 'c'), (1235, 346, NULL), (2345, 348, 'x'),
+  (2346, 349, NULL), (3456, 350, 'c'), (3457, 351, NULL);
+SELECT add_provenance('wa_x');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM wa_x; END $$;
+CREATE TABLE wa_xr AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (WITH w AS (SELECT *, count(kind) OVER (ORDER BY seq) AS grp FROM wa_x)
+        SELECT id FROM w AS w1
+        WHERE EXISTS (SELECT 1 FROM w AS w2
+                      WHERE w2.kind = 'x' AND w1.grp = w2.grp)) e;
+SELECT remove_provenance('wa_xr');
+SELECT * FROM wa_xr ORDER BY id;
+DROP TABLE wa_xr;
+SELECT remove_provenance('wa_x');
+DROP TABLE wa_x;
