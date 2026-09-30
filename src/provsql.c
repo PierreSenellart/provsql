@@ -22367,6 +22367,92 @@ static Node *oj_same_sublink_mut(Node *node, void *cx) {
 }
 
 /**
+ * @brief Wrap the outer subquery @p R_idx of @p q as @c "SELECT R.*,
+ *        plain(row_number() OVER ()) FROM R", a column numbering its rows.
+ *
+ * The decorrelation through a LEFT JOIN groups by the outer rows; two equal
+ * rows (a relation with duplicates) would be one group, which reads the
+ * subquery's matches once per duplicate and returns one row for both.  The
+ * number, a key of the grouping like the other columns, keeps them apart.
+ * Marked plain(): the number of a row is no value of the data, and tracked as
+ * a rank it would tie equal rows again.  The columns of R keep their numbers,
+ * so the query's references to them hold.
+ */
+static void oj_add_row_identity(const constants_t *constants, Query *q,
+                                Index R_idx) {
+  RangeTblEntry *R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  RangeTblEntry *inner = copyObject(R_rte);
+  RangeTblEntry *w_rte = makeNode(RangeTblEntry);
+  Query *w = makeNode(Query);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  WindowClause *wc = makeNode(WindowClause);
+  WindowFunc *rn = makeNode(WindowFunc);
+  List *tl = NIL, *colnames = NIL;
+  ListCell *lc;
+
+  /* R goes one level down, into w */
+  IncrementVarSublevelsUp((Node *)inner->subquery, 1, 1);
+  inner->lateral = false;
+  foreach (lc, R_rte->subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    tl = lappend(tl, makeTargetEntry(
+                       (Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                                       exprTypmod((Node *)te->expr),
+                                       exprCollation((Node *)te->expr), 0),
+                       list_length(tl) + 1,
+                       te->resname ? pstrdup(te->resname) : NULL, false));
+  }
+  wc->frameOptions = FRAMEOPTION_DEFAULTS;
+  wc->winref = 1;
+  rn->winfnoid = F_ROW_NUMBER;
+  rn->wintype = INT8OID;
+  rn->winref = 1;
+  rn->location = -1;
+  tl = lappend(tl, makeTargetEntry(
+                     (Expr *)makeFuncExpr(constants->OID_FUNCTION_PLAIN,
+                                          INT8OID, list_make1(rn), InvalidOid,
+                                          InvalidOid, COERCE_EXPLICIT_CALL),
+                     list_length(tl) + 1, pstrdup("provsql_rowid"), false));
+
+  w->commandType = CMD_SELECT;
+  w->canSetTag = true;
+  rtr->rtindex = 1;
+  w->rtable = list_make1(inner);
+  w->jointree = makeFromExpr(list_make1(rtr), NULL);
+  w->targetList = tl;
+  w->windowClause = list_make1(wc);
+  w->hasWindowFuncs = true;
+  w->hasSubLinks = checkExprHasSubLink((Node *)tl);
+#if PG_VERSION_NUM >= 160000
+  /* An expanded view keeps its permission entry, which goes down with it */
+  if (inner->perminfoindex != 0) {
+    RTEPermissionInfo *perminfo =
+      getRTEPermissionInfo(q->rteperminfos, R_rte);
+    w->rteperminfos = list_make1(copyObject(perminfo));
+    inner->perminfoindex = 1;
+  }
+#endif
+
+  foreach (lc, tl)
+    colnames = lappend(colnames, makeString(pstrdup(
+      ((TargetEntry *)lfirst(lc))->resname != NULL
+        ? ((TargetEntry *)lfirst(lc))->resname : "?column?")));
+  w_rte->rtekind = RTE_SUBQUERY;
+  w_rte->subquery = w;
+  w_rte->alias = copyObject(R_rte->alias);
+  w_rte->eref = makeAlias(R_rte->eref->aliasname, colnames);
+  w_rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  w_rte->requiredPerms = ACL_SELECT;
+#endif
+  if (w_rte->alias != NULL)
+    w_rte->alias->colnames = NIL;
+  lfirst(list_nth_cell(q->rtable, R_idx - 1)) = w_rte;
+}
+
+/**
  * @brief Decorrelate scalar subqueries into LATERAL subqueries, or into a
  *        LEFT JOIN with grouping.
  *
@@ -22854,6 +22940,12 @@ join:
 
   /* ---- Commit: pull Q up, build the LEFT JOIN, choose() + GROUP BY + count.
    * R stays at R_idx, Q is appended (Q_idx), join RTE appended (join_idx). ---*/
+  /* Each outer row its own group, equal ones too */
+  if (R_rte->rtekind == RTE_SUBQUERY &&
+      OidIsValid(constants->OID_FUNCTION_PLAIN)) {
+    oj_add_row_identity(constants, q, R_idx);
+    R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  }
   oj_collect_cols(constants, R_rte, &Rc);
   oj_collect_cols(constants, Q_rte_orig, &Qc);
 

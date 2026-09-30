@@ -239,3 +239,32 @@ DROP TABLE ro_kr;
 SELECT remove_provenance('ro_ku');
 SELECT remove_provenance('ro_kp');
 DROP TABLE ro_ku, ro_kp;
+
+-- Two equal outer rows, each counting the rows of ro_ds before it: two rows,
+-- as in SQL, not one counting both. Each row of ro_dr and ro_ds at one half:
+-- a row is there half the time, n is 3/2 on average, and so is its rank, 1
+-- plus the other row of ro_dr when it is there.
+CREATE TABLE ro_dr(k int);
+CREATE TABLE ro_ds(k int);
+INSERT INTO ro_dr VALUES (1), (1);
+INSERT INTO ro_ds VALUES (1), (1), (1);
+SELECT add_provenance('ro_dr');
+SELECT add_provenance('ro_ds');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM ro_dr;
+  PERFORM set_prob(provenance(), 0.5) FROM ro_ds;
+END $$;
+CREATE TABLE ro_drr AS
+  SELECT round(probability_evaluate(provenance())::numeric, 6) AS p,
+         round(expected(n, provenance())::numeric, 6) AS n,
+         round(expected(rk, provenance())::numeric, 6) AS rk
+  FROM (WITH t AS (SELECT k, (SELECT count(*) FROM ro_ds s WHERE s.k = r.k) AS n
+                   FROM ro_dr r)
+        SELECT t.n, (SELECT count(*) FROM t t2 WHERE t2.n >= t.n) AS rk
+        FROM t) x;
+SELECT remove_provenance('ro_drr');
+SELECT * FROM ro_drr;
+DROP TABLE ro_drr;
+SELECT remove_provenance('ro_dr');
+SELECT remove_provenance('ro_ds');
+DROP TABLE ro_dr, ro_ds;

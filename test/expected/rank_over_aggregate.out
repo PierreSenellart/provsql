@@ -155,3 +155,22 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p|n|rk
+0.500000|1.500000|1.500000
+0.500000|1.500000|1.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
