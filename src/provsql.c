@@ -265,6 +265,7 @@ static void provsql_subxact_callback(SubXactEvent event,
     provsql_executor_depth = provsql_subxact_depth[level];
 }
 static post_parse_analyze_hook_type prev_post_parse_analyze = NULL; ///< Previous post-parse-analysis hook (chained)
+static emit_log_hook_type prev_emit_log = NULL; ///< Previous error-report hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
@@ -36183,6 +36184,41 @@ static void provsql_post_parse_analyze(ParseState *pstate, Query *query) {
 }
 
 /**
+ * @brief Error-report hook: add a hint to the two errors that the
+ *        @c provsql column a @c * expands to causes in parse analysis.
+ *
+ * @c * over a tracked table counts its @c provsql column, so PostgreSQL
+ * rejects an arm of a set operation that has one column more than the
+ * other, and an @c INSERT @c ... @c SELECT @c * into a table that lacks the
+ * column.  Both are raised before any other hook of ProvSQL runs, so the
+ * statement cannot be corrected; the hint gives the cause and the way out.
+ *
+ * The errors are recognized by their untranslated text, and the hint is
+ * added when the statement has a @c * at all: whether one of its tables is
+ * tracked is not known here, and the catalog cannot be read while an error
+ * is being reported, hence the conditional wording.  PostgreSQL calls the
+ * hook only for a message that goes to the server log, which an @c ERROR
+ * does unless @c log_min_messages is set above it.
+ */
+static void provsql_emit_log(ErrorData *edata) {
+  if (edata->elevel == ERROR && edata->hint == NULL &&
+      edata->sqlerrcode == ERRCODE_SYNTAX_ERROR && edata->message_id != NULL &&
+      (strcmp(edata->message_id,
+              "each %s query must have the same number of columns") == 0 ||
+       strcmp(edata->message_id,
+              "INSERT has more expressions than target columns") == 0)) {
+    const char *src =
+      edata->internalquery != NULL ? edata->internalquery : debug_query_string;
+    if (src != NULL && strchr(src, '*') != NULL)
+      edata->hint = pstrdup(
+        "If a table this statement reads is tracked by ProvSQL, * includes "
+        "its provsql column. List the columns instead.");
+  }
+  if (prev_emit_log)
+    prev_emit_log(edata);
+}
+
+/**
  * @brief Extension initialization – called once when the shared library is loaded.
  *
  * Registers the GUC variables (@c provsql.active, @c where_provenance,
@@ -36826,6 +36862,7 @@ void _PG_init(void) {
   prev_ExecutorStart = ExecutorStart_hook;
   prev_ExecutorEnd   = ExecutorEnd_hook;
   prev_ProcessUtility = ProcessUtility_hook;
+  prev_emit_log = emit_log_hook;
 #ifdef PROVSQL_INPROCESS_STORE
   /* Single-process store: no shared memory to request and no background
      worker; the circuit lives in this process behind an in-memory
@@ -36848,6 +36885,7 @@ void _PG_init(void) {
   ExecutorStart_hook  = provsql_executor_start;
   ExecutorEnd_hook    = provsql_executor_end;
   ProcessUtility_hook = provsql_ProcessUtility;
+  emit_log_hook       = provsql_emit_log;
 
 #ifndef PROVSQL_INPROCESS_STORE
   RegisterProvSQLMMapWorker();
@@ -36872,5 +36910,6 @@ void _PG_fini(void) {
   ExecutorStart_hook  = prev_ExecutorStart;
   ExecutorEnd_hook    = prev_ExecutorEnd;
   ProcessUtility_hook = prev_ProcessUtility;
+  emit_log_hook       = prev_emit_log;
 }
 

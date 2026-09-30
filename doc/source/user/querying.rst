@@ -241,6 +241,15 @@ The constructs themselves:
   frames with an offset, etc. The query still executes, with a
   ``WARNING``, and each output row carries the provenance of its input
   row, but the window value is an opaque scalar
+* ``*`` **over a provenance-tracked table where the number of columns has
+  to match:** ``*`` counts the ``provsql`` column, so PostgreSQL rejects an
+  arm of ``UNION``, ``INTERSECT`` or ``EXCEPT`` whose other arm does not
+  have that column (``each UNION query must have the same number of
+  columns``), and an ``INSERT INTO t SELECT * …`` into a table that is not
+  tracked (``INSERT has more expressions than target columns``). These are
+  errors of PostgreSQL (SQLSTATE ``42601``), raised before ProvSQL sees the
+  query; ProvSQL adds a ``HINT`` to them. List the columns instead of
+  writing ``*``. Two arms that both read ``*`` from tracked tables are fine
 
 For unsupported correlated subqueries, ``LATERAL`` can be used as a
 workaround.
