@@ -125,7 +125,8 @@ Williams2021|1.6720
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: ordering or grouping an aggregate result reads its value on the data as it is, the one this statement computed: another possible world need not order them the same way
+WARNING:  ProvSQL: ordering or grouping an aggregate result reads the value shown, not per world
+DETAIL:  provsql-reason: agg-token-ordered-by-value; scope: deliberate
 exposure|outcome|effect|n_studies|top_reliability|evidence_weight|evidence_weight_value
 Exercise|Cardiovascular Disease|beneficial|3 (*)|0.98 (*)|2.9400 (*)|2.94 (*)
 Processed Food|Type 2 Diabetes|harmful|2 (*)|0.98 (*)|1.9600 (*)|1.96 (*)

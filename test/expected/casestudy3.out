@@ -24,8 +24,9 @@ remove_provenance
 stop_name|formula
 DestB|1 ⊗ 1 ⊗ 0 ⊗ 1
 (1 row)
-WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks cs3_stops; write LIMIT plain(k) to say so
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks cs3_stops
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
+HINT:  Write LIMIT plain(k) to say so.
 remove_provenance
 
 (1 row)

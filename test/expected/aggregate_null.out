@@ -84,7 +84,8 @@ g|n|p
 3|f|0.000000
 3|t|0.500000
 (6 rows)
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -111,10 +112,12 @@ remove_provenance
 n
 f
 (1 row)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks anx; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks anx
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: whether an aggregate result is NULL is read on the database as it is, not tracked: its truth is exploded into the worlds only in a block with no window function, although the statement also tracks anx; mark it plain() to say so
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: NULL test of an aggregate result in a block with a window function: provenance not tracked, although the statement tracks anx
 DETAIL:  provsql-reason: aggregate-nullness-read-as-plain-value; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

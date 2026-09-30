@@ -130,6 +130,27 @@
 #endif
 
 /**
+ * @brief @c provsql_unsupported and @c provsql_warning_tagged with a
+ *        @c HINT line, @p hint, saying how to write the query instead.
+ */
+#ifdef TDKC
+#define provsql_unsupported_hint(scope, tag, hint, fmt, ...)                  \
+  provsql_error(fmt, ##__VA_ARGS__)
+#define provsql_warning_tagged_hint(scope, tag, hint, fmt, ...)               \
+  provsql_warning(fmt, ##__VA_ARGS__)
+#else
+#define provsql_unsupported_hint(scope, tag, hint, fmt, ...)                  \
+  ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),                     \
+                  errmsg("ProvSQL: " fmt, ##__VA_ARGS__),                     \
+                  errdetail("provsql-reason: %s; scope: %s", tag, scope),     \
+                  errhint("%s", hint)))
+#define provsql_warning_tagged_hint(scope, tag, hint, fmt, ...)               \
+  ereport(WARNING, (errmsg("ProvSQL: " fmt, ##__VA_ARGS__),                   \
+                    errdetail("provsql-reason: %s; scope: %s", tag, scope),   \
+                    errhint("%s", hint)))
+#endif
+
+/**
  * @brief Emit a ProvSQL informational notice (execution continues).
  *
  * Expands to @c elog(NOTICE, "ProvSQL: " fmt, ...).  Typically used for

@@ -114,7 +114,7 @@ What each case study covers
     subtotals, shares of a total, the leading region and each region's
     rank, comparisons with a target, a ``NULLIF`` percentage, aggregates of
     aggregates, grouping by an aggregate's value, ``DISTINCT ON``, and
-    :sqlfunc:`plain` for a value meant as plain SQL.
+    :sqlfunc:`plain` for a value meant without provenance.
 
 .. _case-study-coverage:
 
@@ -200,7 +200,7 @@ Supported SQL constructs
    "``INTERSECT``", "", "", "", "", "", "✓", "", "", "", ""
    "``DISTINCT ON``", "", "", "", "", "", "", "", "", "", "✓"
    "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", "", "✓"
-   "``plain()`` (a value read as plain SQL)", "", "", "", "✓", "", "", "", "", "", "✓"
+   "``plain()`` (a value read without provenance)", "", "", "", "✓", "", "", "", "", "", "✓"
    "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist`` / ``percent_rank`` / ``ntile``)", "", "", "", "", "", "", "", "", "", "✓"
    "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", "", ""
    "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", "", "✓"

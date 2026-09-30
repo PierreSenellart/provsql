@@ -26,10 +26,10 @@ to produce each aggregate value.
 The value displayed for an aggregate (``3 (*)``) is the one plain SQL
 computes on the same data, without provenance.  Some rows of a query are
 kept only for the worlds where they exist, and are absent from the
-database as it is: the null-padded row of an outer join for a row that
+actual database: the null-padded row of an outer join for a row that
 does have a match, a group that a ``HAVING`` rejects, a row beyond an
 ``ORDER BY … LIMIT``.  Such rows do not count in the displayed value; they
-do in its provenance.  Whether a row holds in the database as it is, every
+do in its provenance.  Whether a row holds in the actual database, every
 input tuple present, is :sqlfunc:`sr_boolean` without a mapping:
 
 .. code-block:: postgresql
@@ -39,7 +39,7 @@ input tuple present, is :sqlfunc:`sr_boolean` without a mapping:
 
 ``ORDER BY`` on an aggregate result sorts on that displayed value, so
 the rows come in the order plain SQL gives them, each with its
-provenance.  This is the order of the database as it is, not of each
+provenance.  This is the order in the actual database, not in each
 world, and a warning says so.  With a ``LIMIT``, the cut is therefore not
 read per world either (see :ref:`the section on LIMIT <limit>`).
 
@@ -82,7 +82,7 @@ arithmetic that defines them,
 over the sums and the count, which are tracked. The value is the one
 PostgreSQL computes, and it is read in every possible world like any other
 arithmetic over aggregates. Over a floating-point argument, these aggregates
-are read as a plain value on the data as it is, with a warning.
+are read as a plain value, not tracked, with a warning.
 
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -103,8 +103,8 @@ both in the same query and over subquery results:
 An operation that ProvSQL does not track reads the aggregate result as a
 value of the aggregate's return type (e.g., ``bigint`` for ``COUNT``,
 ``numeric`` for ``AVG``, ``boolean`` for ``bool_or`` read as a condition,
-as in ``CASE WHEN bool_or(x) THEN … END``), evaluated as plain SQL on the
-data as it is (see :ref:`plain-sql`). ProvSQL then emits one warning for
+as in ``CASE WHEN bool_or(x) THEN … END``), computed without provenance
+(see :ref:`plain-sql`). ProvSQL then emits one warning for
 the statement, naming a relation it tracks, and :ref:`provsql.implicit_freeze
 <provsql-implicit-freeze>` set to ``'error'`` refuses the query. Marking the
 part with :sqlfunc:`plain` says that the plain value is meant, and is the
@@ -144,15 +144,14 @@ are left as they are.
 
 A column of such a tracked cast is still an ``agg_token``, and a query may
 sort, group or take the ``DISTINCT`` of it. The order used is that of the
-values on the data as it is, numbers compared as numbers and a result with
+values shown, numbers compared as numbers and a result with
 no value first. Since other possible worlds may order the values
 differently, a warning is emitted once for the statement:
 
 .. code-block:: text
 
-    WARNING: ordering or grouping an aggregate result reads its value on the
-    data as it is, the one this statement computed: another possible world
-    need not order them the same way
+    WARNING:  ProvSQL: ordering or grouping an aggregate result reads the value shown, not per world
+    DETAIL:  provsql-reason: agg-token-ordered-by-value; scope: deliberate
 
 Window functions over aggregate results (e.g., ``SUM(cnt) OVER ()``)
 execute but are **not** provenance-aware: the windowed value is an opaque
@@ -240,7 +239,7 @@ expression: ``sum(x) / 3`` over a ``double precision`` column gives ``2``,
 column gives ``1.9``.  For the four basic operations, the value is the one
 floating-point arithmetic gives; for ``^``, the last digit may differ.
 
-A division by an aggregate that the data as it is makes zero has no value,
+A division by an aggregate that is zero in the actual database has no value,
 ``NULL``, where plain PostgreSQL raises a division-by-zero error and returns
 nothing at all: the row is kept, with its provenance, and reading its value
 says only that this one world has none.
@@ -552,18 +551,18 @@ also tracked, its value read in every possible world:
     SELECT avg(n) AS employees_per_city
     FROM (SELECT city, count(*) AS n FROM employees GROUP BY city) t;
 
-The value displayed is the one plain SQL computes, on the data as it is,
-as for any aggregate. A probability or a moment over it is computed by
-enumerating the possible worlds of the input tuples, which is exact while
+The value displayed is the one plain SQL computes, as for any aggregate. A
+probability or a moment over it is computed by enumerating the possible
+worlds of the input tuples, which is exact while
 they are few (``possible-worlds-aggregates``, see :ref:`route-methods`),
 and estimated by sampling beyond that.  So ``expected(avg(n))`` is the
 average of the counts *of the cities present in each world*, not the
 average of the counts the database happens to hold.
 
 An aggregate that reads such a result in a ``FILTER``, an ``ORDER BY`` or a
-``DISTINCT`` of its own, or whose inner value is not numeric, reads it on
-the data as it is instead, and reports that reading once for the statement
-(see :ref:`plain-sql`).
+``DISTINCT`` of its own, or whose inner value is not numeric, reads it as a
+plain value instead, not tracked, and reports that reading once for the
+statement (see :ref:`plain-sql`).
 
 Functions of an aggregate result
 --------------------------------
@@ -587,11 +586,11 @@ are SQL's. Outside the aggregation (a ``WHERE`` on a derived table's
 aggregate, a scalar subquery), such a row is kept with a provenance of
 zero, which says that no world holds it.
 
-Any other function reads the value of the aggregate on the data as it is and
-reports that reading once for the statement (see :ref:`plain-sql`); an
+Any other function reads the aggregate result as a plain value, not tracked,
+and reports that reading once for the statement (see :ref:`plain-sql`); an
 explicit cast asks for it. A stored column of such an expression has type
-``agg_token``; an ``ORDER BY`` on it sorts on its value on the data as it is,
-with a warning, since another world need not order the rows the same way.
+``agg_token``; an ``ORDER BY`` on it sorts on the value shown, with a
+warning, since another world need not order the rows the same way.
 
 .. _explode-agg-value:
 
@@ -644,7 +643,7 @@ matched together.  ``UNION ALL`` keeps every row and needs none of this.
 
 An aggregate over exploded rows (the ``count(*)`` above) is an aggregate
 over rows that are uncertain like any others: its displayed value is the
-one of the database as it is, and :sqlfunc:`expected` and the other
+one of the actual database, and :sqlfunc:`expected` and the other
 moments are taken over the worlds where the row is.
 
 The explosion applies to the aggregates whose values can be enumerated:
@@ -735,7 +734,7 @@ between two aggregates, one over an aggregate whose
 a single row), and one in a query that also computes a window function.
 None of this applies in a ``HAVING`` condition, which is already the
 provenance of the group, nor to a sort key, which orders the rows on the
-data as it is, as an ``ORDER BY`` on the value of an aggregate does.
+value shown, as an ``ORDER BY`` on the value of an aggregate does.
 
 
 Joining and exploding aggregated provenance

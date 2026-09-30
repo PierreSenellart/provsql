@@ -90,8 +90,9 @@ n|p
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks leak_t; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks leak_t
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -107,16 +108,18 @@ LINE 1: SELECT count(*) FROM leak_t;
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks t; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks t
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
 n|e
 3|0.875000
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks t; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks t
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -166,15 +169,17 @@ add_provenance
 v|p
 1|0.250000
 (1 row)
-WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end; mark it plain() to say so
+WARNING:  ProvSQL: bound of a recursive term over a tracked relation: provenance not tracked
 DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+HINT:  Mark it plain() to say so.
 n|p
 1|0.500000
 2|0.500000
 3|0.500000
 (3 rows)
-WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end; mark it plain() to say so
+WARNING:  ProvSQL: bound of a recursive term over a tracked relation: provenance not tracked
 DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -184,8 +189,9 @@ rows_under_error
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end, although the statement also tracks rsib; mark it plain() to say so
+WARNING:  ProvSQL: bound of a recursive term over a tracked relation: provenance not tracked, although the statement tracks rsib
 DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

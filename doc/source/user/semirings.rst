@@ -41,7 +41,7 @@ provenance tokens?":
 
 The mapping is optional: an input token it does not map is true, and
 without a mapping :sqlfunc:`sr_boolean` tells whether the row holds in the
-database as it is, every input tuple present (a null-padded row of an outer
+actual database, every input tuple present (a null-padded row of an outer
 join does not when the row has a match).
 
 Boolean-Expression Semiring

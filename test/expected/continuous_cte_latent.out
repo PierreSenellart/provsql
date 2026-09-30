@@ -5,7 +5,8 @@ t|t|t
 leaf_shared
 t
 (1 row)
-WARNING:  ProvSQL: CTE "e" requires provenance rewriting and is inlined at each of its 2 references; its volatile expressions (e.g. random-variable constructors) are re-evaluated per reference and not shared between them
+WARNING:  ProvSQL: CTE "e" is inlined at each of its 2 references: its volatile expressions (e.g., random-variable constructors) are evaluated once per reference
+DETAIL:  provsql-reason: cte-volatile-inlined; scope: deliberate
 decoupled
 t
 (1 row)

@@ -262,9 +262,9 @@ static void warn_ordering_once(void)
   if (seen == provsql_stmt_serial)
     return;
   seen = provsql_stmt_serial;
-  provsql_warning("ordering or grouping an aggregate result reads its value "
-                  "on the data as it is, the one this statement computed: "
-                  "another possible world need not order them the same way");
+  provsql_warning_tagged(PROVSQL_DELIBERATE, "agg-token-ordered-by-value",
+                         "ordering or grouping an aggregate result reads "
+                         "the value shown, not per world");
 }
 
 /** @brief Whether @p v is the text of a number, as @c numeric_in would read
@@ -554,8 +554,10 @@ ntile_as_rank(PG_FUNCTION_ARGS)
       strtoll(bucket->val, NULL, 10) != sql_bucket &&
       warned != GetCurrentStatementStartTimestamp()) {
     warned = GetCurrentStatementStartTimestamp();
-    provsql_warning("ntile() gives rows that tie on the ORDER BY the bucket "
-                    "of their rank, where SQL splits them between buckets");
+    provsql_warning_tagged(PROVSQL_DELIBERATE, "ntile-as-rank",
+                           "ntile() gives rows that tie on the ORDER BY the "
+                           "bucket of their rank, where SQL splits them "
+                           "between buckets");
   }
   PG_RETURN_POINTER(bucket);
 }
@@ -594,9 +596,10 @@ row_number_as_rank(PG_FUNCTION_ARGS)
       strtoll(rank->val, NULL, 10) != row_number &&
       warned != GetCurrentStatementStartTimestamp()) {
     warned = GetCurrentStatementStartTimestamp();
-    provsql_warning("row_number() / LIMIT / DISTINCT ON is tracked as rank() "
-                    "(WITH TIES), which it differs from when rows tie on the "
-                    "ORDER BY");
+    provsql_warning_tagged(PROVSQL_DELIBERATE, "row-number-as-rank",
+                           "row_number() / LIMIT / DISTINCT ON is tracked as "
+                           "rank() (WITH TIES), which it differs from when "
+                           "rows tie on the ORDER BY");
   }
   PG_RETURN_POINTER(rank);
 }

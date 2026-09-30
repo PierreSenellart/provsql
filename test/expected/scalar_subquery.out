@@ -83,7 +83,7 @@ add_provenance
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body truncates its rows with LIMIT or OFFSET, which the decorrelation would read on the data as it is
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body truncates its rows with LIMIT or OFFSET, which the decorrelation cannot read per world
 DETAIL:  provsql-reason: body-limit; scope: gap
 add_provenance
 
@@ -467,8 +467,9 @@ a|v1|v1_gate
 20|50.0000000000000000 (*)|arith
 30|75.0000000000000000 (*)|arith
 (3 rows)
-WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked
 DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -755,15 +756,17 @@ remove_provenance
 a|f
 x|3
 (1 row)
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: subquery over a tracked relation in an untracked position: provenance not tracked
 DETAIL:  provsql-reason: sublink-in-untracked-position-frozen; scope: gap
+HINT:  Mark it plain() to say so.
 a
 1
 2
 3
 (3 rows)
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL, although the statement also tracks ssp; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: subquery over a tracked relation in an untracked position: provenance not tracked, although the statement tracks ssp
 DETAIL:  provsql-reason: sublink-in-untracked-position-frozen; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -818,8 +821,9 @@ add_provenance
 create_provenance_mapping
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks ssx; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks ssx
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

@@ -19,8 +19,9 @@ count
 2 (*)
 3 (*)
 (3 rows)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

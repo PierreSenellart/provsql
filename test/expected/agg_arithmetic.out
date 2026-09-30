@@ -65,10 +65,12 @@ Berlin|3 (*)
 New York|3 (*)
 Paris|4 (*)
 (3 rows)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: window
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -119,8 +121,9 @@ Berlin|11.0000000000000000 (*)
 New York|3.0000000000000000 (*)
 Paris|9.3333333333333334 (*)
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -158,8 +161,9 @@ k|e_span|e_rate
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional, comparison, boolean
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -182,8 +186,9 @@ Paris|1 (*)|4 (*)|1.5000000000000000 (*)|2 (*)|-1 (*)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_dates; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks agg_arith_dates
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -191,8 +196,9 @@ label|ts|txt
 a|Wed Jan 15 00:00:00 2020 (*)|01-15-2020
 b|Sat Feb 01 00:00:00 2020 (*)|02-01-2020
 (2 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_dates; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks agg_arith_dates
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -220,16 +226,18 @@ remove_provenance
 r|a|f|e
 933.33 (*)|28.0 (*)|9.333333 (*)|7
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: comparison, function
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
 eq|n|f
 t|7|2.333333 (*)
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: function
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -241,8 +249,9 @@ g
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks agg_arith_ts
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -264,8 +273,9 @@ remove_provenance
 r
 2.333 (*)
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -281,12 +291,15 @@ id|d
 1|first
 2|second
 (2 rows)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: window-over-aggregate-frozen; scope: gap
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: window
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -321,8 +334,9 @@ Paris|1 (*)|10 (*)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks agg_arith_ts
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -424,7 +438,8 @@ remove_provenance
 e_abs|e_absfn|e_signed
 2.333333|2.333333|-1.666667
 (1 row)
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)

@@ -43,8 +43,8 @@ The following SQL constructs are supported with full provenance tracking:
 * ``JOIN`` (inner joins, outer joins, natural joins)
 * ``LATERAL`` subqueries
 * Non-recursive CTEs (``WITH`` clauses).  A data-modifying CTE
-  (``INSERT`` / ``UPDATE`` / ``DELETE … RETURNING``) runs once, as
-  plain SQL, and the rows it returns carry no provenance; it may not
+  (``INSERT`` / ``UPDATE`` / ``DELETE … RETURNING``) runs once, not
+  tracked, and the rows it returns carry no provenance; it may not
   read another CTE over provenance-tracked relations
 * Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) or
   ``UNION ALL`` (bag semantics) over
@@ -97,7 +97,7 @@ The following SQL constructs are supported with full provenance tracking:
   ``WHERE`` tests tracked ones) is tracked as well: the rows of the untracked
   side count as present in every world, and the answer carries the
   provenance of the semijoin or the antijoin. Where this
-  is not possible, the block is evaluated by plain SQL, with a warning.
+  is not possible, ProvSQL does not track the block and emits a warning.
   A subquery condition need not be a conjunct of the ``WHERE`` clause: in
   ``WHERE name = 'NY' OR EXISTS (…)``, a row licensed by the other disjunct
   keeps its own provenance and one licensed only by the subquery gets the
@@ -138,7 +138,8 @@ Unsupported SQL Features
 -------------------------
 
 The following constructs are **not** currently supported; queries using them
-either raise an error or are partly evaluated as plain SQL, with a warning.
+either raise an error or have a part whose provenance is not tracked, with a
+warning.
 A query ProvSQL refuses raises an error with SQLSTATE ``0A000``
 (``feature_not_supported``), which a client can tell from an internal
 error (``XX000``). Its message names the cause for a reader, and its
@@ -163,15 +164,15 @@ limit it is:
 
 ``deliberate``
     the shape has no provenance to give, so the refusal, or the warning
-    naming what was read as plain SQL, is the answer, and will remain so:
+    naming the part not tracked, is the answer, and will remain so:
 
     * ``EXCEPT ALL`` and ``INTERSECT ALL``, whose kept copies have no
       provenance of their own;
     * ``IN`` read as a value, whose unknown truth no count of matches tells
       from false;
     * a ``LIMIT`` with no ``ORDER BY``, since SQL leaves open which rows are
-      kept, and a ``LIMIT plain(k)``, which asks for the cut of the result on
-      the data as it is; an ``ORDER BY … LIMIT`` that ProvSQL does not read in
+      kept, and a ``LIMIT plain(k)``, which asks for the cut of the actual
+      result; an ``ORDER BY … LIMIT`` that ProvSQL does not read in
       every world is reported as a ``gap``;
     * a window function whose value is read at an offset other than one
       (``lag(x, 3)``, ``nth_value(x, 2)``), or an aggregate over a ``ROWS`` or
@@ -190,7 +191,7 @@ limit it is:
     conditioning, and ProvSQL's own functions, such as a ``provenance()``
     call in an expression.
 
-A warning that names a part evaluated as plain SQL (see :ref:`plain-sql`)
+A warning that names a part whose provenance is not tracked (see :ref:`plain-sql`)
 carries the same fields, whatever :ref:`provsql.implicit_freeze
 <provsql-implicit-freeze>` does with it.
 
@@ -205,8 +206,7 @@ The constructs themselves:
   …, including via ``IN``/``NOT IN``) -- a plain value body or
   ``count(*)`` in that position is not.  A scalar subquery nested in a
   larger expression (``1 + (SELECT …)``, an argument of a function such
-  as ``generate_series(1, (SELECT n FROM t))``) is evaluated by
-  PostgreSQL on the data as it is, its data treated as certain, and
+  as ``generate_series(1, (SELECT n FROM t))``) is not tracked, and
   ProvSQL emits a ``WARNING``
 * **Recursive CTEs** (``WITH RECURSIVE``) over cyclic data *without* an
   absorptive provenance class, or on PostgreSQL versions before 15
@@ -323,16 +323,24 @@ so ``LIMIT 1000`` over ten rows is reported as well.
 
 .. _plain-sql:
 
-Parts Evaluated as Plain SQL
-----------------------------
+Parts Whose Provenance Is Not Tracked
+-------------------------------------
 
-A few constructs are not tracked: PostgreSQL evaluates them on the data
-as it is. The result is
+A few constructs are not tracked: their value is computed without regard
+to provenance, and need not be the one plain SQL gives, since correlations
+between that part and the rest of the query are ignored. The result is
 then the exact provenance of a slightly different query, in which that
 part is a constant; ProvSQL says which part in a ``WARNING``:
 
-* a window function other than those of :ref:`window-aggregates`, whose
-  value is the one of the data as it is;
+.. code-block:: text
+
+    WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked
+    DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+    HINT:  Mark it plain() to say so.
+
+The parts not tracked are:
+
+* a window function other than those of :ref:`window-aggregates`;
 * a window partitioned by an aggregate result, or ordered by one other
   than the tracked ranks (see :ref:`rank-over-aggregate`);
 * a subquery in a position no rewriting handles (a scalar subquery
@@ -349,11 +357,13 @@ When the part reads only relations that the rest of the statement does
 not track, the result is the provenance of the statement with those
 relations untracked, a sound possible-world model. When it reads a
 relation the rest tracks, the same tuples are uncertain for the rest and
-taken as they are for that part: the warning names such a relation, and
+not for that part: the warning names such a relation (``provenance not
+tracked, although the statement tracks t``), and
 setting :ref:`provsql.implicit_freeze <provsql-implicit-freeze>` to
 ``'error'`` refuses the query instead.
 
-Marking the part with :sqlfunc:`plain` says that plain SQL is meant, and
+Marking the part with :sqlfunc:`plain` says that computing it without
+provenance is meant, and
 is the only way to silence the warning (a cast of an aggregate to a number
 is tracked, see :doc:`aggregation`): ``plain((SELECT max(x) FROM t))``,
 ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``:
@@ -363,7 +373,7 @@ is tracked, see :doc:`aggregation`): ``plain((SELECT max(x) FROM t))``,
     SELECT id, plain((SELECT count(*) FROM posts c WHERE c.parent = p.id))
     FROM posts p;
 
-A whole table can be read as plain SQL too, in ``FROM``: ``plain`` of a
+A whole table can be read without provenance too, in ``FROM``: ``plain`` of a
 value of its row type (the usual ``NULL::t``) stands for the table, its
 columns without the ``provsql`` one, and brings no provenance of its own
 (the rows of a join with it carry the provenance of the other side only):

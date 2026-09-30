@@ -27,7 +27,9 @@ window over its own aggregates, ordered|2|1|3|1.500000
 window over its own aggregates, ordered|3|2|1|1.166667
 (3 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 q|g|c|p
@@ -61,7 +63,9 @@ dense_rank over a sum|2|1|1.000000
 dense_rank over a sum|3|2|1.583333
 (3 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 q|g|c|p
@@ -141,6 +145,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
 remove_provenance
 
 (1 row)

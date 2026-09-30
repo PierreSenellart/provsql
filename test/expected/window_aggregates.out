@@ -72,6 +72,7 @@ q|exact|probabilities
 ntile(3), more buckets than rows in a partition|t|{0.018000000,0.328000000,0.210000000,0.400000000,0.060000000,0.900000000}
 (1 row)
 WARNING:  ProvSQL: ntile() gives rows that tie on the ORDER BY the bucket of their rank, where SQL splits them between buckets
+DETAIL:  provsql-reason: ntile-as-rank; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -141,10 +142,12 @@ id|s
 3|80 (*)
 4|80 (*)
 (6 rows)
-WARNING:  ProvSQL: window function not supported: its value is read at an offset other than one, or over a frame counted in rows or peer groups with an offset, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function read at an offset other than one, or over a frame of rows or groups with an offset: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -156,12 +159,15 @@ id|prev|last2
 5||5
 6|5|12
 (6 rows)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: window-over-aggregate-frozen; scope: gap
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to say so
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: window
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -169,8 +175,9 @@ g|s|total|rk
 a|80 (*)|92|2
 b|12 (*)|92|1
 (2 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to say so
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: conditional
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)
@@ -254,6 +261,7 @@ id|rk|drk|rn
 6|2|4|2
 (6 rows)
 WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-as-rank; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -281,8 +289,9 @@ remove_provenance
 pairs
 1
 (1 row)
-WARNING:  ProvSQL: window function not supported: its value is read at an offset other than one, or over a frame counted in rows or peer groups with an offset, which the rows that are there decide, so it is evaluated as plain SQL, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function read at an offset other than one, or over a frame of rows or groups with an offset: provenance not tracked, although the statement tracks wa
 DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

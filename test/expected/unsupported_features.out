@@ -22,8 +22,9 @@ ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: 
 DETAIL:  provsql-reason: except-all; scope: deliberate
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 DETAIL:  provsql-reason: except-all; scope: deliberate
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: subquery over a tracked relation in a query over no tracked relation: provenance not tracked, although the statement tracks personnel
 DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

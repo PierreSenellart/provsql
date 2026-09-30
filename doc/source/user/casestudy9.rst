@@ -11,7 +11,7 @@ distribution. It demonstrates aggregates and their expected values,
 ``ROLLUP`` subtotals, shares of a total, ranking and top-k over aggregates,
 comparisons with a target, percentages with a ``NULLIF`` divisor,
 aggregates of aggregates, grouping by an aggregate's value, ``DISTINCT
-ON``, and :sqlfunc:`plain` for a value meant as plain SQL.
+ON``, and :sqlfunc:`plain` for a value meant without provenance.
 
 The Scenario
 ------------
@@ -111,7 +111,7 @@ Step 2: Expected Revenue per Region
     GROUP BY region
     ORDER BY region;
 
-``pipeline`` is the value on the data as it is, every deal closing: 275
+``pipeline`` is the value when every deal closes: 275
 for North. The marker ``(*)`` says it is an aggregate result, whose value
 depends on the world.
 
@@ -181,7 +181,7 @@ The top region is the first row of a sort by revenue:
     ORDER BY region;
 
 Each region is kept in the worlds where it leads: North with probability
-0.4516, South 0.2790, West 0.2960. On the data as it is, West leads, with
+0.4516, South 0.2790, West 0.2960. When every deal closes, West leads, with
 310; but West's lead rests on Sierra, a 150 deal at 0.2.
 
 A ``rank()`` over the revenue gives each region its rank in every world:
@@ -300,11 +300,11 @@ Step 11: The Spread of Deal Sizes
 
 A standard deviation needs two deals: ``expected`` averages it over the
 worlds where the region closes at least two, 33.31 for North, against
-40.1 on the data as it is.
+40.1 when every deal closes.
 
 
-Step 12: A Value Meant as Plain SQL
------------------------------------
+Step 12: A Value Meant Without Provenance
+-----------------------------------------
 
 A dashboard label turns the revenue into text:
 
@@ -315,8 +315,8 @@ A dashboard label turns the revenue into text:
     GROUP BY region
     ORDER BY region;
 
-A text has no value per world: the label shows the value on the data as it
-is, and a ``WARNING`` says so, naming what read the value (``reader:
+A text has no value per world: the label is computed without provenance,
+and a ``WARNING`` says so, naming what read the value (``reader:
 operator``). When that value is what is meant, :sqlfunc:`plain` says so,
 and the warning goes away:
 

@@ -1225,9 +1225,7 @@ BEGIN
                           AND NOT a.attisdropped);
     IF stale IS NOT NULL THEN
       RAISE WARNING 'ProvSQL: % is read by views defined before it was '
-                    'tracked, which have no provenance column of their own, '
-                    'so a query over one of them is answered as plain SQL, '
-                    'not tracked: %',
+                    'tracked, whose provenance is not tracked: %',
                     _tbl, stale
         USING HINT = 'recreate the view (CREATE OR REPLACE VIEW ... or DROP and '
                      'CREATE) so that its definition reads the tracked table',

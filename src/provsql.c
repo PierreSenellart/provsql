@@ -2350,11 +2350,8 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     if (cs.ok && freeze_recursive_guards(&cs, deparse_q, &frozen_bound))
       report_freeze(&cs, frozen_bound, PROVSQL_GAP,
                     "recursion-bound-read-as-plain-value",
-                    "a bound of a recursive term reading a provenance-tracked "
-                    "relation is evaluated as plain SQL, on the data as it is: "
-                    "an uncertain bound leaves no round of the recursion empty, "
-                    "so the rounds would not end",
-                    "mark it plain() to say so");
+                    "bound of a recursive term over a tracked relation",
+                    NULL);
   }
 
   body_text = pg_get_querydef(deparse_q, false);
@@ -3465,12 +3462,12 @@ static void inline_ctes(const constants_t *constants, Query *q) {
          * (it needs the rewrite) yet contains volatile calls and is
          * referenced more than once.  Surface it rather than silently
          * returning probabilities over decoupled leaves. */
-        provsql_warning("CTE \"%s\" requires provenance rewriting and is "
-                        "inlined at each of its %d references; its volatile "
-                        "expressions (e.g. random-variable constructors) are "
-                        "re-evaluated per reference and not shared between "
-                        "them",
-                        cte->ctename, cte->cterefcount);
+        provsql_warning_tagged(
+          PROVSQL_DELIBERATE, "cte-volatile-inlined",
+          "CTE \"%s\" is inlined at each of its %d references: its "
+          "volatile expressions (e.g., random-variable constructors) are "
+          "evaluated once per reference",
+          cte->ctename, cte->cterefcount);
       ++i;
     }
     pfree(must_inline);
@@ -14073,7 +14070,7 @@ static sublink_reason sublink_unsupported_reason(const constants_t *constants,
     if (b->limitCount != NULL || b->limitOffset != NULL)
       return sublink_reason_of(PROVSQL_GAP, "body-limit",
                             "its body truncates its rows with LIMIT or OFFSET, which the "
-             "decorrelation would read on the data as it is");
+             "decorrelation cannot read per world");
     if (b->cteList != NIL)
       return sublink_reason_of(PROVSQL_GAP, "body-with-clause",
                             "its body has a WITH clause");
@@ -14683,8 +14680,8 @@ static bool unmarked_window_walker(Node *node, void *cx) {
 }
 
 /**
- * @brief Report an implicit freezing: a part of the statement evaluated as
- *        plain SQL on the data as it is, not tracked.
+ * @brief Report an implicit freezing: a part of the statement whose
+ *        provenance is not tracked.
  *
  * @p frozen is that part (a subquery expression), or @c NULL when it is
  * computed from the rows of the query itself (a window value, the cut of a
@@ -14697,7 +14694,8 @@ static bool unmarked_window_walker(Node *node, void *cx) {
  * relation read both ways.
  *
  * @param msg   What is frozen, the message
- * @param hint  How to say it is meant, or @c NULL for the plain() marker
+ * @param hint  How to say it is meant, the @c HINT line, or @c NULL for the
+ *              plain() marker
  */
 /** @brief Context for @c holds_node_walker. */
 typedef struct { Node *target; bool found; } holds_node_ctx;
@@ -14724,9 +14722,10 @@ static void report_freeze(const constants_t *constants, Node *frozen,
   ListCell *lc;
 
   if (hint == NULL)
-    hint = "mark it plain() to evaluate it as plain SQL";
+    hint = "Mark it plain() to say so.";
   if (freeze_statement == NULL) {
-    provsql_warning("%s; %s", msg, hint);
+    provsql_warning_tagged_hint(scope, tag, hint,
+                                "%s: provenance not tracked", msg);
     return;
   }
   rest.constants = inside.constants = constants;
@@ -14763,16 +14762,19 @@ static void report_freeze(const constants_t *constants, Node *frozen,
     shared = rec_work_table_cte(shared);
 #endif
   if (shared == NULL)
-    provsql_warning_tagged(scope, tag, "%s; %s", msg, hint);
+    provsql_warning_tagged_hint(scope, tag, hint,
+                                "%s: provenance not tracked", msg);
   else if (provsql_implicit_freeze == PROVSQL_FREEZE_ERROR)
-    provsql_unsupported(scope, tag,
-                        "%s, although the statement also tracks %s; %s "
-                        "(provsql.implicit_freeze is 'error')",
-                        msg, shared, hint);
+    provsql_unsupported_hint(scope, tag, hint,
+                             "%s: provenance not tracked, although the "
+                             "statement tracks %s (provsql.implicit_freeze "
+                             "is 'error')",
+                             msg, shared);
   else
-    provsql_warning_tagged(scope, tag,
-                           "%s, although the statement also tracks %s; %s",
-                           msg, shared, hint);
+    provsql_warning_tagged_hint(scope, tag, hint,
+                                "%s: provenance not tracked, although the "
+                                "statement tracks %s",
+                                msg, shared);
 }
 
 /** @brief Walker: a value of an aggregate result read by ProvSQL as a
@@ -30057,15 +30059,14 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
     }
   }
   if (sorted && top_level)
-    provsql_warning("ORDER BY on an aggregate result sorts on its plain "
-                    "value, the one computed on the database as it is, "
-                    "disregarding provenance");
+    provsql_warning_tagged(PROVSQL_DELIBERATE, "order-by-aggregate-value",
+                           "ORDER BY on an aggregate result sorts on the "
+                           "value shown, not per world");
   if (windowed)
     report_freeze(constants, NULL,
                   PROVSQL_GAP, "window-over-aggregate-frozen",
-                  "window partitioned or ordered by an aggregate result: it "
-                  "is computed on the plain values, those of the database as "
-                  "it is, not tracked", NULL);
+                  "window partitioned or ordered by an aggregate result",
+                  NULL);
 }
 
 /** @brief Context for @c pull_aggregates_mutator. */
@@ -31458,9 +31459,11 @@ static Node *replace_rank_window_mutator(Node *node, void *cx) {
     if (wf->winfnoid == F_ROW_NUMBER &&
         OidIsValid(ctx->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
         !rank_order_is_total(ctx, wf))
-      provsql_warning("row_number() over an aggregate result is tracked as "
-                      "rank(), which it differs from when groups tie on the "
-                      "ORDER BY");
+      provsql_warning_tagged(PROVSQL_DELIBERATE,
+                             "row-number-over-aggregate-as-rank",
+                             "row_number() over an aggregate result is "
+                             "tracked as rank(), which it differs from when "
+                             "groups tie on the ORDER BY");
     return (Node *)e;
   }
   return expression_tree_mutator(node, replace_rank_window_mutator, cx);
@@ -32610,10 +32613,9 @@ static void warn_disjunction_across_groups(const constants_t *constants,
       disjunction_across_groups_walker(q->havingQual, (void *)constants))
     provsql_warning_tagged(
       PROVSQL_GAP, "disjunction-across-groups",
-      "a disjunction of conditions on the aggregates of different groups is "
-      "read as the sum of the provenances of its sides, which is its "
-      "provenance only in the Boolean semiring and in that of Boolean "
-      "functions, used for probability computation");
+      "disjunction of conditions on aggregates of different groups: "
+      "provenance correct only in the Boolean semirings, used for "
+      "probabilities");
 }
 
 /** @brief @p n without the one cast around it, or @p n itself. */
@@ -33447,9 +33449,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
       } else {
         report_freeze(constants, (Node *)linitial(nested),
                       PROVSQL_GAP, "sublink-nested-in-expression-frozen",
-                      "scalar subquery nested in an expression is evaluated "
-                      "as plain SQL, not tracked; the result keeps only the "
-                      "outer provenance", NULL);
+                      "scalar subquery nested in an expression",
+                      NULL);
         nested_sublink_warned = true;
       }
     }
@@ -33589,17 +33590,13 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
           if (wk.outside)
             report_freeze(constants, NULL,
                           PROVSQL_DELIBERATE, "window-not-tracked",
-                          "window function not supported: its value is read "
-                          "at an offset other than one, or over a frame "
-                          "counted in rows or peer groups with an offset, "
-                          "which the rows that are there decide, so it is "
-                          "evaluated as plain SQL, not tracked", NULL);
+                          "window function read at an offset other than one, "
+                          "or over a frame of rows or groups with an offset",
+                          NULL);
           if (wk.inside)
             report_freeze(constants, NULL,
                           PROVSQL_GAP, "window-not-tracked",
-                          "window function not supported: its value is "
-                          "evaluated as plain SQL, not tracked; provenance is "
-                          "tracked per input row only", NULL);
+                          "window function", NULL);
         }
 
       /* A GREATEST, CASE, COALESCE or NULLIF over the window aggregates just
@@ -34362,9 +34359,9 @@ static void process_insert_select(const constants_t *constants, Query *q) {
      * provenance is not propagated, unless the statement stores it itself. */
     remove_provsql_from_select(src_rte->subquery);
     if (!stores_provenance)
-      provsql_warning("INSERT ... SELECT on provenance-tracked "
-                      "tables: source provenance is not propagated "
-                      "to inserted rows");
+      provsql_warning_tagged(PROVSQL_GAP, "insert-select-untracked",
+                             "INSERT ... SELECT: provenance not propagated "
+                             "to the inserted rows");
     return;
   }
 
@@ -34833,25 +34830,17 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
   if (q->sortClause == NIL)
     report_freeze(constants, NULL,
                   PROVSQL_DELIBERATE, "limit-without-order-by",
-                  "LIMIT / OFFSET with no ORDER BY over provenance-tracked "
-                  "relations keeps the rows the data as it is gives, in the "
-                  "order it gives them: which rows those are is left open by "
-                  "SQL and is not recorded, so another world drops one of "
-                  "them and keeps a row this result does not hold",
-                  "write LIMIT plain(k) to say so, or ORDER BY the rows to "
-                  "have the truncation read in every world");
+                  "LIMIT / OFFSET without ORDER BY",
+                  "Write LIMIT plain(k) to say so, or add an ORDER BY.");
   else
     /* An ordered truncation is read in every world by the semantics, as the
      * filter of a rank, whatever it is over: one that is not lowered here is
      * a gap. */
     report_freeze(constants, NULL, PROVSQL_GAP,
                   "limit-not-read-in-every-world",
-                  "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
-                  "relations is not read in each possible world over an "
-                  "aggregation, a DISTINCT, a set operation or sort keys that "
-                  "vary between worlds: it truncates the actual result, whose "
-                  "rows keep the provenance they have in the full result",
-                  "write LIMIT plain(k) to say so");
+                  "ORDER BY ... LIMIT / OFFSET over an aggregation, a "
+                  "DISTINCT, a set operation or uncertain sort keys",
+                  "Write LIMIT plain(k) to say so.");
 }
 
 /** @brief Report the freezing @c nested_limit_on_provenance calls for. */
@@ -34861,10 +34850,8 @@ static void warn_nested_limit(const constants_t *constants, bool ordered) {
    * leaves open which rows are kept. */
   report_freeze(constants, NULL,
                 ordered ? PROVSQL_GAP : PROVSQL_DELIBERATE, "limit-in-subquery",
-                "LIMIT / OFFSET in a subquery over provenance-tracked "
-                "relations: the rows kept carry the provenance they have in "
-                "the full result, so what is computed from them is not sound "
-                "under uncertainty", "write LIMIT plain(k) to say so");
+                "LIMIT / OFFSET in a subquery",
+                "Write LIMIT plain(k) to say so.");
 }
 
 /**
@@ -35022,8 +35009,8 @@ static PlannedStmt *provsql_planner(Query *q,
                                                     (void *)&constants)) {
       report_freeze(&constants, (Node *)last_tracked_sublink,
                     PROVSQL_GAP, "sublink-in-untracked-block-frozen",
-                    "subquery over a provenance-tracked relation in a query "
-                    "without one is evaluated as plain SQL, not tracked",
+                    "subquery over a tracked relation in a query over no "
+                    "tracked relation",
                     NULL);
       untracked_sublink_warned = true;
     }
@@ -35125,19 +35112,15 @@ static PlannedStmt *provsql_planner(Query *q,
           tracked_sublink_remains_walker((Node *)q, (void *)&constants))
         report_freeze(&constants, (Node *)last_tracked_sublink,
                       PROVSQL_GAP, "sublink-in-untracked-position-frozen",
-                      "subquery over a provenance-tracked relation in a "
-                      "position that is not tracked is evaluated as plain "
-                      "SQL", NULL);
+                      "subquery over a tracked relation in an untracked "
+                      "position",
+                      NULL);
 
       if (provsql_active && provsql_executor_depth == 0 && agg_over_agg_frozen)
         report_freeze(&constants, NULL, PROVSQL_GAP, "aggregate-over-aggregate",
-                      "an aggregate of an aggregate result of another kind (an "
-                      "avg of a count, a max of a sum) reads the inner value "
-                      "as plain SQL, on the data as it is: the rows it "
-                      "aggregates carry their provenance, the value they carry "
-                      "is the one of the database as it is",
-                      "mark the inner aggregate plain() to "
-                      "say so");
+                      "aggregate of an aggregate result of another kind (an avg "
+                      "of a count, a max of a sum)",
+                      "Mark the inner aggregate plain() to say so.");
 
       /* The frozen values an aggregate over an aggregate result reads are
        * reported just above, by what reads them: no second report of the same
@@ -35155,11 +35138,8 @@ static PlannedStmt *provsql_planner(Query *q,
         report_freeze(&constants, NULL,
                       scope_with_readers(PROVSQL_GAP, rctx.readers),
                       "aggregate-read-as-plain-value",
-                      "aggregate result read as a plain value (by a "
-                      "function, an operator, a comparison) is evaluated as "
-                      "plain SQL, not tracked",
-                      "mark it plain() to say "
-                      "so");
+                      "aggregate result read as a plain value",
+                      NULL);
       }
 
       /* The nullness of an aggregate read on the data as it is, which no
@@ -35170,11 +35150,9 @@ static PlannedStmt *provsql_planner(Query *q,
           agg_token_null_test_walker((Node *)q, (void *)&nullness_ctx))
         report_freeze(&constants, NULL,
                       PROVSQL_GAP, "aggregate-nullness-read-as-plain-value",
-                      "whether an aggregate result is NULL is read on the "
-                      "database as it is, not tracked: its truth is exploded "
-                      "into the worlds only in a block with no window function",
-                      "mark it plain() to say "
-                      "so");
+                      "NULL test of an aggregate result in a block with a "
+                      "window function",
+                      NULL);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
@@ -36097,12 +36075,12 @@ void _PG_init(void) {
       {"error", PROVSQL_FREEZE_ERROR, false},
       {NULL, 0, false}};
     DefineCustomEnumVariable("provsql.implicit_freeze",
-                             "What a part of a query evaluated as plain SQL, "
-                             "not tracked, does when the rest of the "
-                             "statement tracks the same relations.",
+                             "What a part of a query whose provenance is not "
+                             "tracked does when the rest of the statement "
+                             "tracks the same relations.",
                              "'warn' (the default) emits a warning; 'error' "
                              "refuses the query.  Marking the part plain() "
-                             "evaluates it as plain SQL silently; a part "
+                             "silences both; a part "
                              "reading only relations the rest does not "
                              "track is always a warning.",
                              &provsql_implicit_freeze, PROVSQL_FREEZE_WARN,

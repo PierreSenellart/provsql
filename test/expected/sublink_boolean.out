@@ -35,7 +35,7 @@ pid|lbl|p
 1|some|0.750000
 2|none|1.000000
 (3 rows)
-WARNING:  ProvSQL: a disjunction of conditions on the aggregates of different groups is read as the sum of the provenances of its sides, which is its provenance only in the Boolean semiring and in that of Boolean functions, used for probability computation
+WARNING:  ProvSQL: disjunction of conditions on aggregates of different groups: provenance correct only in the Boolean semirings, used for probabilities
 DETAIL:  provsql-reason: disjunction-across-groups; scope: gap
 remove_provenance
 

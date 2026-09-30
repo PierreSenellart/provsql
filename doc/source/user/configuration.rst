@@ -88,9 +88,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-implicit-freeze:
 
 ``provsql.implicit_freeze`` (default: ``'warn'``)
-    What happens when part of a query is evaluated as plain SQL, on the
-    data as it is, and not tracked (see :ref:`plain-sql`), while the rest
-    of the statement tracks the same relations. ``'warn'`` emits a
+    What a part of a query whose provenance is not tracked (see
+    :ref:`plain-sql`) does when the rest of the statement tracks the same
+    relations. ``'warn'`` emits a
     ``WARNING`` naming such a relation; ``'error'`` refuses the query
     (SQLSTATE ``0A000``, ``feature_not_supported``). A
     part that reads only relations the rest does not track, that is

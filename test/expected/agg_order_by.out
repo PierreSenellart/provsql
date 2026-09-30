@@ -7,7 +7,8 @@ Berlin|2 (*)
 New York|2 (*)
 Paris|3 (*)
 (3 rows)
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -16,7 +17,8 @@ Paris|3 (*)
 Berlin|2 (*)
 New York|2 (*)
 (3 rows)
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)

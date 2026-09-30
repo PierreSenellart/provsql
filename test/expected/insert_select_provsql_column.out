@@ -28,7 +28,8 @@ q|value|gate|children_are_the_rows
 join|12|times|t
 (1 row)
 -- no provenance stored: the warning stays
-WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
+DETAIL:  provsql-reason: insert-select-untracked; scope: gap
 -- tracked target: provenance propagates, with or without the column named
 q|a|copies|same_token
 tracked target|1|2|t

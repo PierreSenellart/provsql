@@ -79,6 +79,7 @@ id
 6
 (2 rows)
 WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-as-rank; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -147,7 +148,9 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -157,7 +160,9 @@ userid|p
 3|0.500000
 (3 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -169,7 +174,8 @@ userid|p
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -178,7 +184,9 @@ g|p
 2|0.125000
 (2 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
-WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -260,8 +268,9 @@ remove_provenance
 v
 20
 (1 row)
-WARNING:  ProvSQL: LIMIT / OFFSET with no ORDER BY over provenance-tracked relations keeps the rows the data as it is gives, in the order it gives them: which rows those are is left open by SQL and is not recorded, so another world drops one of them and keeps a row this result does not hold, although the statement also tracks lr_k; write LIMIT plain(k) to say so, or ORDER BY the rows to have the truncation read in every world
+WARNING:  ProvSQL: LIMIT / OFFSET without ORDER BY: provenance not tracked, although the statement tracks lr_k
 DETAIL:  provsql-reason: limit-without-order-by; scope: deliberate
+HINT:  Write LIMIT plain(k) to say so, or add an ORDER BY.
 remove_provenance
 
 (1 row)
