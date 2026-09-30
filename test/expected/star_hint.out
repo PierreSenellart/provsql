@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+ERROR:  each UNION query must have the same number of columns
+LINE 2: UNION SELECT * FROM star_hint_t;
+                     ^
+HINT:  If a table this statement reads is tracked by ProvSQL, * includes its provsql column. List the columns instead.
+ERROR:  each EXCEPT query must have the same number of columns
+LINE 1: SELECT * FROM star_hint_t EXCEPT SELECT * FROM star_hint_p;
+                                                ^
+HINT:  If a table this statement reads is tracked by ProvSQL, * includes its provsql column. List the columns instead.
+ERROR:  INSERT has more expressions than target columns
+LINE 1: INSERT INTO star_hint_p SELECT * FROM star_hint_t;
+                                       ^
+HINT:  If a table this statement reads is tracked by ProvSQL, * includes its provsql column. List the columns instead.
+ERROR:  INSERT has more expressions than target columns
+LINE 1: INSERT INTO star_hint_p SELECT t.* FROM star_hint_t t
+                                       ^
+HINT:  If a table this statement reads is tracked by ProvSQL, * includes its provsql column. List the columns instead.
+QUERY:  INSERT INTO star_hint_p SELECT t.* FROM star_hint_t t
+CONTEXT:  PL/pgSQL function inline_code_block line 1 at SQL statement
+ERROR:  each UNION query must have the same number of columns
+LINE 1: SELECT 1, 2 UNION SELECT 1;
+                                 ^
+ERROR:  INSERT has more expressions than target columns
+LINE 1: INSERT INTO star_hint_p VALUES (1, 'a', 'b');
+                                                ^
+remove_provenance
+
+(1 row)
+id|name
+0|-
+1|a
+2|b
+(3 rows)
+WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
+DETAIL:  provsql-reason: insert-select-untracked; scope: deliberate
+HINT:  Track the target with add_provenance() first, or store provenance() in a column.
+id|name
+1|a
+2|b
+(2 rows)
