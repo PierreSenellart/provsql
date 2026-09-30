@@ -14,8 +14,11 @@ tid|t
 t2_kind|t2_ancestors_correct
 tid|t
 (1 row)
-t3_no_metadata|t3_no_ancestry
-t|t
+t3_kind|t3_ancestors_correct
+tid|t
+(1 row)
+t3_rows_without_token
+0
 (1 row)
 t4_kind|t4_block_key|t4_ancestors_correct
 bid|{1}|t

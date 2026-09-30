@@ -35737,10 +35737,6 @@ static void provsql_ProcessUtility_capture(Node *parsetree,
     return;
 
   provsql_classify_query(qry, &cls);
-  if (cls.kind == PROVSQL_TABLE_OPAQUE) {
-    list_free(cls.source_relids);
-    return;
-  }
 
   /* Walk the inner target list for a TLE whose Var resolves to the
    * provsql column of a tracked, non-OPAQUE source.  First match wins
@@ -35779,6 +35775,32 @@ static void provsql_ProcessUtility_capture(Node *parsetree,
     break;
   }
   if (prov_resno == InvalidAttrNumber) {
+    /* No provsql projected: the rewriting adds the one of the rows, when
+     * the query reads a tracked relation and names no column provsql.
+     * The table gets it, and the guard that gives a row inserted later a
+     * token of its own; its lineage is the classifier's (a single source
+     * for the block key, opaque where the classifier says so). */
+    bool named = false;
+    foreach (lc, qry->targetList) {
+      TargetEntry *te = (TargetEntry *) lfirst(lc);
+      if (!te->resjunk && te->resname != NULL &&
+          strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0)
+        named = true;
+    }
+    if (named || cls.source_relids == NIL) {
+      list_free(cls.source_relids);
+      return;
+    }
+    if (list_length(cls.source_relids) == 1 &&
+        provsql_lookup_table_info(linitial_oid(cls.source_relids),
+                                  &source_info)) {
+      source_relid = linitial_oid(cls.source_relids);
+    } else {
+      source_info.block_key_n = 0;
+      if (cls.kind == PROVSQL_TABLE_BID)
+        cls.kind = PROVSQL_TABLE_OPAQUE;
+    }
+  } else if (cls.kind == PROVSQL_TABLE_OPAQUE) {
     list_free(cls.source_relids);
     return;
   }

@@ -53,12 +53,20 @@ SELECT (get_table_info('ci_t2'::regclass::oid)).kind  AS t2_kind,
                                                        AS t2_ancestors_correct;
 
 -- ---------------------------------------------------------------
--- (3) CTAS without projecting provsql: the new relation has no
---     provsql column, so the hook skips and no metadata is recorded.
+-- (3) CTAS without projecting provsql: the rewriting still gives the
+--     new relation the provsql column of its rows, so the hook records
+--     the same lineage, and a row inserted later gets a token of its
+--     own from the guard.
 -- ---------------------------------------------------------------
 CREATE TABLE ci_t3 AS SELECT x, y FROM ci_src_a;
-SELECT get_table_info('ci_t3'::regclass::oid) IS NULL AS t3_no_metadata,
-       get_ancestors('ci_t3'::regclass::oid) IS NULL  AS t3_no_ancestry;
+SELECT (get_table_info('ci_t3'::regclass::oid)).kind  AS t3_kind,
+       get_ancestors('ci_t3'::regclass::oid)
+         = ARRAY['ci_src_a'::regclass::oid]           AS t3_ancestors_correct;
+INSERT INTO ci_t3 VALUES (4, 40);
+SET provsql.active = off;
+SELECT count(*) FILTER (WHERE provsql IS NULL) AS t3_rows_without_token
+  FROM ci_t3;
+RESET provsql.active;
 
 -- ---------------------------------------------------------------
 -- (4) BID source: target list keeps the block-key column k.
