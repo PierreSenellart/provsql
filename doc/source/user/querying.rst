@@ -423,7 +423,11 @@ Each inserted row receives the provenance token computed by the source
 ``SELECT``, not a fresh independent token.
 
 If the target table does not have a ``provsql`` column, a warning is
-emitted indicating that source provenance is lost. To keep it, store the
+emitted indicating that source provenance is lost. The rows inserted are
+those of the tracked result, without their provenance: a ``LEFT JOIN``, for
+instance, also inserts the null-padded rows that are there only in other
+possible worlds, as :sqlfunc:`remove_provenance` would keep them. To keep
+the provenance, track the target first, or store the
 token explicitly with :sqlfunc:`provenance` (no warning is then emitted):
 
 .. code-block:: sql

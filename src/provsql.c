@@ -34412,9 +34412,11 @@ static void process_insert_select(const constants_t *constants, Query *q) {
      * provenance is not propagated, unless the statement stores it itself. */
     remove_provsql_from_select(src_rte->subquery);
     if (!stores_provenance)
-      provsql_warning_tagged(PROVSQL_GAP, "insert-select-untracked",
-                             "INSERT ... SELECT: provenance not propagated "
-                             "to the inserted rows");
+      provsql_warning_tagged_hint(
+        PROVSQL_DELIBERATE, "insert-select-untracked",
+        "Track the target with add_provenance() first, or store provenance() "
+        "in a column.",
+        "INSERT ... SELECT: provenance not propagated to the inserted rows");
     return;
   }
 

@@ -29,7 +29,8 @@ join|12|times|t
 (1 row)
 -- no provenance stored: the warning stays
 WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
-DETAIL:  provsql-reason: insert-select-untracked; scope: gap
+DETAIL:  provsql-reason: insert-select-untracked; scope: deliberate
+HINT:  Track the target with add_provenance() first, or store provenance() in a column.
 -- tracked target: provenance propagates, with or without the column named
 q|a|copies|same_token
 tracked target|1|2|t
