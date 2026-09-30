@@ -172,6 +172,20 @@ INSERT INTO eav_n VALUES (1, 0.1), (1, 0.2);
 SELECT add_provenance('eav_n');
 SELECT total FROM (SELECT g, sum(v) AS total FROM eav_n GROUP BY g) s
   GROUP BY total;
+-- Marked plain(), the value shown is the key: the two groups summing to 0.3
+-- are one row, there when either is (1 - 1/4 * 1/2), counting 1.25 groups
+-- on average, 1.428571 where it is there.
+INSERT INTO eav_n VALUES (2, 0.3);
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eav_n; END $$;
+CREATE TABLE eav_np AS
+  SELECT t, round(probability_evaluate(provenance())::numeric, 6) AS p,
+         round(expected(c, provenance())::numeric, 6) AS c
+  FROM (SELECT plain(total) AS t, count(*) AS c
+        FROM (SELECT g, sum(v) AS total FROM eav_n GROUP BY g) s
+        GROUP BY plain(total)) u;
+SELECT remove_provenance('eav_np');
+SELECT * FROM eav_np;
+DROP TABLE eav_np;
 DROP TABLE eav_n;
 SELECT a FROM (SELECT g, avg(v) AS a FROM eav GROUP BY g) s GROUP BY a;
 SELECT DISTINCT avg(v) AS a FROM eav GROUP BY g;

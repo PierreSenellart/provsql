@@ -25546,6 +25546,10 @@ static bool reads_subquery_aggregate_walker(Node *node, void *cx) {
 
   if (node == NULL || c->found)
     return false;
+  /* plain(): its plain value is meant, one per row, grouped as any */
+  if (IsA(node, FuncExpr) && OidIsValid(c->constants->OID_FUNCTION_PLAIN) &&
+      ((FuncExpr *)node)->funcid == c->constants->OID_FUNCTION_PLAIN)
+    return false;
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
     RangeTblEntry *r;

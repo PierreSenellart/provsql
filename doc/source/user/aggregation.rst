@@ -659,14 +659,14 @@ A ``sum()`` over a column that is not an integer is refused, and with it
 ``avg()``, since subset sums of such numbers cannot be compared exactly
 (``0.1 + 0.2`` compares unequal to ``0.3`` in floating point). So is a
 ``string_agg()``, which takes one value per ordering.  Such a grouping
-raises an error with SQLSTATE ``0A000``, and the plain value, asked for
-explicitly with a cast, groups as plain SQL does:
+raises an error with SQLSTATE ``0A000``; the value shown, marked with
+:sqlfunc:`plain`, can be grouped by:
 
 .. code-block:: postgresql
 
-    SELECT total::numeric, count(*)        -- the plain value, not tracked
+    SELECT plain(total), count(*)
     FROM (SELECT city, sum(salary) AS total FROM employees GROUP BY city) t
-    GROUP BY total::numeric;
+    GROUP BY plain(total);
 
 ``NULL`` is itself one of the values, for an aggregation over the whole
 table: its row is there in every world, including the world holding none
