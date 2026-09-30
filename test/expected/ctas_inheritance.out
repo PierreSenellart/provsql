@@ -32,6 +32,22 @@ tid|t
 mv_kind|mv_ancestors_correct
 tid|t
 (1 row)
+mv2_kind|mv2_ancestors_correct
+tid|t
+(1 row)
+mv2_rows|mv2_source_tokens
+3|3
+(1 row)
+mv2_rows_refreshed|mv2_source_tokens
+3|3
+(1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+x|n
+1|1
+2|1
+3|1
+(3 rows)
 t8_kind|t8_ancestors_correct
 tid|t
 (1 row)

@@ -113,6 +113,39 @@ SELECT (get_table_info('ci_mv1'::regclass::oid)).kind  AS mv_kind,
 DROP MATERIALIZED VIEW ci_mv1;
 
 -- ---------------------------------------------------------------
+-- (7b) A materialized view that does not project provsql: it gets
+--     the provenance of its rows as a column, the source's tokens,
+--     kept by REFRESH (CONCURRENTLY too), with the same lineage.  An
+--     aggregate is stored as its value (it was the token's bits read
+--     as a bigint).
+-- ---------------------------------------------------------------
+CREATE MATERIALIZED VIEW ci_mv2 AS SELECT x, y FROM ci_src_a;
+SELECT (get_table_info('ci_mv2'::regclass::oid)).kind  AS mv2_kind,
+       get_ancestors('ci_mv2'::regclass::oid)
+         = ARRAY['ci_src_a'::regclass::oid]            AS mv2_ancestors_correct;
+SET provsql.active = off;
+SELECT count(*) AS mv2_rows,
+       count(*) FILTER (WHERE m.provsql = s.provsql) AS mv2_source_tokens
+  FROM ci_mv2 m JOIN ci_src_a s USING (x);
+RESET provsql.active;
+INSERT INTO ci_src_a VALUES (4, 40);
+REFRESH MATERIALIZED VIEW ci_mv2;
+CREATE UNIQUE INDEX ON ci_mv2 (x);
+DELETE FROM ci_src_a WHERE x = 4;
+REFRESH MATERIALIZED VIEW CONCURRENTLY ci_mv2;
+SET provsql.active = off;
+SELECT count(*) AS mv2_rows_refreshed,
+       count(*) FILTER (WHERE m.provsql = s.provsql) AS mv2_source_tokens
+  FROM ci_mv2 m JOIN ci_src_a s USING (x);
+RESET provsql.active;
+CREATE MATERIALIZED VIEW ci_mv3 AS
+  SELECT x, count(*) AS n FROM ci_src_a GROUP BY x;
+SET provsql.active = off;
+SELECT x, n FROM ci_mv3 ORDER BY x;
+RESET provsql.active;
+DROP MATERIALIZED VIEW ci_mv2, ci_mv3;
+
+-- ---------------------------------------------------------------
 -- (8) CTAS WITH NO DATA: structure-only, inner SELECT not executed.
 --     The hook still fires (the new relation has a provsql column
 --     by virtue of the TLE shape), so the metadata is recorded and

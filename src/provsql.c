@@ -208,6 +208,14 @@ static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chaine
 /** @brief Depth of CREATE TABLE AS / SELECT INTO / CREATE MATERIALIZED VIEW
  *  being executed: their query's output is stored, not shown. */
 static int provsql_in_ctas = 0;
+/** @brief The next query planned fills a materialized view (CREATE
+ *  MATERIALIZED VIEW or REFRESH): its columns are those the view was created
+ *  with, see @c finish_matview_fill. */
+static bool provsql_matview_fill = false;
+/** @brief A REFRESH MATERIALIZED VIEW is running: the queries PostgreSQL
+ *  plans for it besides the fill (the comparison of CONCURRENTLY) are its
+ *  own, left alone. */
+static bool provsql_in_matview_refresh = false;
 /** @brief Executor nesting depth.
  *
  * Tracks how deep we are inside @c Executor invocations.  Incremented
@@ -35267,6 +35275,79 @@ static void warn_nested_limit(const constants_t *constants, bool ordered) {
  * @param boundParams    Pre-bound parameter values.
  * @return               The planned statement.
  */
+/** @brief The (type, typmod) of each non-junk output of @p q, in order. */
+static List *output_types(Query *q) {
+  List *res = NIL;
+  ListCell *lc;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    res = lappend_oid(res, exprType((Node *)te->expr));
+    res = lappend_int(res, exprTypmod((Node *)te->expr));
+  }
+  return res;
+}
+
+/**
+ * @brief Give the rewritten query filling a materialized view the columns
+ *        the view was created with.
+ *
+ * The view's columns are those of the query as written (CREATE MATERIALIZED
+ * VIEW creates them from it, then fills the view, as REFRESH does): the
+ * provenance of its rows is the provsql column that CREATE added as
+ * @c provenance(), so the one the rewriting appends goes; and an output the
+ * rewriting retyped (an aggregate become an @c agg_token) is cast back to its
+ * type, as for an INSERT ... SELECT, the view storing values, not tokens.
+ */
+static void finish_matview_fill(Query *q, List *types) {
+  int n = list_length(types) / 2, i = 0;
+  ListCell *lc, *prev = NULL;
+  int removed = -1;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (te->resno > n && te->resname != NULL &&
+        strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0) {
+      removed = te->resno;
+      break;
+    }
+  }
+  if (removed > 0) {
+    foreach (lc, q->targetList) {
+      if (((TargetEntry *)lfirst(lc))->resno == removed) {
+        q->targetList = my_list_delete_cell(q->targetList, lc, prev);
+        break;
+      }
+      prev = lc;
+    }
+    foreach (lc, q->targetList)
+      if (((TargetEntry *)lfirst(lc))->resno > removed)
+        --((TargetEntry *)lfirst(lc))->resno;
+  }
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Oid want, have;
+    int32 typmod;
+    Node *coerced;
+    if (te->resjunk || i >= n)
+      continue;
+    want = list_nth_oid(types, 2 * i);
+    typmod = list_nth_int(types, 2 * i + 1);
+    ++i;
+    have = exprType((Node *)te->expr);
+    if (have == want)
+      continue;
+    coerced = coerce_to_target_type(NULL, (Node *)te->expr, have, want, typmod,
+                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                    -1);
+    if (coerced != NULL)
+      te->expr = (Expr *)coerced;
+  }
+}
+
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
@@ -35286,12 +35367,23 @@ static PlannedStmt *provsql_planner(Query *q,
   int saved_rewrite_level = rewrite_level;
   MemoryContext saved_rewrite_context = rewrite_context;
   List *saved_shared_ctes = shared_ctes;
+  /* Whether the query fills a materialized view, and the types of its
+   * columns before the rewriting, as (type, typmod) pairs */
+  bool matview_fill;
+  List *matview_fill_types;
   rewrite_level = 0;
   shared_ctes = NIL;
   provsql_inert_subselects = NIL;
   freeze_statement = q;
   if (provsql_executor_depth == 0)
     agg_over_agg_frozen = false;
+  /* The query filling a materialized view: the first planned once the
+   * statement set the flag */
+  matview_fill = provsql_matview_fill && q->commandType == CMD_SELECT;
+  provsql_matview_fill = false;
+  matview_fill_types = matview_fill ? output_types(q) : NIL;
+  if (provsql_in_matview_refresh && !matview_fill)
+    goto plan;
   {
     const constants_t mconstants = get_constants(false);
     if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {
@@ -35473,6 +35565,7 @@ static PlannedStmt *provsql_planner(Query *q,
       /* The wrap just above put that column there, as the lift puts its own
        * query there: neither is the user writing a provsql column by hand. */
       if (provsql_active && !sublinks_lifted && !from_wrapped &&
+          !matview_fill &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
         provsql_error("a query may not define a column named \"%s\" by hand; "
                       "ProvSQL manages the provenance column itself",
@@ -35501,6 +35594,8 @@ static PlannedStmt *provsql_planner(Query *q,
         hoist_shared_ctes(q);
         rewrite_checkpoint(q, "hoist_shared_ctes", false);
       }
+      if (matview_fill)
+        finish_matview_fill(q, matview_fill_types);
       recount_cte_refs_walker((Node *)q, NULL);
 #if PG_VERSION_NUM < 130000
       reset_varnoold_walker((Node *)q, NULL);
@@ -35562,6 +35657,7 @@ static PlannedStmt *provsql_planner(Query *q,
     }
   }
 
+plan:
   provsql_inert_subselects = saved_inert_subselects;
   freeze_statement = saved_freeze_statement;
   rewrite_level = saved_rewrite_level;
@@ -36045,6 +36141,69 @@ static void provsql_ProcessUtility_apply(Node *parsetree,
   pfree(trigger_sql.data);
 }
 
+/** @brief Add @c provenance() @c AS @c provsql to the outputs of @p q,
+ *  before its junk entries. */
+static void add_provenance_output(const constants_t *constants, Query *q) {
+  List *tl = NIL;
+  ListCell *lc;
+  AttrNumber resno = 0;
+  bool added = false;
+  FuncExpr *prov = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE, UUIDOID,
+                                NIL, InvalidOid, InvalidOid,
+                                COERCE_EXPLICIT_CALL);
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk && !added) {
+      tl = lappend(tl, makeTargetEntry((Expr *)prov, ++resno,
+                                       pstrdup(PROVSQL_COLUMN_NAME), false));
+      added = true;
+    }
+    te->resno = ++resno;
+    tl = lappend(tl, te);
+  }
+  if (!added)
+    tl = lappend(tl, makeTargetEntry((Expr *)prov, ++resno,
+                                     pstrdup(PROVSQL_COLUMN_NAME), false));
+  q->targetList = tl;
+}
+
+/**
+ * @brief A materialized view over tracked relations gets the provenance of
+ *        its rows, as a table created from the same query does.
+ *
+ * Its columns are created from the query as written, before the rewriting
+ * adds the provenance column (since PostgreSQL 17, CREATE MATERIALIZED VIEW
+ * creates the view, then fills it as REFRESH does): the query, and the copy
+ * of it the view keeps to be refreshed, get @c provenance() @c AS
+ * @c provsql, which the rewriting reads as the provenance of each row.
+ * Nothing where the query names a provsql column or reads no tracked
+ * relation.
+ */
+static void add_matview_provenance_column(CreateTableAsStmt *stmt) {
+  constants_t constants;
+  Query *q;
+  ListCell *lc;
+  if (!provsql_active || stmt->query == NULL || !IsA(stmt->query, Query))
+    return;
+  q = (Query *)stmt->query;
+  if (q->commandType != CMD_SELECT)
+    return;
+  constants = get_constants(false);
+  if (!constants.ok || !OidIsValid(constants.OID_FUNCTION_PROVENANCE) ||
+      !has_provenance(&constants, q))
+    return;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (!te->resjunk && te->resname != NULL &&
+        strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0)
+      return;
+  }
+  add_provenance_output(&constants, q);
+  if (stmt->into != NULL && stmt->into->viewQuery != NULL &&
+      IsA(stmt->into->viewQuery, Query))
+    add_provenance_output(&constants, (Query *)stmt->into->viewQuery);
+}
+
 static void provsql_ProcessUtility(
     PlannedStmt *pstmt,
     const char *queryString,
@@ -36065,8 +36224,34 @@ static void provsql_ProcessUtility(
   ProvSQLCtasCapture cap = {0};
   bool               ctas = parsetree != NULL &&
                             IsA(parsetree, CreateTableAsStmt);
+  bool               saved_in_refresh = provsql_in_matview_refresh;
 
   provsql_ProcessUtility_capture(parsetree, &cap);
+
+  /* A materialized view: its provenance column, and the query filling it.
+   * A REFRESH runs utility statements of its own (the ANALYZE of
+   * CONCURRENTLY), which come back here: they leave its state as it was. */
+  if (ctas &&
+#if PG_VERSION_NUM >= 140000
+      ((CreateTableAsStmt *)parsetree)->objtype == OBJECT_MATVIEW
+#else
+      ((CreateTableAsStmt *)parsetree)->relkind == OBJECT_MATVIEW
+#endif
+      ) {
+#if PG_VERSION_NUM >= 140000
+    if (readOnlyTree) {
+      pstmt = copyObject(pstmt);
+      parsetree = pstmt->utilityStmt;
+      readOnlyTree = false;
+    }
+#endif
+    add_matview_provenance_column((CreateTableAsStmt *)parsetree);
+    provsql_matview_fill =
+      !((CreateTableAsStmt *)parsetree)->into->skipData;
+  } else if (parsetree != NULL && IsA(parsetree, RefreshMatViewStmt)) {
+    provsql_matview_fill = !((RefreshMatViewStmt *)parsetree)->skipData;
+    provsql_in_matview_refresh = true;
+  }
 
   if (ctas)
     ++provsql_in_ctas;
@@ -36101,11 +36286,15 @@ static void provsql_ProcessUtility(
   {
     if (ctas)
       --provsql_in_ctas;
+    provsql_matview_fill = false;
+    provsql_in_matview_refresh = saved_in_refresh;
     PG_RE_THROW();
   }
   PG_END_TRY();
   if (ctas)
     --provsql_in_ctas;
+  provsql_matview_fill = false;
+  provsql_in_matview_refresh = saved_in_refresh;
 
   provsql_ProcessUtility_apply(parsetree, &cap);
 }
@@ -36495,6 +36684,7 @@ static void provsql_post_parse_analyze(ParseState *pstate, Query *query) {
    * executor runs (ProvSQL's own triggers read provsql from SELECT * over
    * their transition tables). */
   if (provsql_active && provsql_executor_depth == 0 && pstate != NULL &&
+      !provsql_in_matview_refresh &&
       pstate->p_sourcetext != NULL) {
     Query *q = query;
     /* CREATE TABLE AS / SELECT INTO: the query it stores the result of. */

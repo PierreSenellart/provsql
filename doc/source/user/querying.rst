@@ -409,6 +409,12 @@ The new table automatically inherits provenance from its source:
     CREATE TABLE derived AS
     SELECT name, dept FROM employees WHERE active;
 
+A row inserted into it later gets a token of its own, as in a table
+passed to :sqlfunc:`add_provenance`.  A ``CREATE MATERIALIZED VIEW`` over
+the same query gets the provenance of its rows too, as a ``provsql``
+column that ``REFRESH MATERIALIZED VIEW`` recomputes; an aggregate is
+stored there as its value.
+
 ``INSERT … SELECT``
 ---------------------
 
