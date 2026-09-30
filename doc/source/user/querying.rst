@@ -27,7 +27,10 @@ of a ``CREATE TABLE AS`` over ``SELECT *``.
 
 A whole row of a tracked table read as any row -- ``SELECT t FROM t``,
 ``row_to_json(t)``, ``json_agg(t)``, ``t::text``, ``ROW(t.*)`` -- has its
-columns other than ``provsql``, as on the untracked table.  Where the
+columns other than ``provsql``, as on the untracked table.  So do rows
+compared (``t = u``, ``t IN (SELECT u FROM u)``, ``t IS DISTINCT FROM u``,
+``CASE t WHEN u``, ``ROW(t.*) = ROW(u.*)``) or grouped (``GROUP BY t``): two
+rows equal on those columns are equal, whatever their tokens.  Where the
 table's own row type is needed (``ROW(t.*)::t``, a function declared on
 it, a column of a table created from the row), the row keeps it.
 

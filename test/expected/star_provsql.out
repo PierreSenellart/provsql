@@ -83,3 +83,67 @@ j
 {"a":1,"n":1}
 {"a":2,"n":1}
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+t|l|r
+case|1|1
+case|2|2
+eq|1|1
+eq|2|2
+in|1|
+in|2|
+join|1|1
+join|3|3
+not-distinct|1|1
+not-distinct|2|2
+row-eq|1|1
+row-eq|2|2
+row-lt|1|2
+row-lt|1|4
+row-lt|2|4
+row-lt|3|4
+self-ne|1|2
+self-ne|1|3
+self-ne|2|1
+self-ne|2|3
+self-ne|3|1
+self-ne|3|2
+star|1|1
+star|2|2
+text|1|1
+text|3|3
+(26 rows)
+remove_provenance
+
+(1 row)
+id|bid|same
+1|1|t
+1|3|f
+2|1|f
+2|3|f
+3|1|f
+3|3|t
+(6 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+a|n
+(1,x)|2
+(2,y)|1
+(3,z)|1
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

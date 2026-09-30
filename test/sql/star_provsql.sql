@@ -85,3 +85,55 @@ DROP VIEW star_w;
 
 DROP VIEW star_v, star_v2, star_o, star_j;
 DROP TABLE star_t, star_u;
+
+-- Rows compared as rows: the token of a row is no value of it, so two
+-- tracked relations with equal rows compare equal, as without ProvSQL, in a
+-- WHERE, a join condition, the select list, IN, CASE, and field by field for
+-- ROW(t.*).  wr_p is not tracked.
+CREATE TABLE wr_a(id int, name text);
+CREATE TABLE wr_b(id int, name text);
+CREATE TABLE wr_p(id int, name text);
+INSERT INTO wr_a VALUES (1, 'x'), (2, 'y'), (3, 'z');
+INSERT INTO wr_b VALUES (1, 'x'), (2, 'y'), (4, 'w');
+INSERT INTO wr_p VALUES (1, 'x'), (3, 'z');
+SELECT add_provenance('wr_a');
+SELECT add_provenance('wr_b');
+CREATE TABLE wr_r AS
+  SELECT 'eq' AS t, a.id AS l, b.id AS r FROM wr_a a, wr_b b WHERE a = b
+  UNION ALL
+  SELECT 'star', a.id, b.id FROM wr_a a, wr_b b WHERE (a.*) = (b.*)
+  UNION ALL
+  SELECT 'not-distinct', a.id, b.id FROM wr_a a, wr_b b
+    WHERE a IS NOT DISTINCT FROM b
+  UNION ALL
+  SELECT 'in', a.id, NULL FROM wr_a a WHERE a IN (SELECT b FROM wr_b b)
+  UNION ALL
+  SELECT 'join', a.id, p.id FROM wr_a a JOIN wr_p p ON a = p
+  UNION ALL
+  SELECT 'text', a.id, p.id FROM wr_a a, wr_p p WHERE a::text = p::text
+  UNION ALL
+  SELECT 'self-ne', a.id, x.id FROM wr_a a, wr_a x WHERE a <> x
+  UNION ALL
+  SELECT 'row-eq', a.id, b.id FROM wr_a a, wr_b b WHERE ROW(a.*) = ROW(b.*)
+  UNION ALL
+  SELECT 'row-lt', a.id, b.id FROM wr_a a, wr_b b WHERE ROW(a.*) < ROW(b.*)
+  UNION ALL
+  SELECT 'case', a.id, b.id FROM wr_a a, wr_b b
+    WHERE CASE a WHEN b THEN true ELSE false END;
+SELECT remove_provenance('wr_r');
+SELECT * FROM wr_r ORDER BY t, l, r;
+DROP TABLE wr_r;
+CREATE TABLE wr_r AS
+  SELECT a.id, b.id AS bid, a = b AS same FROM wr_a a, wr_p b;
+SELECT remove_provenance('wr_r');
+SELECT * FROM wr_r ORDER BY id, bid;
+DROP TABLE wr_r;
+-- Grouped by the row: equal rows are one group, whatever their tokens.
+INSERT INTO wr_a VALUES (1, 'x');
+CREATE TABLE wr_r AS SELECT a::text AS a, count(*) AS n FROM wr_a a GROUP BY a;
+SELECT remove_provenance('wr_r');
+SELECT a, n::text AS n FROM wr_r ORDER BY a;
+DROP TABLE wr_r;
+SELECT remove_provenance('wr_a');
+SELECT remove_provenance('wr_b');
+DROP TABLE wr_a, wr_b, wr_p;

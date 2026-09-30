@@ -29890,6 +29890,91 @@ static bool param_takes_any_row(Oid funcid, int i) {
   return res;
 }
 
+/** @brief Whether @p opno compares two rows (@c record operands). */
+static bool op_compares_records(Oid opno) {
+  Oid l, r;
+  op_input_types(opno, &l, &r);
+  return l == RECORDOID && r == RECORDOID;
+}
+
+/** @brief Context for @c retype_sublink_param_mut. */
+typedef struct retype_param_ctx {
+  Bitmapset *ids; /* the PARAM_SUBLINK ids now of type record */
+} retype_param_ctx;
+
+/** @brief The subquery outputs @c ids of a comparison, now records. */
+static Node *retype_sublink_param_mut(Node *node, void *cx) {
+  retype_param_ctx *c = (retype_param_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Param) && ((Param *)node)->paramkind == PARAM_SUBLINK &&
+      bms_is_member(((Param *)node)->paramid, c->ids)) {
+    Param *p = (Param *)copyObject(node);
+    p->paramtype = RECORDOID;
+    p->paramtypmod = -1;
+    p->paramcollid = InvalidOid;
+    return (Node *)p;
+  }
+  return expression_tree_mutator(node, retype_sublink_param_mut, cx);
+}
+
+/** @brief The placeholder of a @c CASE @c x @c WHEN, now of type record. */
+static Node *retype_case_test_mut(Node *node, void *cx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, CaseTestExpr)) {
+    CaseTestExpr *t = (CaseTestExpr *)copyObject(node);
+    t->typeId = RECORDOID;
+    t->typeMod = -1;
+    t->collation = InvalidOid;
+    return (Node *)t;
+  }
+  if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg != NULL)
+    return node; /* a nested CASE x WHEN has placeholders of its own */
+  return expression_tree_mutator(node, retype_case_test_mut, cx);
+}
+
+static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
+                                      bool top_level);
+
+/**
+ * @brief The non-junk outputs of @p sub that are whole rows of tracked
+ *        relations, as the rows of their other columns; the set of their
+ *        numbers, @c NULL if none.
+ */
+static Bitmapset *wholerow_outputs_to_records(const constants_t *constants,
+                                              Query *sub) {
+  wholerow_ctx sc = {sub, constants, false};
+  Bitmapset *ids = NULL;
+  ListCell *lc;
+  sc.outer_join = sub->jointree != NULL &&
+                  has_outer_join_walker((Node *)sub->jointree->fromlist, NULL);
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v = te->resjunk ? NULL : tracked_wholerow(&sc, (Node *)te->expr);
+    if (v != NULL) {
+      te->expr = (Expr *)row_without_provsql(&sc, v);
+      ids = bms_add_member(ids, te->resno);
+    }
+  }
+  return ids;
+}
+
+/** @brief @p arg, an operand of a comparison of rows, without @c provsql
+ *  when it is the whole row of a tracked relation, or a subquery giving
+ *  one. */
+static Node *record_operand(wholerow_ctx *ctx, Node *arg) {
+  Var *v = tracked_wholerow(ctx, arg);
+  if (v != NULL)
+    return row_without_provsql(ctx, v);
+  if (arg != NULL && IsA(arg, SubLink) &&
+      ((SubLink *)arg)->subLinkType == EXPR_SUBLINK &&
+      IsA(((SubLink *)arg)->subselect, Query))
+    wholerow_outputs_to_records(ctx->constants,
+                                (Query *)((SubLink *)arg)->subselect);
+  return arg;
+}
+
 /**
  * @brief Mutator: replace the whole-row values of tracked relations read as
  *        any row (see @c hide_provsql_in_wholerows).
@@ -29903,8 +29988,19 @@ static Node *wholerow_mutator(Node *node, void *cx) {
     return NULL;
   if (IsA(node, SubLink)) {
     SubLink *sl = (SubLink *)node;
-    if (sl->subselect != NULL && IsA(sl->subselect, Query))
+    if (sl->subselect != NULL && IsA(sl->subselect, Query)) {
       hide_provsql_in_wholerows(ctx->constants, (Query *)sl->subselect, false);
+      /* x IN (SELECT y ...): the rows compared, both without provsql */
+      if (sl->testexpr != NULL && (sl->subLinkType == ANY_SUBLINK ||
+                                   sl->subLinkType == ALL_SUBLINK ||
+                                   sl->subLinkType == ROWCOMPARE_SUBLINK)) {
+        retype_param_ctx rp;
+        rp.ids = wholerow_outputs_to_records(ctx->constants,
+                                             (Query *)sl->subselect);
+        if (rp.ids != NULL)
+          sl->testexpr = retype_sublink_param_mut(sl->testexpr, &rp);
+      }
+    }
     sl->testexpr = wholerow_mutator(sl->testexpr, cx);
     return node;
   }
@@ -29939,6 +30035,25 @@ static Node *wholerow_mutator(Node *node, void *cx) {
     Var *v = tracked_wholerow(ctx, (Node *)io->arg);
     if (v != NULL)
       io->arg = (Expr *)row_without_provsql(ctx, v);
+  } else if ((IsA(node, OpExpr) || IsA(node, DistinctExpr) ||
+              IsA(node, NullIfExpr)) &&
+             op_compares_records(((OpExpr *)node)->opno)) {
+    /* A comparison of rows (=, <>, <, IS DISTINCT FROM, NULLIF): the
+     * token of a row is no value of it */
+    foreach (lc, ((OpExpr *)node)->args)
+      lfirst(lc) = record_operand(ctx, (Node *)lfirst(lc));
+  } else if (IsA(node, CaseExpr) && ((CaseExpr *)node)->arg != NULL) {
+    CaseExpr *ce = (CaseExpr *)node;
+    Var *v = tracked_wholerow(ctx, (Node *)ce->arg);
+    if (v != NULL) {
+      /* CASE x WHEN y: x compared as a row, and each WHEN reads it through
+       * a placeholder of its type */
+      ce->arg = (Expr *)row_without_provsql(ctx, v);
+      foreach (lc, ce->args) {
+        CaseWhen *cw = (CaseWhen *)lfirst(lc);
+        cw->expr = (Expr *)retype_case_test_mut((Node *)cw->expr, NULL);
+      }
+    }
   }
   return node;
 }
@@ -29954,11 +30069,146 @@ static Node *wholerow_mutator(Node *node, void *cx) {
  * @c AS, nor returned by a function), a parameter of type @c record,
  * @c "any" or polymorphic
  * with a result type of its own (the json functions), a conversion to text
- * -- it becomes the anonymous record of the other columns.  Where the
- * table's own row type is needed (@c t::tbl, a function on it, a comparison
- * of rows), it stays.  Runs on the query and the bodies of its sublinks,
+ * -- it becomes the anonymous record of the other columns, and so it does
+ * where two rows are compared or grouped (@c t @c = @c u, @c IN, @c CASE
+ * @c t @c WHEN, @c GROUP @c BY @c t), so that equal rows are equal whatever
+ * their tokens.  Where the table's own row type is needed (@c t::tbl, a
+ * function on it), it stays.  Runs on the query and the bodies of its sublinks,
  * before the rewriting that would otherwise meet the whole-row value.
  */
+#if PG_VERSION_NUM >= 180000
+/** @brief Context for @c retype_group_var_mut. */
+typedef struct retype_group_ctx {
+  Index group_rt;  /* the grouping entry */
+  Bitmapset *cols; /* its columns now of type record */
+} retype_group_ctx;
+
+/** @brief The Vars reading columns @c cols of the grouping entry, now of
+ *  type record. */
+static Node *retype_group_var_mut(Node *node, void *cx) {
+  retype_group_ctx *c = (retype_group_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varno == c->group_rt &&
+      ((Var *)node)->varlevelsup == 0 &&
+      bms_is_member(((Var *)node)->varattno, c->cols)) {
+    Var *v = (Var *)copyObject(node);
+    v->vartype = RECORDOID;
+    v->vartypmod = -1;
+    v->varcollid = InvalidOid;
+    return (Node *)v;
+  }
+  if (IsA(node, Query))
+    return node;
+  return expression_tree_mutator(node, retype_group_var_mut, cx);
+}
+#endif
+
+/**
+ * @brief Group by the rows of tracked relations without their @c provsql.
+ *
+ * A @c GROUP @c BY on a whole row would otherwise make each row its own
+ * group, its token telling it from an equal one.  The key becomes the row of
+ * the other columns where the value grouped is not an output that needs the
+ * relation's row type (a subquery's column, a table created from the query):
+ * there the grouping reads a junk copy of it, the output staying as it was.
+ *
+ * @param shown  Whether the outputs of the query are shown to the user
+ */
+static void group_wholerows_without_provsql(wholerow_ctx *ctx, bool shown) {
+  Query *q = ctx->q;
+  ListCell *lc, *lg;
+  List *added = NIL;
+
+  if (q->groupClause == NIL || q->groupingSets != NIL)
+    return;
+#if PG_VERSION_NUM >= 180000
+  if (q->hasGroupRTE) {
+    /* The key is read through the grouping entry, whose column changes
+     * type: only where no output that needs the row type reads it (a key
+     * output of a subquery or of a created table is left as it is) */
+    retype_group_ctx rc = {0, NULL};
+    RangeTblEntry *g = NULL;
+    Index i = 0;
+    int k = 0;
+    foreach (lc, q->rtable) {
+      ++i;
+      if (((RangeTblEntry *)lfirst(lc))->rtekind == RTE_GROUP) {
+        g = (RangeTblEntry *)lfirst(lc);
+        rc.group_rt = i;
+      }
+    }
+    if (g == NULL)
+      return;
+    foreach (lg, g->groupexprs) {
+      Var *v;
+      ++k;
+      v = tracked_wholerow(ctx, (Node *)lfirst(lg));
+      if (v == NULL)
+        continue;
+      /* An output that needs the row type reads the row itself, which the
+       * planner computes per group as for any column the key determines;
+       * the grouping moves to a junk entry reading the key */
+      if (!shown)
+        foreach (lc, q->targetList) {
+          TargetEntry *te = (TargetEntry *)lfirst(lc);
+          if (te->resjunk || !IsA(te->expr, Var) ||
+              ((Var *)te->expr)->varno != rc.group_rt ||
+              ((Var *)te->expr)->varattno != k)
+            continue;
+          if (te->ressortgroupref != 0) {
+            TargetEntry *junk =
+              makeTargetEntry((Expr *)copyObject(te->expr), 0, NULL, true);
+            junk->ressortgroupref = te->ressortgroupref;
+            te->ressortgroupref = 0;
+            added = lappend(added, junk);
+          }
+          te->expr = (Expr *)copyObject(v);
+        }
+      lfirst(lg) = row_without_provsql(ctx, v);
+      rc.cols = bms_add_member(rc.cols, k);
+    }
+    foreach (lc, added) {
+      ((TargetEntry *)lfirst(lc))->resno = list_length(q->targetList) + 1;
+      q->targetList = lappend(q->targetList, lfirst(lc));
+    }
+    if (rc.cols != NULL) {
+      q->targetList = (List *)retype_group_var_mut((Node *)q->targetList, &rc);
+      q->havingQual = retype_group_var_mut(q->havingQual, &rc);
+    }
+    return;
+  }
+#endif
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v;
+    bool grouped = false;
+    if (te->ressortgroupref == 0)
+      continue;
+    foreach (lg, q->groupClause)
+      if (((SortGroupClause *)lfirst(lg))->tleSortGroupRef ==
+          te->ressortgroupref)
+        grouped = true;
+    v = grouped ? tracked_wholerow(ctx, (Node *)te->expr) : NULL;
+    if (v == NULL)
+      continue;
+    if (te->resjunk || shown)
+      te->expr = (Expr *)row_without_provsql(ctx, v);
+    else {
+      /* The grouping moves to a junk copy of the row without provsql */
+      TargetEntry *junk = makeTargetEntry(
+        (Expr *)row_without_provsql(ctx, v), 0, NULL, true);
+      junk->ressortgroupref = te->ressortgroupref;
+      te->ressortgroupref = 0;
+      added = lappend(added, junk);
+    }
+  }
+  foreach (lc, added) {
+    ((TargetEntry *)lfirst(lc))->resno = list_length(q->targetList) + 1;
+    q->targetList = lappend(q->targetList, lfirst(lc));
+  }
+}
+
 static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
                                       bool top_level) {
   wholerow_ctx ctx = {q, constants, false};
@@ -29970,6 +30220,9 @@ static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
   query_level_mutator(q, wholerow_mutator, &ctx,
                      QTW_IGNORE_RT_SUBQUERIES |
                      QTW_IGNORE_CTE_SUBQUERIES);
+  group_wholerows_without_provsql(&ctx,
+                                  top_level && provsql_in_ctas == 0 &&
+                                    provsql_executor_depth == 0);
   /* The output of the statement, when it is shown: a table created from it,
    * or the rows of a function, need the relation's own row type. */
   if (top_level && provsql_in_ctas == 0 && provsql_executor_depth == 0)
@@ -36090,6 +36343,28 @@ typedef struct rowstar_ctx {
   const char *src;  ///< Text of the statement
 } rowstar_ctx;
 
+/** @brief Whether @p a is the @c provsql column of a relation that @c *
+ *  expanded to, at its level of @p ctx. */
+static bool star_provsql_var(rowstar_ctx *ctx, Node *a) {
+  Var *v;
+  Query *q;
+  RangeTblEntry *rte;
+  if (a == NULL || !IsA(a, Var) || ((Var *)a)->vartype != UUIDOID)
+    return false;
+  v = (Var *)a;
+  if (v->varlevelsup >= (Index)list_length(ctx->queries))
+    return false;
+  q = (Query *)list_nth(ctx->queries, v->varlevelsup);
+  if (v->varno < 1 || v->varno > (Index)list_length(q->rtable))
+    return false;
+  rte = rt_fetch(v->varno, q->rtable);
+  return rte->rtekind == RTE_RELATION && v->varattno > 0 &&
+         v->varattno <= list_length(rte->eref->colnames) &&
+         strcmp(strVal(list_nth(rte->eref->colnames, v->varattno - 1)),
+                PROVSQL_COLUMN_NAME) == 0 &&
+         colref_is_star(ctx->src, v->location);
+}
+
 /**
  * @brief Mutator: leave the @c provsql column that @c * expands to out of
  *        the anonymous rows @c ROW(t.*), at any depth of the statement.
@@ -36109,6 +36384,42 @@ static Node *rowstar_mutator(Node *node, void *cx) {
     return node;
   }
   node = expression_tree_mutator(node, rowstar_mutator, cx);
+  /* ROW(x.*) = ROW(y.*) is compared field by field: the tokens are no field
+   * of the rows, and their comparison always holds for = (fails for <> and
+   * IS DISTINCT FROM) */
+  if ((IsA(node, OpExpr) || IsA(node, DistinctExpr)) &&
+      list_length(((OpExpr *)node)->args) == 2 &&
+      star_provsql_var(ctx, (Node *)linitial(((OpExpr *)node)->args)) &&
+      star_provsql_var(ctx, (Node *)lsecond(((OpExpr *)node)->args))) {
+    char *name = get_opname(((OpExpr *)node)->opno);
+    if (IsA(node, OpExpr) && name != NULL && strcmp(name, "=") == 0)
+      return (Node *)makeBoolConst(true, false);
+    if (IsA(node, DistinctExpr) ||
+        (name != NULL && strcmp(name, "<>") == 0))
+      return (Node *)makeBoolConst(false, false);
+  }
+  if (IsA(node, RowCompareExpr)) {
+    RowCompareExpr *rc = (RowCompareExpr *)node;
+    List *l = NIL, *r = NIL, *ops = NIL, *fams = NIL, *colls = NIL;
+    int i;
+    for (i = 0; i < list_length(rc->largs); ++i) {
+      if (star_provsql_var(ctx, (Node *)list_nth(rc->largs, i)) &&
+          star_provsql_var(ctx, (Node *)list_nth(rc->rargs, i)))
+        continue;
+      l = lappend(l, list_nth(rc->largs, i));
+      r = lappend(r, list_nth(rc->rargs, i));
+      ops = lappend_oid(ops, list_nth_oid(rc->opnos, i));
+      fams = lappend_oid(fams, list_nth_oid(rc->opfamilies, i));
+      colls = lappend_oid(colls, list_nth_oid(rc->inputcollids, i));
+    }
+    if (l != NIL && list_length(l) < list_length(rc->largs)) {
+      rc->largs = l;
+      rc->rargs = r;
+      rc->opnos = ops;
+      rc->opfamilies = fams;
+      rc->inputcollids = colls;
+    }
+  }
   if (IsA(node, RowExpr) && ((RowExpr *)node)->row_typeid == RECORDOID) {
     RowExpr *row = (RowExpr *)node;
     List *args = NIL, *names = NIL;
