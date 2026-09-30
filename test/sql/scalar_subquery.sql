@@ -1690,6 +1690,19 @@ CREATE TABLE sq_r AS
 SELECT remove_provenance('sq_r');
 SELECT * FROM sq_r;
 DROP TABLE sq_r;
+-- The same subquery as a DISTINCT key, alone or in an expression: one value,
+-- so one row, there when a row of sq_s is (1 - 1/8); n is independent of it,
+-- 1 on average, the key 10.
+CREATE TABLE sq_r AS
+  SELECT round(probability_evaluate(provenance())::numeric, 6) AS p,
+         round(expected(n * 1.0, provenance())::numeric, 6) AS e,
+         round(expected(n10 * 1.0, provenance())::numeric, 6) AS e10
+  FROM (WITH c AS (SELECT count(*) AS n FROM sq_u)
+        SELECT DISTINCT (SELECT n FROM c) AS n, (SELECT n FROM c) * 10 AS n10
+        FROM sq_s) d;
+SELECT remove_provenance('sq_r');
+SELECT * FROM sq_r;
+DROP TABLE sq_r;
 SELECT remove_provenance('sq_s');
 SELECT remove_provenance('sq_u');
 DROP TABLE sq_s, sq_u;

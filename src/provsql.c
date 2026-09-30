@@ -32249,6 +32249,22 @@ static Node *sublink_to_var_mutator(Node *n, void *cx) {
   return expression_tree_mutator(n, sublink_to_var_mutator, cx);
 }
 
+/** @brief Walker: a subquery not among @p cx, the one-row ones. */
+static bool other_sublink_walker(Node *n, void *cx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, SubLink))
+    return !list_member((List *)cx, n);
+  return expression_tree_walker(n, other_sublink_walker, cx);
+}
+
+/** @brief Whether @p e, a grouping key, is computed from the one-row
+ *  subqueries @p found alone: one of them, no column, no volatile call. */
+static bool key_of_one_row_sublinks(Node *e, List *found) {
+  return checkExprHasSubLink(e) && !contain_vars_of_level(e, 0) &&
+         !contain_volatile_functions(e) && !other_sublink_walker(e, found);
+}
+
 /**
  * @brief An uncorrelated aggregate subquery of the select list as a one-row
  *        table joined to the query.
@@ -32309,6 +32325,20 @@ static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
       nte->resjunk = false;
       if (nte->resname == NULL)
         nte->resname = psprintf("key%d", resno);
+      /* A key computed from the subqueries alone (SELECT DISTINCT (SELECT
+       * ...)): they have one row, so it has one value, which the query
+       * computes above from their tables; the grouping only needs a
+       * constant of its type, which stands for it nowhere else. */
+      if (key_of_one_row_sublinks((Node *)te->expr, tc.found)) {
+        nte->expr = (Expr *)makeNullConst(exprType((Node *)te->expr),
+                                          exprTypmod((Node *)te->expr),
+                                          exprCollation((Node *)te->expr));
+        atl = lappend(atl, nte);
+        /* A constant of no type, equal to no node of the query */
+        oc.keys = lappend(oc.keys, makeConst(InvalidOid, -1, InvalidOid, -2,
+                                             (Datum)0, true, false));
+        continue;
+      }
       atl = lappend(atl, nte);
       oc.keys = lappend(oc.keys, te->expr);
     }
@@ -32334,7 +32364,8 @@ static bool join_uncorrelated_aggregate_sublinks(const constants_t *constants,
     a->limitCount = NULL;
     a->limitOffset = NULL;
     a->hasSubLinks = checkExprHasSubLink((Node *)a->jointree) ||
-                     checkExprHasSubLink(a->havingQual);
+                     checkExprHasSubLink(a->havingQual) ||
+                     checkExprHasSubLink((Node *)atl);
     foreach (lc, atl)
       colnames = lappend(colnames, makeString(pstrdup(
         ((TargetEntry *)lfirst(lc))->resname)));

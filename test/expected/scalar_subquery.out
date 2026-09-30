@@ -1058,6 +1058,12 @@ k|e
 remove_provenance
 
 (1 row)
+p|e|e10
+0.875000|1.000000|10.000000
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
