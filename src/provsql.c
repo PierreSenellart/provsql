@@ -35385,6 +35385,21 @@ static PlannedStmt *provsql_planner(Query *q,
   matview_fill_types = matview_fill ? output_types(q) : NIL;
   if (provsql_in_matview_refresh && !matview_fill)
     goto plan;
+#if PG_VERSION_NUM < 160000
+  /* Before PostgreSQL 16, the query of a view as REFRESH reads it keeps the
+   * OLD and NEW placeholders of its rule, entries never scanned that name
+   * the view itself: those of a materialized view, which has a provsql
+   * column, are no source either, as those of a view are not */
+  if (matview_fill) {
+    ListCell *lr;
+    foreach (lr, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lr);
+      if (r->rtekind == RTE_RELATION && !r->inFromCl &&
+          r->relkind == RELKIND_MATVIEW)
+        r->relkind = RELKIND_VIEW;
+    }
+  }
+#endif
   {
     const constants_t mconstants = get_constants(false);
     if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {
