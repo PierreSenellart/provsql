@@ -61,6 +61,7 @@ extern "C" {
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "provsql_interrupt.h"
 
 namespace provsql {
 
@@ -625,6 +626,7 @@ PG_FUNCTION_INFO_V1(agg_collapsed_moment);
 Datum agg_collapsed_moment(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     const int32 k = PG_GETARG_INT32(1);
     if (k < 0)
@@ -637,8 +639,10 @@ Datum agg_collapsed_moment(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     return Float8GetDatum(*r);
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_collapsed_moment: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_collapsed_moment: unknown exception");
   }
   PG_RETURN_NULL();
@@ -657,6 +661,7 @@ PG_FUNCTION_INFO_V1(agg_collapsed_moments);
 Datum agg_collapsed_moments(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     auto gc = getGenericCircuit(*token);
     gate_t root = gc.getGate(uuid2string(*token));
@@ -668,8 +673,10 @@ Datum agg_collapsed_moments(PG_FUNCTION_ARGS)
                                      sizeof(float8), FLOAT8PASSBYVAL, 'd');
     PG_RETURN_ARRAYTYPE_P(arr);
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_collapsed_moments: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_collapsed_moments: unknown exception");
   }
   PG_RETURN_NULL();

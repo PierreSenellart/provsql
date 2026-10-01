@@ -1679,9 +1679,10 @@ method string -- it is the value the user passes to
 
 2. **Implement it** in :cfile:`BooleanCircuit.cpp`.  The method
    receives the root gate and the user-supplied ``args`` string (may
-   be empty) and must return a probability in :math:`[0, 1]`.  Check
-   :cfunc:`provsql_interrupted` periodically if the computation is
-   long so that the user can cancel with ``Ctrl-C``:
+   be empty) and must return a probability in :math:`[0, 1]`.  Call
+   :cfunc:`provsql_poll_interrupt` periodically if the computation is
+   long, so that a cancel or a ``statement_timeout`` stops it (see
+   :ref:`cancellation`):
 
    .. code-block:: cpp
 

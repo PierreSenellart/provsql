@@ -42,6 +42,7 @@ PG_FUNCTION_INFO_V1(rv_correlation);
 #include <set>
 #include <string>
 #include <vector>
+#include "provsql_interrupt.h"
 
 namespace provsql {
 
@@ -326,6 +327,7 @@ std::optional<double> computeCorrelation(GenericCircuit &gc, gate_t x,
 Datum rv_covariance(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *x = PG_GETARG_UUID_P(0);
     pg_uuid_t *y = PG_GETARG_UUID_P(1);
     pg_uuid_t *prov = PG_GETARG_UUID_P(2);
@@ -341,8 +343,10 @@ Datum rv_covariance(PG_FUNCTION_ARGS)
     return Float8GetDatum(
       provsql::computeCovariance(gc, gates[0], gates[1], event_opt));
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_covariance: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_covariance: unknown exception");
   }
   PG_RETURN_NULL();
@@ -357,6 +361,7 @@ Datum rv_covariance(PG_FUNCTION_ARGS)
 Datum rv_correlation(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *x = PG_GETARG_UUID_P(0);
     pg_uuid_t *y = PG_GETARG_UUID_P(1);
     pg_uuid_t *prov = PG_GETARG_UUID_P(2);
@@ -374,8 +379,10 @@ Datum rv_correlation(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     return Float8GetDatum(*rho);
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_correlation: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_correlation: unknown exception");
   }
   PG_RETURN_NULL();

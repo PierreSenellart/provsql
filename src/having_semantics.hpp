@@ -171,6 +171,7 @@ void provsql_having(
         disjuncts.reserve(worlds.size());
         for (const auto &mask : worlds) {
           std::vector<typename SemiringT::value_type> present, missing;
+          provsql_poll_interrupt();
           for (size_t i = 0; i < kvals.size(); ++i)
             (mask[i] ? present : missing).push_back(kvals[i]);
           disjuncts.push_back(S.certified_world_term(present, missing));
@@ -187,6 +188,7 @@ void provsql_having(
         std::vector<typename SemiringT::value_type> present, missing;
         present.reserve(n);
         missing.reserve(n);
+        provsql_poll_interrupt();
 
         for (size_t i = 0; i < n; ++i) {
           if (mask[i]) {

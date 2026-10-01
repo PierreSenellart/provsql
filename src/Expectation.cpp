@@ -44,6 +44,7 @@ PG_FUNCTION_INFO_V1(agg_avg_moment_exact);
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "provsql_interrupt.h"
 
 namespace provsql {
 
@@ -2332,6 +2333,7 @@ extern "C" {
 Datum agg_avg_moment_exact(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     const int32 k_signed = PG_GETARG_INT32(1);
 
@@ -2348,8 +2350,10 @@ Datum agg_avg_moment_exact(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     return Float8GetDatum(r);
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_avg_moment_exact: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("agg_avg_moment_exact: unknown exception");
   }
   PG_RETURN_NULL();
@@ -2358,6 +2362,7 @@ Datum agg_avg_moment_exact(PG_FUNCTION_ARGS)
 Datum rv_moment(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     const int32 k_signed = PG_GETARG_INT32(1);
     const bool central = PG_GETARG_BOOL(2);
@@ -2393,8 +2398,10 @@ Datum rv_moment(PG_FUNCTION_ARGS)
       result = provsql::compute_raw_moment(gc, root_gate, k, event_opt);
     return Float8GetDatum(result);
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_moment: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_moment: unknown exception");
   }
   PG_RETURN_NULL();
@@ -2414,6 +2421,7 @@ Datum rv_moment(PG_FUNCTION_ARGS)
 Datum rv_quantile(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     const double p = PG_GETARG_FLOAT8(1);
     pg_uuid_t *prov = PG_GETARG_UUID_P(2);
@@ -2434,8 +2442,10 @@ Datum rv_quantile(PG_FUNCTION_ARGS)
     return Float8GetDatum(
       provsql::compute_quantile(gc, root_gate, p, event_opt));
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_quantile: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_quantile: unknown exception");
   }
   PG_RETURN_NULL();
@@ -2452,6 +2462,7 @@ Datum rv_quantile(PG_FUNCTION_ARGS)
 Datum rv_evidence(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     auto gc = getGenericCircuit(*token);
     gate_t root = gc.getGate(uuid2string(*token));
@@ -2469,8 +2480,10 @@ Datum rv_evidence(PG_FUNCTION_ARGS)
       gc, root, static_cast<unsigned>(provsql_rv_mc_samples));
     return Float8GetDatum(e);
   } catch (const std::exception &ex) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_evidence: %s", ex.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_evidence: unknown exception");
   }
   PG_RETURN_NULL();

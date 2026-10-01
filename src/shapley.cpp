@@ -46,6 +46,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 #include "CircuitFromMMap.h"
 #include "tool_registry_sync.h"
 #include <fstream>
+#include "provsql_interrupt.h"
 
 using namespace std;
 
@@ -113,6 +114,7 @@ Datum shapley(PG_FUNCTION_ARGS)
 {
   provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
+    provsql_interrupt_scope interrupt_scope;
     if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
       PG_RETURN_NULL();
 
@@ -138,8 +140,10 @@ Datum shapley(PG_FUNCTION_ARGS)
 
     PG_RETURN_FLOAT8(shapley_internal(*DatumGetUUIDP(token), *DatumGetUUIDP(variable), method, args, banzhaf));
   } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("shapley: %s", e.what());
   } catch(...) {
+    provsql_cancel_if_interrupted();
     provsql_error("shapley: Unknown exception");
   }
 
@@ -160,7 +164,10 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
   rsinfo->returnMode = SFRM_Materialize;
   rsinfo->setResult = tupstore;
 
-  if(!PG_ARGISNULL(0)) {
+  /* One value per variable, each a pass over the d-DNNF: a cancel stops
+   * between two of them (and in the compilation) */
+  if(!PG_ARGISNULL(0)) try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t token = *DatumGetUUIDP(PG_GETARG_DATUM(0));
 
     std::string method;
@@ -203,6 +210,7 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
       dd.makeGatesBinary(BooleanGate::AND);
 
     for(auto &v_circuit_gate: c.getInputs()) {
+      provsql_poll_interrupt();
       auto var_uuid_string = c.getUUID(v_circuit_gate);
       auto var_gate=dd.getGate(var_uuid_string);
       pg_uuid_t *uuidp = reinterpret_cast<pg_uuid_t*>(palloc(UUID_LEN));
@@ -222,6 +230,12 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
+  } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("shapley_all_vars: %s", e.what());
+  } catch(...) {
+    provsql_cancel_if_interrupted();
+    provsql_error("shapley_all_vars: Unknown exception");
   }
 
   MemoryContextSwitchTo(oldcontext);

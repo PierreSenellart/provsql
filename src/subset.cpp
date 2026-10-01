@@ -29,9 +29,14 @@
 #include <stdexcept>
 #include <cassert>
 
+#include "provsql_interrupt.h"
+
 namespace {
+/** @brief The next world after @p v, or @c false after the last one; a
+ *  cancelled query stops the enumeration here. */
 static bool increment(mask_t &v)
 {
+  provsql_poll_interrupt();
   for(size_t i=0; i<v.size(); ++i)
   {
     v[i]=!v[i];

@@ -57,6 +57,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 
 #include "BooleanCircuit.h"
 #include "CircuitFromMMap.h"
+#include "provsql_interrupt.h"
 #include "GenericCircuit.h"
 #include "AnalyticEvaluator.h"
 #include "CountCmpEvaluator.h"
@@ -629,35 +630,6 @@ double evaluate_karp_luby(const BooleanCircuit &c,
 double mobius_probability_of(pg_uuid_t token)
 {
   return mobiusProbabilityImpl(token);
-}
-
-/**
- * @brief SIGINT handler that sets the global interrupted flag.
- *
- * The signal number argument is required by the @c signal() API but is
- * not used.
- *
- * In addition to the @c provsql_interrupted flag polled by the long
- * Monte-Carlo / possible-worlds evaluation loops, we drive PG's
- * standard cancel pipeline (@c InterruptPending / @c QueryCancelPending
- * + @c SetLatch) the same way PG's own @c StatementCancelHandler does.
- * That makes a SIGINT delivered to the backend (e.g. via
- * @c pg_cancel_backend) outside of a @c system() wait turn into a
- * proper 57014 cancel at the next @c CHECK_FOR_INTERRUPTS instead of
- * being silently absorbed.  (The matching case where an external
- * compiler is running is handled in @c run_external_tool, which runs the
- * tool in its own process group and @c SIGKILLs that group on a pending
- * cancel, then lets @c CHECK_FOR_INTERRUPTS raise it.)
- */
-static void provsql_sigint_handler (int)
-{
-  provsql_interrupted = true;
-
-  if (!proc_exit_inprogress) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-  SetLatch(MyLatch);
 }
 
 /**
@@ -2401,12 +2373,8 @@ static Datum probability_evaluate_internal
   // is left empty and the default auto-selection picks one).
   string actual_method;
 
-  provsql_interrupted = false;
-
-  void (*prev_sigint_handler)(int);
-  prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
-
   try {
+    provsql_interrupt_scope interrupt_scope;
     // GenericCircuit-level estimators (the relative / additive paths and their
     // explicit-method aliases) run before the BoolExpr translation in
     // getBooleanCircuit (which drops gate_rv and rejects RV gate_cmp), so they
@@ -2485,16 +2453,14 @@ static Datum probability_evaluate_internal
     // let PG report its native 57014 with the specific reason instead of the
     // generic "Interrupted".  For any other CircuitException no cancel is
     // pending, so CHECK_FOR_INTERRUPTS is a no-op and we report it as-is.
-    CHECK_FOR_INTERRUPTS();
+    // The scope has restored the handler as the try was left.
+    provsql_cancel_if_interrupted();
     provsql_error("%s", e.what());
   }
 
   // Record the method just used (see record_last_eval_method) so callers can
   // inspect which evaluation strategy the default auto-selection settled on.
   record_last_eval_method(actual_method);
-
-  provsql_interrupted = false;
-  signal (SIGINT, prev_sigint_handler);
 
   // Avoid rounding errors that make probability outside of [0,1]
   if(result>1.)
@@ -2510,6 +2476,7 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
 {
   provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
+    provsql_interrupt_scope interrupt_scope;
     Datum token = PG_GETARG_DATUM(0);
     string method;
     string args;
@@ -2534,6 +2501,7 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     return result;
   } catch(const semiring::SemiringGateException &e) {
+    provsql_cancel_if_interrupted();
     /* A gate the resolution passes left for the semiring itself: a
      * comparison of aggregate results none of them could resolve, whose
      * value gates the Boolean translation then meets.  A shape ProvSQL does
@@ -2544,8 +2512,10 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
                         "numeric aggregates, and between two array_agg results",
                         e.what());
   } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("probability_evaluate: %s", e.what());
   } catch(...) {
+    provsql_cancel_if_interrupted();
     provsql_error("probability_evaluate: Unknown exception");
   }
 
@@ -2566,6 +2536,7 @@ Datum probability_bounds(PG_FUNCTION_ARGS)
 {
   provsql_sync_tool_registry();
   try {
+    provsql_interrupt_scope interrupt_scope;
     if(PG_ARGISNULL(0))
       PG_RETURN_NULL();
     pg_uuid_t token = *DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -2593,8 +2564,10 @@ Datum probability_bounds(PG_FUNCTION_ARGS)
     bool nulls[2] = { false, false };
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("probability_bounds: %s", e.what());
   } catch(...) {
+    provsql_cancel_if_interrupted();
     provsql_error("probability_bounds: Unknown exception");
   }
 

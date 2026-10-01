@@ -36,6 +36,7 @@ extern "C"
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
 #include "provsql_utils_cpp.h"
+#include "provsql_interrupt.h"
 
 extern "C"
 {
@@ -143,6 +144,7 @@ Datum true_nonzero(PG_FUNCTION_ARGS)
     PG_RETURN_BOOL(true);   // NULL token ≡ the neutral 1 ≠ 0
 
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t token = *DatumGetUUIDP(PG_GETARG_DATUM(0));
     GenericCircuit gc = getGenericCircuit(token);
     gate_t root = gc.getGate(uuid2string(token));
@@ -175,8 +177,10 @@ Datum true_nonzero(PG_FUNCTION_ARGS)
                               memo);
     PG_RETURN_BOOL(!zero);
   } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("nonzero: %s", e.what());
   } catch(...) {
+    provsql_cancel_if_interrupted();
     provsql_error("nonzero: Unknown exception");
   }
 

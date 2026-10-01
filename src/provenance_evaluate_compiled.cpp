@@ -55,6 +55,7 @@ PG_FUNCTION_INFO_V1(plain_truth);
 #include "Expectation.h"
 #include "having_semantics.hpp"
 #include "provenance_evaluate_compiled.hpp"
+#include "provsql_interrupt.h"
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
@@ -382,6 +383,7 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   try {
+    provsql_interrupt_scope interrupt_scope;
     Datum token = PG_GETARG_DATUM(0);
 
     Oid table = PG_GETARG_OID(1);
@@ -393,8 +395,10 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
 
     return provenance_evaluate_compiled_internal(*DatumGetUUIDP(token), table, semiring, type);
   } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("provenance_evaluate_compiled: %s", e.what());
   } catch(...) {
+    provsql_cancel_if_interrupted();
     provsql_error("provenance_evaluate_compiled: Unknown exception");
   }
 
@@ -540,6 +544,7 @@ Datum plain_truth(PG_FUNCTION_ARGS)
    * counts, as it did before this filter. */
   bool res = true;
   try {
+    provsql_interrupt_scope interrupt_scope;
     GenericCircuit c = getGenericCircuit(token);
     gate_t g = c.getGate(uuid2string(token));
     semiring::Boolean sr;
@@ -547,6 +552,7 @@ Datum plain_truth(PG_FUNCTION_ARGS)
     provsql_having(c, g, mapping, sr);
     res = c.evaluate<semiring::Boolean>(g, mapping, sr);
   } catch(const std::exception &) {
+    provsql_cancel_if_interrupted();
     res = true;
   }
   if (plain_truth_memo.size() >= plain_truth_memo_max)

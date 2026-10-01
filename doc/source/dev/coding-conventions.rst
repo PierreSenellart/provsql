@@ -92,6 +92,36 @@ C/C++ boundary is undefined behaviour, so the catch must happen
 inside the C++ side.
 
 
+.. _cancellation:
+
+Cancellation
+------------
+
+A query cancel and a ``statement_timeout`` reach the backend as a
+``SIGINT``.  A C++ loop that can run long (an enumeration of worlds, a
+sampler, a pass per variable) must stop on one, and without a
+``longjmp`` through its stack, which would leave its memory
+allocated: it calls :cfunc:`provsql_poll_interrupt`, which throws a
+:cfunc:`CircuitException` once :cfunc:`provsql_sigint_handler` has
+set :cfunc:`provsql_interrupted` (see :cfile:`provsql_interrupt.h`).
+The SQL-callable wrapper installs that handler for the evaluation and
+turns the exception back into PostgreSQL's own cancel (``57014``):
+
+.. code-block:: cpp
+
+   try {
+     provsql_interrupt_scope interrupt_scope;
+     // ... the evaluation ...
+   } catch(const std::exception &e) {
+     provsql_cancel_if_interrupted();
+     provsql_error("my_function: %s", e.what());
+   }
+
+:cfunc:`provsql_interrupt_scope` restores the previous handler as the
+``try`` block is left, and :cfunc:`provsql_cancel_if_interrupted` does
+nothing when no cancel is pending.  A linear pass needs neither.
+
+
 Memory Management
 -----------------
 

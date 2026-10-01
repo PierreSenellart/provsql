@@ -69,6 +69,7 @@ PG_FUNCTION_INFO_V1(rv_histogram);
 #include <tuple>
 #include <utility>
 #include <vector>
+#include "provsql_interrupt.h"
 
 namespace {
 
@@ -103,6 +104,7 @@ rv_histogram(PG_FUNCTION_ARGS)
   bool first = true;
 
   try {
+    provsql_interrupt_scope interrupt_scope;
     /* Always go through getJointCircuit: when prov is gate_one() the
      * joint loader still produces a valid single-root closure (the
      * gate_one leaf is just an extra disconnected node).  This keeps
@@ -253,8 +255,10 @@ rv_histogram(PG_FUNCTION_ARGS)
         type_name);
     }
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_histogram: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_histogram: unknown exception");
   }
 

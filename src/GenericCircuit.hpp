@@ -41,6 +41,7 @@
 extern "C" {
 #include "utils/lsyscache.h"
 #include "miscadmin.h"        // check_stack_depth
+#include "provsql_interrupt.h"
 }
 
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
@@ -60,6 +61,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
   while(!stack.empty()) {
     const gate_t u = stack.back();
+    provsql_poll_interrupt();
 
     /* The side-band assumption checks run BEFORE the memoisation
      * lookup: input leaves are preloaded into @p provenance_mapping

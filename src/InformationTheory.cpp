@@ -33,6 +33,7 @@ PG_FUNCTION_INFO_V1(rv_mutual_information);
 #include <set>
 #include <string>
 #include <vector>
+#include "provsql_interrupt.h"
 
 namespace provsql {
 
@@ -393,6 +394,7 @@ double computeMutualInformation(const GenericCircuit &gc, gate_t x_root,
 Datum rv_entropy(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     pg_uuid_t *prov = PG_GETARG_UUID_P(1);
 
@@ -407,8 +409,10 @@ Datum rv_entropy(PG_FUNCTION_ARGS)
     return Float8GetDatum(
       provsql::computeEntropy(gc, root_gate, event_opt));
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_entropy: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_entropy: unknown exception");
   }
   PG_RETURN_NULL();
@@ -420,6 +424,7 @@ Datum rv_entropy(PG_FUNCTION_ARGS)
 Datum rv_kl(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *p = PG_GETARG_UUID_P(0);
     pg_uuid_t *q = PG_GETARG_UUID_P(1);
 
@@ -428,8 +433,10 @@ Datum rv_kl(PG_FUNCTION_ARGS)
 
     return Float8GetDatum(provsql::computeKL(gc, p_gate, q_gate));
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_kl: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_kl: unknown exception");
   }
   PG_RETURN_NULL();
@@ -441,6 +448,7 @@ Datum rv_kl(PG_FUNCTION_ARGS)
 Datum rv_mutual_information(PG_FUNCTION_ARGS)
 {
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *x = PG_GETARG_UUID_P(0);
     pg_uuid_t *y = PG_GETARG_UUID_P(1);
 
@@ -450,8 +458,10 @@ Datum rv_mutual_information(PG_FUNCTION_ARGS)
     return Float8GetDatum(
       provsql::computeMutualInformation(gc, x_gate, y_gate));
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_mutual_information: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     provsql_error("rv_mutual_information: unknown exception");
   }
   PG_RETURN_NULL();

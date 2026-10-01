@@ -1,0 +1,11 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+NOTICE:  sr_formula cancelled
+remove_provenance
+
+(1 row)

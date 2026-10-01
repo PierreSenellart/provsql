@@ -43,6 +43,7 @@ PG_FUNCTION_INFO_V1(rv_sample);
 #include <algorithm>
 #include <optional>
 #include <vector>
+#include "provsql_interrupt.h"
 
 extern "C" Datum
 rv_sample(PG_FUNCTION_ARGS)
@@ -60,6 +61,7 @@ rv_sample(PG_FUNCTION_ARGS)
   rsinfo->setResult = tupstore;
 
   try {
+    provsql_interrupt_scope interrupt_scope;
     pg_uuid_t *token = (pg_uuid_t *) PG_GETARG_POINTER(0);
     const int32 n_signed = PG_GETARG_INT32(1);
     pg_uuid_t *prov  = (pg_uuid_t *) PG_GETARG_POINTER(2);
@@ -154,9 +156,11 @@ rv_sample(PG_FUNCTION_ARGS)
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
   } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
     MemoryContextSwitchTo(oldcontext);
     provsql_error("rv_sample: %s", e.what());
   } catch (...) {
+    provsql_cancel_if_interrupted();
     MemoryContextSwitchTo(oldcontext);
     provsql_error("rv_sample: unknown exception");
   }

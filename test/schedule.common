@@ -131,6 +131,7 @@ test: last_eval_method
 test: d4 dsharp weightmc c2d minic2d
 test: d4_timeout
 test: external_tool_timeout
+test: semiring_timeout
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
