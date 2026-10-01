@@ -138,7 +138,13 @@ static const RmgrData provsql_rmgr = {
 
 void provsql_register_rmgr(void)
 {
+#if PG_VERSION_NUM >= 160000
   RegisterCustomRmgr(RM_PROVSQL_ID, &provsql_rmgr);
+#else
+  /* PostgreSQL 15 declares the record it keeps without const; it does not
+   * modify it */
+  RegisterCustomRmgr(RM_PROVSQL_ID, (RmgrData *)&provsql_rmgr);
+#endif
 }
 
 bool provsql_store_write_allowed(void)

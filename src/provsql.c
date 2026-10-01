@@ -28137,7 +28137,7 @@ static Node *renumber_rte_mut(Node *node, void *cx) {
   return expression_tree_mutator(node, renumber_rte_mut, cx);
 }
 
-#if PG_VERSION_NUM >= 160000
+#if PG_VERSION_NUM >= 180000
 /** @brief Remove entry @p rtindex, referenced nowhere any more, from the
  *  range table of @p q, and renumber the references to the entries after
  *  it. */
