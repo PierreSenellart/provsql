@@ -24,6 +24,20 @@ EXCEPTION WHEN query_canceled THEN
 END $$;
 RESET statement_timeout;
 
+-- The same evaluation under a memory budget: its formula (about 100 MB)
+-- exceeds it, and the evaluation stops with an error.
+SET provsql.max_memory = '50MB';
+DO $$
+BEGIN
+  PERFORM length(sr_formula(provenance(), 'st_r_map'))
+  FROM (WITH c AS (SELECT grp, SUM(v) AS total FROM st_r GROUP BY grp)
+        SELECT grp FROM c WHERE total > 0.001) x;
+  RAISE NOTICE 'sr_formula finished';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '%', SQLERRM;
+END $$;
+RESET provsql.max_memory;
+
 DROP TABLE st_r_map;
 SELECT remove_provenance('st_r');
 DROP TABLE st_r;

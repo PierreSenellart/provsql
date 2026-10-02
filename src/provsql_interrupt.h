@@ -21,6 +21,11 @@
  *   }
  * @endcode
  * the scope restoring the handler as the @c try is left.
+ *
+ * The same polls enforce @c provsql.max_memory: every few thousand of them,
+ * the backend's resident memory is compared with what it was at the first
+ * evaluation of the statement, and past the budget the evaluation stops with
+ * an error, as it does on a cancel.
  * The handler is defined in @c provsql_interrupt.cpp.
  */
 #ifndef PROVSQL_INTERRUPT_H
@@ -43,6 +48,18 @@ void provsql_sigint_handler(int);
  *        otherwise.  Called in a @c catch, once the scope is gone.
  */
 void provsql_cancel_if_interrupted(void);
+
+/** @c provsql.max_memory, in MB (0: no limit). */
+extern int provsql_max_memory;
+
+/** Polls since the last check of the memory budget. */
+extern unsigned provsql_poll_count;
+
+/**
+ * @brief Throw if the evaluations of the statement have made the backend's
+ *        resident memory grow by more than @c provsql.max_memory.
+ */
+void provsql_check_memory(void);
 }
 
 /**
@@ -66,6 +83,8 @@ inline void provsql_poll_interrupt()
 {
   if (provsql_interrupted)
     throw CircuitException("Interrupted");
+  if (provsql_max_memory > 0 && (++provsql_poll_count & 4095) == 0)
+    provsql_check_memory();
 }
 
 #endif /* PROVSQL_INTERRUPT_H */

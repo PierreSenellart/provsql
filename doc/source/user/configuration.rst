@@ -223,6 +223,19 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     them back (a hash aggregate over a large table); count roughly 100
     bytes per gate.
 
+.. _provsql-max-memory:
+
+``provsql.max_memory`` (default: ``0``, no limit)
+    Memory the evaluations of a statement (a semiring, a probability, a
+    moment, a sample, Shapley values...) may add to the backend: once its
+    resident memory has grown by more than this since the statement's
+    first evaluation, the evaluation stops with an error, as it does on a
+    cancel or a ``statement_timeout``. The check is periodic, so the
+    budget can be exceeded by what is allocated between two checks;
+    external tools such as ``d4`` run in processes of their own and are
+    not counted. Available on Linux, macOS and FreeBSD; elsewhere the
+    setting has no effect. Example: ``SET provsql.max_memory = '1GB'``.
+
 .. _provsql-synchronous-commit:
 
 ``provsql.synchronous_commit`` (default: ``off``)

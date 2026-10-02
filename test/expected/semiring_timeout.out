@@ -6,6 +6,7 @@ create_provenance_mapping
 
 (1 row)
 NOTICE:  sr_formula cancelled
+NOTICE:  ProvSQL: provenance_evaluate_compiled: the evaluation used more memory than provsql.max_memory (50 MB)
 remove_provenance
 
 (1 row)
