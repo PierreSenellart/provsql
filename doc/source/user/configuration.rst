@@ -236,6 +236,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     not counted. Available on Linux, macOS and FreeBSD; elsewhere the
     setting has no effect. Example: ``SET provsql.max_memory = '1GB'``.
 
+.. _provsql-max-worlds:
+
+``provsql.max_worlds`` (default: ``1048576``, that is 2\ :sup:`20`)
+    Possible worlds of a group that a condition on its aggregate may have
+    enumerated. A condition with no closed form (a comparison on a ``SUM``,
+    on two aggregates, on an ``array_agg``...) is evaluated by enumerating
+    the worlds of the group, up to 2\ :sup:`n` for *n* rows, in time and
+    in memory: beyond this many, the evaluation stops with an error
+    rather than running out of memory. ``0`` for no limit.
+
 .. _provsql-synchronous-commit:
 
 ``provsql.synchronous_commit`` (default: ``off``)

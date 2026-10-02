@@ -339,6 +339,8 @@ void provsql_having(
         for (size_t j = 0; j < n; ++j)
           if (!fixed[j]) free_idx.push_back(j);
         const size_t m = free_idx.size();
+        check_world_count(m >= 63 ? size_t(-1)
+                                  : worlds.size() + (size_t(1) << m));
         for (size_t sub = 0; sub < (size_t(1) << m); ++sub) {
           mask_t mask(n, false);
           mask[fb.first] = true;

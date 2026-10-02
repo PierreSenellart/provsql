@@ -30,6 +30,21 @@
 #include <cassert>
 
 #include "provsql_interrupt.h"
+#include <string>
+
+extern "C" {
+/** @c provsql.max_worlds (0: no limit). */
+extern int provsql_max_worlds;
+}
+
+void check_world_count(std::size_t count)
+{
+  if (provsql_max_worlds > 0 && count > (std::size_t)provsql_max_worlds)
+    throw CircuitException(
+      "a condition on an aggregate of a group needs more than "
+      "provsql.max_worlds (" + std::to_string(provsql_max_worlds) +
+      ") of its possible worlds enumerated");
+}
 
 namespace {
 /** @brief The next world after @p v, or @c false after the last one; a
@@ -51,8 +66,10 @@ static std::vector<mask_t> all_worlds(const std::vector<long> &values)
   std::vector<mask_t> worlds;
   mask_t mask(values.size());
   // Skip empty world
-  while(increment(mask))
+  while(increment(mask)) {
     worlds.push_back(mask);
+    check_world_count(worlds.size());
+  }
   return worlds;
 }
 
@@ -69,6 +86,7 @@ static void append_range(std::vector<mask_t> &out,
 
   for (long long j = lo; j <= hi; ++j) {
     out.insert(out.end(), dp[j].begin(), dp[j].end());
+  check_world_count(out.size());
   }
 }
 
@@ -133,6 +151,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
 
   std::vector<std::vector<mask_t> > dp(static_cast<std::size_t>(J) + 1);
   dp[0].push_back(mask_t(n)); // dp[0] <- {emptyset}
+  std::size_t held = 1;           // masks in all the dp entries
 
   long long pref_sum=0;
 
@@ -154,6 +173,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
         mask_t m = dp[p][k];
         m[i] = true;
         dp[j].push_back(m);
+        check_world_count(++held);
       }
     }
   }
@@ -233,6 +253,7 @@ static void combinations(std::size_t start,
 
   if (k_left == 0) {
     out.push_back(mask);
+    check_world_count(out.size());
     return;
   }
 
@@ -408,9 +429,10 @@ std::vector<mask_t> enumerate_exhaustive(
   bool all_worlds = true;
 
   while(increment(mask)) { // Skipping empty world (handled by agg_cmp_holds_in_world too)
-    if(agg_cmp_holds_in_world(values, mask, constant, op, agg_kind))
+    if(agg_cmp_holds_in_world(values, mask, constant, op, agg_kind)) {
       worlds.push_back(mask);
-    else
+      check_world_count(worlds.size());
+    } else
       all_worlds=false;
   }
 
@@ -491,8 +513,10 @@ std::vector<mask_t> enumerate_array_agg_pair_worlds(
     if(l.empty()) continue;             // NULL: no comparison holds
     std::vector<std::string> r = side(rbits, rvals, mask);
     if(r.empty()) continue;
-    if((l == r) == want_equal)
+    if((l == r) == want_equal) {
       worlds.push_back(mask);
+      check_world_count(worlds.size());
+    }
   }
   return worlds;
 }
@@ -513,8 +537,10 @@ std::vector<mask_t> enumerate_array_agg_worlds(
     present.reserve(n);
     for(size_t i = 0; i < n; ++i)
       if(mask[i]) present.push_back(vals[i]);
-    if((present == target) == want_equal)
+    if((present == target) == want_equal) {
       worlds.push_back(mask);
+      check_world_count(worlds.size());
+    }
   }
   return worlds;
 }

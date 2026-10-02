@@ -128,6 +128,7 @@ int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subp
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
 int provsql_gate_cache_size = 65536; ///< Byte budget, in kB, of the per-backend gate cache; @c provsql.gate_cache_size GUC
 int provsql_max_memory = 0; ///< Memory, in MB, that the evaluations of a statement may add to the backend's resident set before they stop with an error (0: no limit); @c provsql.max_memory GUC
+int provsql_max_worlds = 1048576; ///< Possible worlds of a group that a condition on its aggregate may have enumerated before the evaluation stops with an error (0: no limit); @c provsql.max_worlds GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
 bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
 bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a guaranteed-PTIME exact route for its class) BEFORE the joint-width compiler, which it short-circuits on success (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
@@ -37298,6 +37299,25 @@ void _PG_init(void) {
                           INT_MAX,
                           PGC_USERSET,
                           GUC_UNIT_MB,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomIntVariable("provsql.max_worlds",
+                          "Possible worlds of a group a condition on its "
+                          "aggregate may enumerate.",
+                          "A condition on an aggregate (count, sum, min, max, "
+                          "array_agg) that has no closed form is evaluated by "
+                          "enumerating the possible worlds of the group, up to "
+                          "2^n for n rows, in time and in memory. Beyond this "
+                          "many, the evaluation stops with an error instead. "
+                          "Default 1048576 (2^20); 0 for no limit.",
+                          &provsql_max_worlds,
+                          1048576,
+                          0,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
                           NULL,
                           NULL,
                           NULL);

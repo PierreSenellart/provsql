@@ -29,6 +29,12 @@
 using mask_t=std::vector<bool>;
 
 /**
+ * @brief Throw if @p count worlds of a group, held for enumeration, are
+ *        more than @c provsql.max_worlds allows.
+ */
+void check_world_count(std::size_t count);
+
+/**
  * @brief Enumerate all subsets of @p n tuples satisfying an aggregate predicate.
  *
  * For each subset @f$W \subseteq \{0, \ldots, n-1\}@f$ of the tuples,

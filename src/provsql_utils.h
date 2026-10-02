@@ -604,6 +604,9 @@ extern int provsql_gate_cache_size;
 /* Memory an evaluation may add to the backend, in MB (0: no limit); see
  * provsql_interrupt.h */
 extern int provsql_max_memory;
+/* Possible worlds of a group a condition on its aggregate may enumerate
+ * (0: no limit) */
+extern int provsql_max_worlds;
 
 /* Recognise unsafe UCQs at planner time and route their existence provenance
  * through the joint-width compiler (on by default); provsql.joint_width is a
