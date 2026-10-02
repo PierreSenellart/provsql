@@ -1426,16 +1426,11 @@
   // cv-kc-notice background + warning icon, with the source badge
   // stripped off the "ProvSQL: " prefix.
   function renderEvalNotice(messages) {
-    const esc = env.escapeHtml;
     const list = Array.isArray(messages) ? messages : [messages];
-    const formatted = list.map((raw) => {
-      const m = (raw || '').match(/^ProvSQL:\s*(.*)$/s);
-      const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
-      const text = m ? m[1] : (raw || '');
-      return `${badge}${esc(text)}`;
-    }).join('<br>');
     return `<div class="cv-kc-notice">`
-      + `<i class="fas fa-exclamation-triangle"></i> ${formatted}</div>`;
+      + list.map((raw) => window.ProvsqlStudio.diagBodyHtml(
+          raw, '<i class="fas fa-exclamation-triangle"></i> ')).join('')
+      + `</div>`;
   }
 
   function renderEvalResult(cell) {

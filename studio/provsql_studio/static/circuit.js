@@ -4360,50 +4360,25 @@
   // (it would add noise to every message without telling the user
   // anything actionable).
   function renderEvalError(message, sqlstate) {
-    const raw = message || '';
-    const m = raw.match(/^ProvSQL:\s*(.*)$/s);
-    const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
-    // The hint on a line of its own with its icon, as app.js's renderDiag
-    // shows it.
-    const lines = (m ? m[1] : raw).split('\n');
-    const hi = lines.findIndex((l, k) => k > 0 && /^HINT:\s/.test(l));
-    let hint = '';
-    if (hi >= 0) {
-      let j = hi + 1;
-      while (j < lines.length && !/^[A-Z][A-Z ]*:\s/.test(lines[j])) j++;
-      hint = [lines[hi].replace(/^HINT:\s*/, ''), ...lines.slice(hi + 1, j)]
-        .join('\n').trim();
-      lines.splice(hi, j - hi);
-    }
-    const text  = lines.join('\n');
     const tail  = (sqlstate && sqlstate !== 'XX000')
       ? ` <code>(SQLSTATE ${escapeHtml(sqlstate)})</code>`
       : '';
-    const hintHtml = hint
-      ? `<span class="wp-diag__hint"><i class="fas fa-lightbulb"></i>${escapeHtml(hint)}</span>`
-      : '';
     return `<div class="wp-error">`
-         + `<i class="fas fa-exclamation-circle"></i> `
-         + `${badge}${escapeHtml(text)}${tail}${hintHtml}`
+         + window.ProvsqlStudio.diagBodyHtml(
+             message, '<i class="fas fa-exclamation-circle"></i> ', tail)
          + `</div>`;
   }
 
-  // Notice variant of renderEvalError: same badge logic, but a warning
+  // Notice variant of renderEvalError: same layout, but a warning
   // icon + the goldenrod `cv-kc-notice` background instead of the
   // crimson `wp-error`. Used for ProvSQL-side informational notices
   // (level-5 verbose), notably the shortcut announcement when the
   // probability-side pre-pass collapsed a gate_cmp.
   function renderEvalNotice(messages) {
     const list = Array.isArray(messages) ? messages : [messages];
-    const formatted = list.map(raw => {
-      const m = (raw || '').match(/^ProvSQL:\s*(.*)$/s);
-      const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
-      const text  = m ? m[1] : (raw || '');
-      return `${badge}${escapeHtml(text)}`;
-    }).join('<br>');
     return `<div class="cv-kc-notice">`
-         + `<i class="fas fa-exclamation-triangle"></i> `
-         + `${formatted}`
+         + list.map(raw => window.ProvsqlStudio.diagBodyHtml(
+             raw, '<i class="fas fa-exclamation-triangle"></i> ')).join('')
          + `</div>`;
   }
 

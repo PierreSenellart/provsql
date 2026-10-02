@@ -519,7 +519,8 @@
   // parsed and rendered as the value interval the true probability lies in.
   function parseGuaranteeNotice(messages) {
     for (const raw of (Array.isArray(messages) ? messages : [])) {
-      const m = (raw || '').match(/approximation-guarantee:\s*(.*)$/);
+      // The notice's first line: DETAIL / HINT lines may follow.
+      const m = (raw || '').split('\n')[0].match(/approximation-guarantee:\s*(.*)$/);
       if (!m) continue;
       const kv = {};
       m[1].trim().split(/\s+/).forEach((tok) => {
@@ -565,6 +566,31 @@
     return `(Pr ∈ [${lo.toFixed(dec)}, ${hi.toFixed(dec)}]${conf}${smp})${tool}`;
   }
   window.ProvsqlStudio.parseGuaranteeNotice = parseGuaranteeNotice;
+
+  // The inside of a diagnostic of the evaluation strips (Circuit mode, the
+  // notebook): the ProvSQL pill, the first line, the hint on a line of its
+  // own, and the rest (the DETAIL with the provsql-reason tag, a CONTEXT)
+  // folded under it, as renderDiag shows them in the result pane.  `icon`
+  // and `tail` (e.g., the SQLSTATE) are HTML put before and after the
+  // first line.
+  function diagBodyHtml(raw, icon = '', tail = '') {
+    const m = (raw || '').match(/^ProvSQL:\s*(.*)$/s);
+    const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+    const { text: noHint, hint } = splitHint(m ? m[1] : (raw || ''));
+    const { text, reason } = splitReason(noHint);
+    const nl = text.indexOf('\n');
+    const head = nl < 0 ? text : text.slice(0, nl);
+    const rest = nl < 0 ? '' : text.slice(nl + 1).trim();
+    const hintHtml = hint
+      ? `<span class="wp-diag__hint"><i class="fas fa-lightbulb"></i>${escapeHtml(hint)}</span>`
+      : '';
+    const line = `${icon}${badge}${escapeHtml(head)}${reasonBadgeHtml(reason)}${tail}${hintHtml}`;
+    return rest
+      ? `<details class="wp-diag--inline"><summary>${line}</summary>`
+        + `<div class="wp-diag__body">${escapeHtml(rest)}</div></details>`
+      : `<div>${line}</div>`;
+  }
+  window.ProvsqlStudio.diagBodyHtml = diagBodyHtml;
   window.ProvsqlStudio.renderGuarantee = renderGuarantee;
 
   if (mode === 'where')              setupWhereMode();
@@ -4034,6 +4060,62 @@
 
 })();
 
+// Parsing of a PostgreSQL diagnostic as Studio receives it (message, then
+// DETAIL / HINT / CONTEXT lines), shared by the result pane's renderDiag
+// (in makeBlockRenderer) and the evaluation strips' diagBodyHtml (in the
+// main closure), hence at the top level.
+
+function escapeDiagHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
+
+// Take the "HINT:  ..." part out of a PostgreSQL message as psycopg
+// formats it (message, then DETAIL / HINT / CONTEXT sections, each
+// starting a line). Returns the message without it, and the hint text
+// (null when there is none).
+function splitHint(text) {
+  const lines = text.split('\n');
+  const i = lines.findIndex((l, k) => k > 0 && /^HINT:\s/.test(l));
+  if (i < 0) return { text, hint: null };
+  let j = i + 1;
+  while (j < lines.length && !/^[A-Z][A-Z ]*:\s/.test(lines[j])) j++;
+  const hint = [lines[i].replace(/^HINT:\s*/, ''), ...lines.slice(i + 1, j)]
+    .join('\n').trim();
+  return { text: [...lines.slice(0, i), ...lines.slice(j)].join('\n'), hint };
+}
+
+// Take ProvSQL's "DETAIL:  provsql-reason: <tag>; scope: <scope>" line
+// out of a message.  Returns the message without it, and the tag and
+// scope (null when there is no such line).
+function splitReason(text) {
+  const lines = text.split('\n');
+  const re = /^DETAIL:\s+provsql-reason:\s*([\w-]+);\s*scope:\s*([\w-]+)\s*$/;
+  const i = lines.findIndex((l, k) => k > 0 && re.test(l));
+  if (i < 0) return { text, reason: null };
+  const [, tag, scope] = lines[i].match(re);
+  lines.splice(i, 1);
+  return { text: lines.join('\n'), reason: { tag, scope } };
+}
+
+// What the scope of a provsql-reason says about the behaviour.
+const REASON_SCOPES = {
+  'deliberate':   'deliberate: ProvSQL behaves so by design',
+  'gap':          'gap: not supported yet',
+  'out-of-scope': 'out of scope: beyond what provenance tracking covers',
+};
+
+// The badge of a provsql-reason tag, its scope in the tooltip; a gap is
+// marked apart, as something a later version may lift.
+function reasonBadgeHtml(reason) {
+  if (!reason) return '';
+  const scope = REASON_SCOPES[reason.scope] || reason.scope;
+  return ` <span class="wp-reason wp-reason--${escapeDiagHtml(reason.scope)}"`
+       + ` title="provsql-reason: ${escapeDiagHtml(reason.tag)} (${escapeDiagHtml(scope)})">`
+       + `${escapeDiagHtml(reason.tag)}</span>`;
+}
+
 // Per-kind metadata used by the result-table `provsql` column header
 // pill.  Labels deliberately mirror the schema panel's prov-tid /
 // prov-bid / prov-opaque pills so the two affordances read as the
@@ -4134,10 +4216,14 @@ function makeBlockRenderer(env, targets) {
     // The HINT says what to do about the message (the setting to raise,
     // the form to write instead), so it stays visible on its own line,
     // outside the fold that hides the DETAIL tag and the CONTEXT.
-    const { text, hint } = splitHint(full);
+    // The provsql-reason tag of the DETAIL becomes a badge on the first
+    // line.
+    const { text: noHint, hint } = splitHint(full);
+    const { text, reason } = splitReason(noHint);
     const hintHtml = hint
       ? `<span class="wp-diag__hint"><i class="fas fa-lightbulb"></i>${env.escapeHtml(hint)}</span>`
       : '';
+    const reasonHtml = reasonBadgeHtml(reason);
     // XX000 is the generic "internal_error" catch-all that provsql_error()
     // raises (the C macro doesn't set a specific errcode); appending it
     // adds noise without information, so skip it.
@@ -4150,37 +4236,25 @@ function makeBlockRenderer(env, targets) {
     // they don't push the result table off-screen. The first line stays
     // visible as the summary; clicking the disclosure triangle reveals
     // the rest.
-    // Whether to fold is decided on the full message, so that taking the
-    // hint out does not unfold the DETAIL line it came with.
+    // Any other line than the first (a DETAIL other than the tag, a
+    // CONTEXT) folds too.
     const newlineIdx = text.indexOf('\n');
     const isLong = newlineIdx >= 0 && (
-      (full.match(/\n/g) || []).length > 1 || full.length > 240
+      (text.match(/\n/g) || []).length > 1 || text.length > 240
+      || noHint !== text || full !== noHint
     );
     if (isLong) {
       const head = text.slice(0, newlineIdx);
       const rest = text.slice(newlineIdx + 1);
       return `<details class="${cls} wp-diag--collapsible">`
-           + `<summary><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(head)}${tail}${hintHtml}</summary>`
+           + `<summary><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(head)}${reasonHtml}${tail}${hintHtml}</summary>`
            + `<div class="wp-diag__body">${env.escapeHtml(rest)}</div>`
            + `</details>`;
     }
-    return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}${hintHtml}</div>`;
+    return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${reasonHtml}${tail}${hintHtml}</div>`;
   }
 
-  // Take the "HINT:  ..." part out of a PostgreSQL message as psycopg
-  // formats it (message, then DETAIL / HINT / CONTEXT sections, each
-  // starting a line). Returns the message without it, and the hint text
-  // (null when there is none).
-  function splitHint(text) {
-    const lines = text.split('\n');
-    const i = lines.findIndex((l, k) => k > 0 && /^HINT:\s/.test(l));
-    if (i < 0) return { text, hint: null };
-    let j = i + 1;
-    while (j < lines.length && !/^[A-Z][A-Z ]*:\s/.test(lines[j])) j++;
-    const hint = [lines[i].replace(/^HINT:\s*/, ''), ...lines.slice(i + 1, j)]
-      .join('\n').trim();
-    return { text: [...lines.slice(0, i), ...lines.slice(j)].join('\n'), hint };
-  }
+
 
   // Recognises the classifier NOTICE emitted by the planner hook when
   // provsql.classify_top_level is on. Three shapes :

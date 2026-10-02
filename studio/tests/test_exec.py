@@ -499,3 +499,23 @@ def test_agg_arithmetic_cells_resolve_display(client):
     # Berlin and New York have 2 personnel each, Paris 3.
     values = sorted(display[r[col]] for r in final["rows"])
     assert values == ["4.0 (*)", "4.0 (*)", "6.0 (*)"]
+
+
+def test_notice_text_keeps_detail_and_hint():
+    """A notice reaches the front-end with its DETAIL (ProvSQL's
+    provsql-reason tag) and HINT lines, not only its first line: the
+    evaluation strips used to drop them."""
+    from types import SimpleNamespace
+    from provsql_studio.db import notice_text
+    diag = SimpleNamespace(
+        message_primary="ProvSQL: something was frozen",
+        message_detail="provsql-reason: a-tag; scope: deliberate",
+        message_hint="Mark it plain() to say so.",
+    )
+    assert notice_text(diag) == (
+        "ProvSQL: something was frozen\n"
+        "DETAIL:  provsql-reason: a-tag; scope: deliberate\n"
+        "HINT:  Mark it plain() to say so.")
+    bare = SimpleNamespace(message_primary="ProvSQL: plain",
+                           message_detail=None, message_hint=None)
+    assert notice_text(bare) == "ProvSQL: plain"

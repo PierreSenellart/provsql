@@ -987,6 +987,21 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   font-style: italic;
 }
 .wp-diag__hint i { color: var(--gold-700, #B8901E) !important; }
+/* The provsql-reason tag of a ProvSQL diagnostic, as a small badge after
+   its first line; a "gap" (not supported yet) is marked apart. */
+.wp-reason {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.wp-reason--gap { border-style: dashed; }
+/* A diagnostic of the evaluation strips whose DETAIL (and CONTEXT) folds
+   under its first line and hint. */
+.wp-diag--inline > summary { cursor: pointer; }
 .wp-diag__body {
   margin-top: 0.5rem;
   padding-top: 0.5rem;

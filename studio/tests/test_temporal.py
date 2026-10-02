@@ -200,3 +200,39 @@ def test_error_guards(temporal_client, payload, msg):
     resp = _temporal(temporal_client, **payload)
     assert resp.status_code == 400, resp.data
     assert msg in resp.get_json()["error"]
+
+
+def test_changes_inside_a_transaction(temporal_client, temporal_dsn):
+    """Under update_provenance, statements inside an explicit transaction
+    are logged together with a TRANSACTION row (ProvSQL 1.13), whose query
+    is NULL and whose validity is unbounded.  The timeline still places
+    each row from its own statement: the inserted rows from their insert,
+    the deleted one up to its delete."""
+    import psycopg
+    with psycopg.connect(temporal_dsn) as conn:
+        conn.execute("SET search_path = public, provsql")
+        conn.execute("CREATE TABLE tx_emp (name text)")
+        conn.execute("INSERT INTO tx_emp VALUES ('ann'), ('bob')")
+        conn.execute("SELECT add_provenance('tx_emp')")
+        conn.commit()
+        conn.execute("SET provsql.update_provenance = on")
+        conn.execute("INSERT INTO tx_emp VALUES ('cid')")
+        conn.execute("DELETE FROM tx_emp WHERE name = 'bob'")
+        conn.commit()
+        # The log is itself tracked: count it as plain SQL.
+        conn.execute("SET provsql.active = off")
+        n_tx = conn.execute(
+            "SELECT count(*) FROM provsql.update_provenance "
+            "WHERE query_type = 'TRANSACTION' AND query IS NULL").fetchone()[0]
+    assert n_tx >= 1
+    d = _temporal(temporal_client, source="query",
+                  query="SELECT name FROM tx_emp",
+                  mapping="provsql.time_validity_view",
+                  timeop="full")
+    assert d.status_code == 200, d.get_json()
+    rows = {r["cells"][0]: r["valid_time"] for r in d.get_json()["result"]}
+    assert _years(rows["ann"]) == [(None, None)]
+    (cid,) = rows["cid"]
+    (bob,) = rows["bob"]
+    assert cid["lower"] is not None and cid["upper"] is None
+    assert bob["lower"] is None and bob["upper"] is not None

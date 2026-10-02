@@ -1693,7 +1693,7 @@ def evaluate_circuit(
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
             return
-        notices.append(msg)
+        notices.append(notice_text(diag))
     with pool.connection() as conn, conn.cursor() as cur:
         conn.add_notice_handler(_on_notice)
         try:
@@ -2493,16 +2493,9 @@ def exec_batch_on(
         # dump the parse tree before/after rewriting) puts the title in
         # message_primary and the actual node dump in message_detail; a
         # bare message_primary capture would silently drop the dump.
-        detail = diag.message_detail or ""
-        hint = diag.message_hint or ""
-        parts = [msg]
-        if detail:
-            parts.append("DETAIL:  " + detail)
-        if hint:
-            parts.append("HINT:  " + hint)
         meta["notices"].append({
             "severity": (diag.severity or "NOTICE").upper(),
-            "message": "\n".join(parts),
+            "message": notice_text(diag),
         })
 
     # Capture this connection's backend pid before we run anything the
@@ -2935,6 +2928,21 @@ def apply_extra_gucs(cur, extra_gucs, whitelist: bool = True) -> list[str]:
             skipped.append(guc_name)
         cur.execute("RELEASE SAVEPOINT studio_extra_guc")
     return skipped
+
+
+def notice_text(diag) -> str:
+    """The text of a NOTICE or WARNING as Studio shows it: the message,
+    then its DETAIL and HINT lines, laid out as psycopg lays out an
+    error.  ProvSQL's warnings carry their provsql-reason tag in the
+    DETAIL and what to do in the HINT; `elog_node_display` (the parse-tree
+    dumps of provsql.verbose_level >= 50) puts the dump itself in the
+    DETAIL."""
+    parts = [diag.message_primary or ""]
+    if diag.message_detail:
+        parts.append("DETAIL:  " + diag.message_detail)
+    if diag.message_hint:
+        parts.append("HINT:  " + diag.message_hint)
+    return "\n".join(parts)
 
 
 def _limit_clause(cur: psycopg.Cursor, n: int) -> str:

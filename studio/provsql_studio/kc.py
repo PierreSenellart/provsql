@@ -22,6 +22,8 @@ import psycopg
 from psycopg import sql
 from psycopg_pool import ConnectionPool
 
+from .db import notice_text
+
 
 def _render_svg(dot_src: str) -> str:
     """Render a DOT source to inlineable SVG via ``dot -Tsvg``."""
@@ -744,7 +746,7 @@ def probability_benchmark(
         # so drop it here.
         if "approximation-guarantee:" in msg:
             return
-        notices.append(msg)
+        notices.append(notice_text(diag))
 
     # The benchmark lists every available tool: the in-process methods
     # (always runnable) plus each enabled, available compiler (as the
