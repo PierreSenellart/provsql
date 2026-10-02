@@ -1094,45 +1094,58 @@ provenance column, and on mappings.
 Configuration
 -------------
 
-The Config panel groups its options into four sections:
+The Config panel shows the ProvSQL configuration parameters a user is
+likely to change, each documented in :doc:`configuration` (the
+:fa:`question-circle` beside a name links to its entry, and its tooltip
+gives the server's own description). Each widget follows the parameter's
+type as PostgreSQL reports it: a switch, a choice list, a number with its
+unit and bounds, or a text field. A value is checked by PostgreSQL itself
+when it is entered, and a refused one is reported on the status line. A
+parameter the connected role may not change (one restricted to superusers,
+or set in the server's configuration) is shown greyed out with its current
+value. The panel's sections are:
 
-* **Provenance** mirrors the user-level configuration parameters
-  documented in :doc:`configuration`:
-  ``provsql.active``, ``provsql.verbose_level``, and
-  ``provsql.tool_search_path``.
-  ``provsql.tool_search_path`` is superuser-only (see
-  :doc:`configuration`); when Studio is connected as a non-superuser
-  role, its field is shown read-only and labelled *(admin-managed)*,
-  with the value an administrator set (or the server's default
-  ``PATH``).
-  ``provsql.provenance`` and ``provsql.update_provenance`` are set
-  next to the query box instead (see `Per-query toggles`_).
-  Studio also sets ``provsql.aggtoken_text_as_uuid = on`` for the
-  whole session, which makes ``agg_token`` cells clickable in the
-  result table.
-* **Probabilities** gathers the GUCs that steer probability and
-  random-variable evaluation: ``provsql.simplify_on_load``,
-  ``provsql.monte_carlo_seed``, ``provsql.rv_mc_samples`` (all
-  documented in :doc:`configuration`), and a
-  ``provsql.fallback_compiler`` dropdown selecting the d-DNNF compiler
-  ``makeDD`` falls back to (see :doc:`knowledge-compilation`), its
-  choices validated against the compilers resolvable on the server.
-* **Session** holds the session settings: the
-  ``statement_timeout`` applied to every batch, and the visible part
-  of ``search_path`` (``provsql`` is always pinned at the end).
-* **Display limits** holds the size limits: :guilabel:`Max circuit depth`
-  (the depth cap on the initial fetch), :guilabel:`Nodes per fetch` (the
-  per-fetch node cap), :guilabel:`Sidebar rows per relation` (per-relation
-  row cap in the Where-mode sidebar), :guilabel:`Result rows` (row cap on
-  the result table), and :guilabel:`Probability decimals` (number of
-  decimals in the eval-strip's probability display).
+* **Tracking**: ``provsql.active``, and ``provsql.implicit_freeze``
+  (whether a part of a query whose provenance is not tracked is a warning
+  or an error).
+* **Limits**: ``provsql.max_memory`` and ``provsql.max_worlds``, which stop
+  an evaluation past a memory budget or a number of possible worlds, and
+  :guilabel:`Query timeout`, the ``statement_timeout`` Studio applies to
+  every batch, which stops a long evaluation too.
+* **Evaluation**: ``provsql.monte_carlo_seed``, ``provsql.rv_mc_samples``
+  and ``provsql.simplify_on_load``.
+* **Messages**: ``provsql.verbose_level``, offered up to 20, the level at
+  which the query before and after rewriting is shown in Where mode (higher
+  levels are for debugging ProvSQL). The evaluation strip always runs at 5
+  at least, to report the guarantees of approximate methods.
+* **Advanced**, folded: the parameters rarely changed, which tune the
+  evaluation routes (``provsql.ess_warn_fraction``,
+  ``provsql.gate_cache_size``, ``provsql.joint_max_states``,
+  ``provsql.joint_max_treewidth``, ``provsql.mobius_max_cnf``,
+  ``provsql.mobius_max_gates``) and the durability of the circuit
+  (``provsql.synchronous_commit``, ``provsql.wal_logging``).
+* **Session**: the visible part of ``search_path`` (``provsql`` is always
+  pinned at the end).
+* **Display limits**: :guilabel:`Max circuit depth` (the depth cap on the
+  initial fetch), :guilabel:`Nodes per fetch` (the per-fetch node cap),
+  :guilabel:`Sidebar rows per relation` (per-relation row cap in the
+  Where-mode sidebar), :guilabel:`Result rows` (row cap on the result
+  table), and :guilabel:`Probability decimals` (number of decimals in the
+  eval-strip's probability display).
+
+The parameters of the external tools are on the `Tools panel`_.
+``provsql.provenance`` and ``provsql.update_provenance`` are set next to
+the query box (see `Per-query toggles`_). Studio also sets
+``provsql.aggtoken_text_as_uuid = on`` for the whole session, which makes
+``agg_token`` cells clickable in the result table.
 
 .. figure:: /_static/studio/config-panel.png
-   :alt: Studio Config panel with the four section headings
-         (Provenance, Probabilities, Session, Display limits) visible.
+   :alt: Studio Config panel with the Tracking, Limits, Evaluation and
+         Messages sections, the folded Advanced section, and the Session
+         and Display limits sections.
 
-   The Config panel: four section headings above the per-row
-   options.
+   The Config panel: the ProvSQL parameters by section, the rarely
+   changed ones folded under *Advanced*.
 
 All values persist on disk in ``provsql-studio/config.json`` under
 the platform's user-config directory, and survive a Studio restart:
@@ -1180,6 +1193,16 @@ either *Managed* (ProvSQL launches and supervises it via
 (``unix:/path`` or ``host:port``). The input formats, output format, and
 parser are offered as the values that make sense for the chosen operation.
 A non-superuser session sees the panel read-only.
+
+The **Settings** section at the foot of the panel holds the parameters of
+the external tools: ``provsql.tool_search_path``, the directories searched
+for them (superuser-only: a non-superuser session sees it read-only,
+labelled *(admin-managed)*, with the value an administrator set or the
+server's default ``PATH``); ``provsql.fallback_compiler``, the d-DNNF
+compiler ``makeDD`` falls back to (see :doc:`knowledge-compilation`),
+chosen among the compilers available on the server; and
+``provsql.kcmcp_server``, shown read-only, since it is set in the server's
+configuration.
 
 .. figure:: /_static/studio/tools-panel.png
    :alt: Studio Tools panel: the external-tool registry grouped by operation,

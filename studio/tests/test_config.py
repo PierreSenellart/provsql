@@ -379,3 +379,68 @@ def test_stale_runtime_guc_does_not_break_requests(client, app):
     finally:
         runtime.clear()
         runtime.update(saved)
+
+
+def test_config_describes_settings_from_pg_settings(client):
+    """The panel's widgets come from pg_settings: each curated setting is
+    described with its group, type, bounds and unit, in display order;
+    debugging aids and the settings Studio sets itself are not offered."""
+    settings = client.get("/api/config").get_json()["settings"]
+    by_name = {d["name"]: d for d in settings}
+    assert [d["name"] for d in settings][:2] == [
+        "provsql.active", "provsql.implicit_freeze"]
+    mem = by_name["provsql.max_memory"]
+    assert (mem["group"], mem["vartype"], mem["unit"]) == (
+        "limits", "integer", "MB")
+    assert by_name["provsql.implicit_freeze"]["enumvals"] == ["warn", "error"]
+    assert by_name["provsql.gate_cache_size"]["group"] == "advanced"
+    for hidden in ("provsql.trace_rewrite", "provsql.verify_rewrite",
+                   "provsql.aggtoken_text_as_uuid", "provsql.last_eval_method",
+                   "provsql.provenance", "provsql.hybrid_evaluation"):
+        assert hidden not in by_name, hidden
+
+
+def test_config_value_checked_and_canonicalised_by_postgresql(client):
+    """A value is validated by PostgreSQL, with its bounds and units, and
+    stored as PostgreSQL reports it."""
+    resp = client.post("/api/config",
+                       json={"key": "provsql.max_memory", "value": "2048"})
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["value"] == "2GB"
+    resp = client.post("/api/config",
+                       json={"key": "provsql.implicit_freeze", "value": "maybe"})
+    assert resp.status_code == 400
+    assert "implicit_freeze" in resp.get_json()["error"]
+    resp = client.post("/api/config",
+                       json={"key": "provsql.implicit_freeze", "value": "error"})
+    assert resp.status_code == 200, resp.data
+    settings = client.get("/api/config").get_json()["settings"]
+    by_name = {d["name"]: d for d in settings}
+    assert by_name["provsql.max_memory"]["value"] == "2048"
+    assert by_name["provsql.implicit_freeze"]["value"] == "error"
+
+
+def test_config_server_wide_setting_is_read_only(client):
+    """provsql.kcmcp_server is set in the server's configuration (sighup):
+    shown, marked not settable, and refused."""
+    settings = client.get("/api/config").get_json()["settings"]
+    kc = next(d for d in settings if d["name"] == "provsql.kcmcp_server")
+    assert kc["group"] == "tools"
+    assert kc["settable"] is False
+    resp = client.post("/api/config", json={
+        "key": "provsql.kcmcp_server", "value": "tdkc --kcmcp {endpoint}"})
+    assert resp.status_code == 400
+
+
+def test_rewritten_query_shown_for_a_level_set_in_the_query(client):
+    """Where mode shows the query before and after rewriting at
+    verbose_level 20, also when the level is set by the user's own
+    statements rather than the panel."""
+    resp = client.post("/api/exec", json={
+        "sql": "SET LOCAL provsql.verbose_level = 20; "
+               "SELECT name FROM personnel",
+        "mode": "where",
+    })
+    assert resp.status_code == 200, resp.data
+    notices = [n["message"] for n in resp.get_json()["notices"]]
+    assert any("before query rewriting" in m for m in notices), notices

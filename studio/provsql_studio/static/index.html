@@ -96,6 +96,28 @@
             <p class="wp-tools__empty">Loading…</p>
           </div>
           <p class="wp-tools__note" id="tools-readonly" hidden>Connect as a superuser to edit the registry.</p>
+          <section class="wp-config__group wp-tools__settings">
+            <h5 class="wp-config__grouphdr">Settings</h5>
+            <label class="wp-config__row wp-config__row--col">
+              <span class="wp-config__name"><code>provsql.tool_search_path</code><a class="wp-help"
+                  href="https://provsql.org/docs/user/configuration.html#provsql-tool-search-path"
+                  target="_blank" rel="noopener"
+                  title="Colon-separated directories prepended to PATH when ProvSQL spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy)."
+                  aria-label="Help: provsql.tool_search_path"><i class="fas fa-question-circle"></i></a></span>
+              <span class="wp-config__sp">
+                <input type="text" class="wp-config__sp-input" id="cfg-tool-search-path" placeholder="(server PATH)" autocomplete="off" spellcheck="false">
+              </span>
+            </label>
+            <label class="wp-config__row wp-config__row--col">
+              <span class="wp-config__name"><code>provsql.fallback_compiler</code><a class="wp-help"
+                  href="https://provsql.org/docs/user/configuration.html#provsql-fallback-compiler"
+                  target="_blank" rel="noopener"
+                  title="Compiler invoked as the final fallback in probability_evaluate (with the empty or 'default' method) when neither interpret-as-d-DNNF nor the in-process tree-decomposition builder succeeds."
+                  aria-label="Help: provsql.fallback_compiler"><i class="fas fa-question-circle"></i></a></span>
+              <select class="wp-config__sel" id="cfg-fallback-compiler"></select>
+            </label>
+            <div id="tools-settings"></div>
+          </section>
         </div>
 
         <div id="tools-form-view" hidden>
@@ -154,94 +176,15 @@
     <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link wp-nav__refresh" id="config-btn" aria-haspopup="dialog" aria-expanded="false" title="Config" aria-label="Config"><i class="fas fa-cog"></i></button>
       <div class="wp-nav__configpanel" id="config-panel" role="dialog" hidden>
-        <section class="wp-config__group">
-          <h5 class="wp-config__grouphdr">Provenance</h5>
-
-          <label class="wp-config__row">
-            <span class="wp-config__name"><code>provsql.active</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-active"
-                target="_blank" rel="noopener"
-                title="Master switch for ProvSQL. Off drops provenance silently."
-                aria-label="Help: provsql.active"><i class="fas fa-question-circle"></i></a></span>
-            <!-- Default `checked`: provsql.active defaults to ON server-side,
-                 so pre-checking the box keeps the UI consistent with the
-                 actual setting and avoids a visible flick on first
-                 panel-open while loadConfig() round-trips. -->
-            <input type="checkbox" class="wp-config__switch" id="cfg-active" checked>
-          </label>
-
-          <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name"><code>provsql.verbose_level</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-verbose-level"
-                target="_blank" rel="noopener"
-                title="Diagnostic verbosity. ≥ 20 prints the rewritten query; ≥ 30 keeps temp files; ≥ 40 prints planner timing; ≥ 50 dumps parse trees."
-                aria-label="Help: provsql.verbose_level"><i class="fas fa-question-circle"></i></a></span>
-            <span class="wp-config__slider">
-              <input type="range" class="wp-config__range" id="cfg-verbose" min="0" max="100" step="1" value="0">
-              <output class="wp-config__rangeval" id="cfg-verbose-out">0</output>
-            </span>
-          </label>
-
-          <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name"><code>provsql.tool_search_path</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-tool-search-path"
-                target="_blank" rel="noopener"
-                title="Colon-separated directories prepended to PATH when ProvSQL spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy)."
-                aria-label="Help: provsql.tool_search_path"><i class="fas fa-question-circle"></i></a></span>
-            <span class="wp-config__sp">
-              <input type="text" class="wp-config__sp-input" id="cfg-tool-search-path" placeholder="(server PATH)" autocomplete="off" spellcheck="false">
-            </span>
-          </label>
-        </section>
-
-        <section class="wp-config__group">
-          <h5 class="wp-config__grouphdr">Probabilities</h5>
-
-          <label class="wp-config__row">
-            <span class="wp-config__name"><code>provsql.simplify_on_load</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-simplify-on-load"
-                target="_blank" rel="noopener"
-                title="Apply universal cmp-resolution passes (RangeCheck…) when loading a circuit. Off inspects the raw structure."
-                aria-label="Help: provsql.simplify_on_load"><i class="fas fa-question-circle"></i></a></span>
-            <input type="checkbox" class="wp-config__switch" id="cfg-simplify-on-load" checked>
-          </label>
-
-          <label class="wp-config__row">
-            <span class="wp-config__name"><code>provsql.monte_carlo_seed</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-monte-carlo-seed"
-                target="_blank" rel="noopener"
-                title="Seed for the Monte Carlo sampler. -1 (default) seeds from std::random_device for non-deterministic sampling; any other value (incl. 0) is a literal mt19937_64 seed."
-                aria-label="Help: provsql.monte_carlo_seed"><i class="fas fa-question-circle"></i></a></span>
-            <span class="wp-config__numwrap">
-              <input type="number" class="wp-config__num" id="cfg-monte-carlo-seed" min="-1" step="1" value="-1">
-            </span>
-          </label>
-
-          <label class="wp-config__row">
-            <span class="wp-config__name"><code>provsql.rv_mc_samples</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-rv-mc-samples"
-                target="_blank" rel="noopener"
-                title="Default sample count for analytical-evaluator MC fallbacks (Expectation, hybrid evaluator). 0 disables the fallback : callers raise instead."
-                aria-label="Help: provsql.rv_mc_samples"><i class="fas fa-question-circle"></i></a></span>
-            <span class="wp-config__numwrap">
-              <input type="number" class="wp-config__num" id="cfg-rv-mc-samples" min="0" step="100" value="10000">
-            </span>
-          </label>
-
-          <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name"><code>provsql.fallback_compiler</code><a class="wp-help"
-                href="https://provsql.org/docs/user/configuration.html#provsql-fallback-compiler"
-                target="_blank" rel="noopener"
-                title="Compiler invoked as the final fallback in probability_evaluate (with the empty or 'default' method) when neither interpret-as-d-DNNF nor the in-process tree-decomposition builder succeeds."
-                aria-label="Help: provsql.fallback_compiler"><i class="fas fa-question-circle"></i></a></span>
-            <select class="wp-config__sel" id="cfg-fallback-compiler"></select>
-          </label>
-        </section>
+        <!-- The ProvSQL settings: sections built by app.js from what
+             /api/config reads in pg_settings (see _PANEL_SETTINGS in
+             db.py for the choice and the groups). -->
+        <div id="cfg-settings"></div>
 
         <section class="wp-config__group">
           <h5 class="wp-config__grouphdr">Session</h5>
 
-          <label class="wp-config__row">
+          <label class="wp-config__row" id="cfg-timeout-row">
             <span class="wp-config__name">Query timeout<a class="wp-help"
                 href="https://provsql.org/docs/user/studio.html#studio-configuration"
                 target="_blank" rel="noopener"

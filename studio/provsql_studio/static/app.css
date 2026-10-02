@@ -805,11 +805,21 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   outline: 2px solid var(--gold-500);
   outline-offset: 1px;
 }
-/* The seed field only ever holds short values (-1 for non-deterministic,
-   or an mt19937_64 literal seed users typically pick from a small set);
-   the default .wp-config__num width is wider than it needs to be and
-   competes with the GUC name for the row. */
-#cfg-monte-carlo-seed { width: 3.5rem; }
+/* A setting this role cannot change (superuser-only, or set in the
+   server's configuration): shown with its value, dimmed. */
+.wp-config__row.is-admin-managed input,
+.wp-config__row.is-admin-managed select { opacity: 0.6; cursor: not-allowed; }
+/* The folded section of rarely changed settings. */
+.wp-config__group--fold > summary { cursor: pointer; }
+.wp-config__group--fold > summary:hover { filter: brightness(0.9); }
+/* An enum select on the same line as its name (the class doubled to
+   outweigh .wp-config__sel's full width, defined below). */
+.wp-config__sel.wp-config__sel--inline { width: auto; flex: none; }
+/* Generated number fields hold up to ten digits (max_worlds' 1048576,
+   mobius_max_gates' 4000000). */
+#cfg-settings .wp-config__num { width: 5.2rem; }
+/* The Settings section at the foot of the Tools screen. */
+.wp-tools__settings { margin-top: 0.9rem; }
 /* Single-select dropdown for a config row (currently the
    provsql.fallback_compiler picker). Sized to fit the long Panini
    option labels on one line; lives inside a wp-config__row--col so

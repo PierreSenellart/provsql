@@ -190,7 +190,7 @@ histogram with a PDF/CDF toggle.
 
 The histogram is backed server-side by :sqlfunc:`rv_histogram`;
 pinning ``provsql.monte_carlo_seed`` in the Config panel (under
-*Provenance*) makes the shape reproducible across re-runs.
+*Evaluation*) makes the shape reproducible across re-runs.
 
 .. figure:: /_static/casestudy6/gate-rv-distribution-profile.png
    :alt: Studio Circuit mode showing the gate_rv N(28,2) leaf at
@@ -255,7 +255,7 @@ then folds comparators whose answer can be decided from the
 operands' support alone: for example, ``U(10, 22) > 35`` is
 universally false because the uniform's upper bound is below the
 threshold. The fold is controlled by ``provsql.simplify_on_load``
-(default on), which the Config panel exposes under *Provenance*.
+(default on), which the Config panel exposes under *Evaluation*.
 
 Click into row 2's auto-added ``provsql`` cell from the Step 2
 result (station ``s2``, ``pm25 ~ U(10, 22)``). With

@@ -1225,19 +1225,46 @@
     });
   }
 
-  /* ──────── Config popover (provsql.active + provsql.verbose_level) ──────── */
+  /* ──────── Config popover and the settings of the Tools screen ──────── */
+
+  // Sections of the Config panel, in order, for the groups db.py's
+  // _PANEL_SETTINGS assigns; "advanced" is folded, "tools" is the Settings
+  // section of the Tools screen.
+  const SETTING_GROUPS = [
+    ['tracking',   'Tracking'],
+    ['limits',     'Limits'],
+    ['evaluation', 'Evaluation'],
+    ['messages',   'Messages'],
+    ['advanced',   'Advanced'],
+  ];
+  // Settings with a widget of their own in index.html, not generated.
+  const CUSTOM_SETTING_WIDGETS = new Set(['provsql.fallback_compiler']);
+  // provsql.verbose_level is offered up to the informative levels; from 25
+  // on the messages are for debugging ProvSQL (see configuration.rst).
+  // Each label says what the level adds in Studio, where the evaluation
+  // strip always runs at 5 at least.
+  const VERBOSE_LEVELS = [
+    ['0',  'Silent'],
+    ['1',  'Certificates'],
+    ['5',  'Guarantees, declined rewrites'],
+    ['10', 'Evaluator fallbacks'],
+    ['20', 'Rewritten SQL'],
+  ];
+  const VERBOSE_HELP =
+    'What each level adds: 1, the certificate of a safe or inversion-free '
+    + 'rewriting; 5, the guarantees of approximate methods and why a '
+    + 'rewriting was declined; 10, the fallbacks of the SQL-level '
+    + 'evaluators; 20, the query before and after rewriting, and the '
+    + 'compilation method. The evaluation strip always runs at 5 at least.';
 
   function setupConfigPanel() {
     const btn    = document.getElementById('config-btn');
     const panel  = document.getElementById('config-panel');
-    const active = document.getElementById('cfg-active');
-    const verb   = document.getElementById('cfg-verbose');
     const status = document.getElementById('cfg-status');
-    if (!btn || !panel || !active || !verb) return;
+    if (!btn || !panel) return;
 
     let loaded = false;
 
-    const verbOut = document.getElementById('cfg-verbose-out');
     const depth   = document.getElementById('cfg-depth');
     const depthOut = document.getElementById('cfg-depth-out');
     const sidebarRows = document.getElementById('cfg-sidebar-rows');
@@ -1246,10 +1273,199 @@
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
     const tsp     = document.getElementById('cfg-tool-search-path');
-    const simplify = document.getElementById('cfg-simplify-on-load');
-    const mcSeed   = document.getElementById('cfg-monte-carlo-seed');
-    const rvSamples = document.getElementById('cfg-rv-mc-samples');
     const fallback  = document.getElementById('cfg-fallback-compiler');
+    const settingsBox = document.getElementById('cfg-settings');
+    const toolsBox    = document.getElementById('tools-settings');
+    // name -> { input, kind, setting } for the generated widgets, so a
+    // reload updates their values without rebuilding them (which would
+    // lose the focus of the field the user is moving to).
+    const widgets = new Map();
+
+    function helpLink(name, description) {
+      const a = document.createElement('a');
+      a.className = 'wp-help';
+      a.href = 'https://provsql.org/docs/user/configuration.html#'
+             + name.replace(/\./g, '-').replace(/_/g, '-');
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.title = description || '';
+      a.setAttribute('aria-label', `Help: ${name}`);
+      a.innerHTML = '<i class="fas fa-question-circle"></i>';
+      return a;
+    }
+
+    // Why a setting is read-only: superuser-context settings are open to a
+    // superuser (or a role granted SET on them), sighup ones only to the
+    // server's configuration.
+    function readOnlyReason(d) {
+      return d.context === 'superuser'
+        ? `${d.name} is superuser-only; its value is managed by the `
+          + 'database administrator.'
+        : `${d.name} is set in the server's configuration (ALTER SYSTEM `
+          + 'and a reload), not per session.';
+    }
+
+    // One row for a setting, its widget chosen from its pg_settings type.
+    function buildSettingRow(d) {
+      const row = document.createElement('label');
+      row.className = 'wp-config__row';
+      const name = document.createElement('span');
+      name.className = 'wp-config__name';
+      const code = document.createElement('code');
+      code.textContent = d.name;
+      name.append(code, helpLink(d.name, d.name === 'provsql.verbose_level'
+        ? `${d.description}. ${VERBOSE_HELP}` : d.description));
+      row.appendChild(name);
+
+      let input, kind;
+      if (d.name === 'provsql.verbose_level') {
+        kind = 'select';
+        input = document.createElement('select');
+        input.className = 'wp-config__sel';
+        row.classList.add('wp-config__row--col');
+      } else if (d.vartype === 'bool') {
+        kind = 'bool';
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'wp-config__switch';
+      } else if (d.vartype === 'enum') {
+        kind = 'select';
+        input = document.createElement('select');
+        input.className = 'wp-config__sel wp-config__sel--inline';
+        for (const v of d.enumvals || []) {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = v;
+          input.appendChild(opt);
+        }
+      } else if (d.vartype === 'integer' || d.vartype === 'real') {
+        kind = 'number';
+        input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'wp-config__num';
+        if (d.min != null) input.min = d.min;
+        if (d.max != null) input.max = d.max;
+        input.step = d.vartype === 'real' ? 'any' : '1';
+      } else {
+        kind = 'text';
+        input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'wp-config__sp-input';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.placeholder = '(not set)';
+        row.classList.add('wp-config__row--col');
+      }
+      if (kind === 'number') {
+        const wrap = document.createElement('span');
+        wrap.className = 'wp-config__numwrap';
+        wrap.appendChild(input);
+        if (d.unit) {
+          const u = document.createElement('span');
+          u.className = 'wp-config__unit';
+          u.textContent = d.unit;
+          wrap.appendChild(u);
+        }
+        row.appendChild(wrap);
+      } else if (kind === 'text') {
+        const wrap = document.createElement('span');
+        wrap.className = 'wp-config__sp';
+        wrap.appendChild(input);
+        row.appendChild(wrap);
+      } else {
+        row.appendChild(input);
+      }
+
+      if (!d.settable) {
+        input.disabled = true;
+        row.classList.add('is-admin-managed');
+        row.title = readOnlyReason(d);
+      }
+      const commit = () => {
+        const value = kind === 'bool' ? (input.checked ? 'on' : 'off')
+                                      : String(input.value).trim();
+        // Reload either way: an accepted value comes back as PostgreSQL
+        // reports it (2GB for 2048), a refused one reverts the widget.
+        setGuc(d.name, value).then(() => loadConfig());
+      };
+      if (kind === 'text') {
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        });
+      } else {
+        input.addEventListener('change', commit);
+      }
+      widgets.set(d.name, { input, kind, setting: d });
+      return row;
+    }
+
+    // Set a generated widget to the value a query would see now.
+    function syncSetting(d) {
+      const w = widgets.get(d.name);
+      if (!w) return;
+      const { input, kind } = w;
+      if (kind === 'bool') {
+        input.checked = d.value === 'on';
+      } else if (d.name === 'provsql.verbose_level') {
+        // A level set elsewhere (by hand, or a saved debugging level) is
+        // kept as a choice of its own, so the select shows the truth.
+        const levels = VERBOSE_LEVELS.slice();
+        if (!levels.some(([v]) => v === d.value)) {
+          levels.push([d.value, `${d.value} (debugging)`]);
+        }
+        input.replaceChildren(...levels.map(([v, label]) => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          opt.textContent = `${v} – ${label}`;
+          return opt;
+        }));
+        input.value = d.value;
+      } else {
+        input.value = d.value;
+      }
+    }
+
+    // Build the sections the first time, then only update values.
+    function renderSettings(settings) {
+      const fresh = settings.filter(d => !CUSTOM_SETTING_WIDGETS.has(d.name)
+                                         && !widgets.has(d.name));
+      if (fresh.length && settingsBox) {
+        for (const [group, title] of SETTING_GROUPS) {
+          const items = fresh.filter(d => d.group === group);
+          if (!items.length && group !== 'limits') continue;
+          let sec;
+          if (group === 'advanced') {
+            sec = document.createElement('details');
+            sec.className = 'wp-config__group wp-config__group--fold';
+            const sum = document.createElement('summary');
+            sum.className = 'wp-config__grouphdr';
+            sum.textContent = title;
+            sec.appendChild(sum);
+          } else {
+            sec = document.createElement('section');
+            sec.className = 'wp-config__group';
+            const h = document.createElement('h5');
+            h.className = 'wp-config__grouphdr';
+            h.textContent = title;
+            sec.appendChild(h);
+          }
+          for (const d of items) sec.appendChild(buildSettingRow(d));
+          // The query timeout, a Studio option, stops evaluations too.
+          if (group === 'limits') {
+            const tr = document.getElementById('cfg-timeout-row');
+            if (tr) sec.appendChild(tr);
+          }
+          settingsBox.appendChild(sec);
+        }
+      }
+      if (toolsBox) {
+        for (const d of fresh.filter(d => d.group === 'tools')) {
+          toolsBox.appendChild(buildSettingRow(d));
+        }
+      }
+      for (const d of settings) syncSetting(d);
+    }
 
     // provsql.tool_search_path is superuser-only (PGC_SUSET). For a
     // non-superuser session the field is read-only / admin-managed: the
@@ -1281,18 +1497,7 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const cfg = await resp.json();
         const eff = cfg.effective || {};
-        active.checked = (eff['provsql.active'] || 'on') !== 'off';
-        verb.value     = eff['provsql.verbose_level'] || '0';
-        if (verbOut) verbOut.textContent = verb.value;
-        if (simplify) {
-          simplify.checked = (eff['provsql.simplify_on_load'] || 'on') !== 'off';
-        }
-        if (mcSeed && eff['provsql.monte_carlo_seed'] != null) {
-          mcSeed.value = String(eff['provsql.monte_carlo_seed']);
-        }
-        if (rvSamples && eff['provsql.rv_mc_samples'] != null) {
-          rvSamples.value = String(eff['provsql.rv_mc_samples']);
-        }
+        renderSettings(cfg.settings || []);
         if (fallback) {
           // Populate from the live registry's compile tools (no hardcoded
           // list); unavailable ones are dropped, except the current GUC
@@ -1347,16 +1552,22 @@
         showStatus(`Failed to load: ${e.message}`, true);
       }
     }
+    // The status line of whichever screen is open: the tool settings are
+    // saved from the Tools screen.
     function showStatus(msg, isErr) {
+      const el = (panel.hidden && document.getElementById('tools-status'))
+                 || status;
       if (!msg) {
-        status.hidden = true;
-        status.classList.remove('is-error');
+        el.hidden = true;
+        el.classList.remove('is-error');
         return;
       }
-      status.textContent = msg;
-      status.classList.toggle('is-error', !!isErr);
-      status.hidden = false;
+      el.textContent = msg;
+      el.classList.toggle('is-error', !!isErr);
+      el.hidden = false;
     }
+    // Save one setting or Studio option; resolves to whether it was
+    // accepted (the status line shows the server's reason if not).
     async function setGuc(name, value) {
       try {
         const resp = await fetch('/api/config', {
@@ -1368,14 +1579,18 @@
           const err = await resp.json().catch(() => ({}));
           throw new Error(err.error || `HTTP ${resp.status}`);
         }
-        showStatus(`Saved: ${name} = ${value}`);
+        const saved = await resp.json().catch(() => ({}));
+        showStatus(`Saved: ${name} = ${saved.value != null ? saved.value : value}`);
         // Auto-clear the status after a couple of seconds.
         clearTimeout(setGuc._t);
         setGuc._t = setTimeout(() => showStatus(''), 2000);
+        return true;
       } catch (e) {
         showStatus(e.message, true);
+        return false;
       }
     }
+    window.ProvsqlStudio.loadConfig = loadConfig;
 
     function open() {
       closeOtherNavPanels('config-panel');
@@ -1394,50 +1609,11 @@
     document.addEventListener('click', (e) => {
       if (!panel.hidden && !panel.contains(e.target) && e.target !== btn) close();
     });
-    active.addEventListener('change', () => {
-      setGuc('provsql.active', active.checked ? 'on' : 'off');
-    });
-    if (simplify) {
-      simplify.addEventListener('change', () => {
-        setGuc('provsql.simplify_on_load', simplify.checked ? 'on' : 'off');
-      });
-    }
-    if (mcSeed) {
-      // -1 means "non-deterministic"; clamp absurd negatives but allow
-      // any non-negative literal seed (including 0).
-      mcSeed.addEventListener('change', () => {
-        const raw = parseInt(mcSeed.value, 10);
-        const n = Number.isFinite(raw) ? Math.max(-1, raw) : -1;
-        mcSeed.value = String(n);
-        setGuc('provsql.monte_carlo_seed', n);
-      });
-    }
-    if (rvSamples) {
-      // 0 is meaningful (disables the MC fallback); clamp negatives.
-      rvSamples.addEventListener('change', () => {
-        const raw = parseInt(rvSamples.value, 10);
-        const n = Number.isFinite(raw) ? Math.max(0, raw) : 10000;
-        rvSamples.value = String(n);
-        setGuc('provsql.rv_mc_samples', n);
-      });
-    }
     if (fallback) {
       fallback.addEventListener('change', () => {
         setGuc('provsql.fallback_compiler', fallback.value);
       });
     }
-    // Live-update the value display as the slider drags; only POST on
-    // release (`change`) so we don't hammer /api/config every step.
-    verb.addEventListener('input', () => {
-      if (verbOut) verbOut.textContent = verb.value;
-    });
-    verb.addEventListener('change', () => {
-      const n = Math.max(0, Math.min(100, parseInt(verb.value || '0', 10) || 0));
-      verb.value = String(n);
-      if (verbOut) verbOut.textContent = verb.value;
-      setGuc('provsql.verbose_level', n);
-    });
-
     if (depth) {
       depth.addEventListener('input', () => {
         if (depthOut) depthOut.textContent = depth.value;
@@ -1813,7 +1989,13 @@
       if (r.ok) { showList(); afterMutation(); } else { showStatus(errOf(r), true); }
     });
 
-    function open() { closeOtherNavPanels('tools-panel'); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); showList(); load(); }
+    function open() {
+      closeOtherNavPanels('tools-panel'); panel.hidden = false;
+      btn.setAttribute('aria-expanded', 'true'); showList(); load();
+      // The Settings section (tool_search_path, fallback_compiler,
+      // kcmcp_server) is filled by the Config panel's loader.
+      if (window.ProvsqlStudio.loadConfig) window.ProvsqlStudio.loadConfig();
+    }
     function close() { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
     btn.addEventListener('click', (e) => { e.stopPropagation(); if (panel.hidden) open(); else close(); });
     document.addEventListener('click', (e) => {

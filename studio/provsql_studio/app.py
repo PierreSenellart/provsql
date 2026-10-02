@@ -16,8 +16,8 @@ Routes:
   GET  /api/kc/ddnnf       – compiled d-DNNF (DOT + SVG) via an external compiler.
   GET  /api/kc/td          – tree decomposition (DOT + SVG + treewidth).
   GET  /api/kc/benchmark   – time every probability_evaluate method.
-  GET  /api/config         – read the four whitelisted GUCs.
-  POST /api/config         – write one whitelisted GUC.
+  GET  /api/config         – describe the panel's settings and Studio options.
+  POST /api/config         – write one panel setting or Studio option.
 """
 from __future__ import annotations
 
@@ -1490,9 +1490,11 @@ def create_app(
         # Returns the *effective* values of the panel GUCs after our runtime
         # overrides are applied, plus the bare overrides we hold in app
         # state (so the front-end can show "modified" markers if it wants).
-        effective = db.show_panel_gucs(get_pool(), app.config["RUNTIME_GUCS"])
+        settings = db.describe_panel_settings(
+            get_pool(), app.config["RUNTIME_GUCS"])
         return jsonify({
-            "effective": effective,
+            "settings": settings,
+            "effective": {d["name"]: d["value"] for d in settings},
             "overrides": dict(app.config["RUNTIME_GUCS"]),
             "options": _current_options(),
         })
@@ -1542,7 +1544,8 @@ def create_app(
                 fallback_compilers = None
         try:
             canonical = db.validate_panel_guc(
-                name, value, fallback_compilers=fallback_compilers)
+                name, value, fallback_compilers=fallback_compilers,
+                pool=get_pool())
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         app.config["RUNTIME_GUCS"][name] = canonical

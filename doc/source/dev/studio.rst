@@ -301,22 +301,12 @@ Every ``/api/exec`` request runs in a single transaction. Before
 the user's SQL, ``exec_batch`` issues a ``SET LOCAL`` for each
 GUC the panel and per-query toggles imply:
 
-- ``provsql.active`` (panel)
-- ``provsql.verbose_level`` (panel, 0..100)
-- ``provsql.tool_search_path`` (panel)
-- ``provsql.monte_carlo_seed`` (panel; ``-1`` =
-  non-deterministic, any other integer reseeds the shared
-  ``std::mt19937_64`` used by Monte Carlo and continuous
-  sampling)
-- ``provsql.rv_mc_samples`` (panel; sample budget for the
-  analytical-evaluator MC fallback, ``0`` turns the fallback
-  into an exception)
-- ``provsql.simplify_on_load`` (panel; toggles the universal
-  peephole pass at circuit-load time -- changing it invalidates
-  Studio's layout cache because circuit shapes can shift)
-- ``provsql.hybrid_evaluation`` (panel, debug-only; gates the
-  in-evaluator hybrid path. Same cache-invalidation rule as
-  ``simplify_on_load``)
+- the panel's overrides of the ProvSQL parameters (``RUNTIME_GUCS``),
+  each in a savepoint of its own by ``apply_extra_gucs``, so a saved
+  value the server no longer accepts (a parameter renamed or removed, a
+  value out of range, a parameter this role may not set) is skipped
+  instead of failing the batch
+- ``provsql.tool_search_path``, a Studio option rather than an override
 - ``provsql.provenance`` -- the provenance-class enum, always set
   to one of ``'semiring'`` / ``'where'`` / ``'absorptive'`` /
   ``'boolean'``, driven by the Where-mode lock, the per-query
@@ -337,15 +327,25 @@ cells need the underlying UUID exposed in text representation) is
 connection as a session default in ``configure_connection``
 (savepoint-guarded for older extensions).
 
-The panel GUCs routed through the ``extra_gucs`` whitelist
-(``provsql.active``, ``verbose_level``, ``monte_carlo_seed``,
-``rv_mc_samples``, ``simplify_on_load``, ``hybrid_evaluation``,
-and ``fallback_compiler``, the latter validated against the live
-``provsql.tools`` registry) are enumerated in ``_PANEL_GUCS`` in
-``studio/provsql_studio/db.py``; ``simplify_on_load`` and
-``hybrid_evaluation`` additionally clear ``layout_cache`` in
-``POST /api/config`` so the next ``/api/circuit`` re-renders a
-circuit whose folded shape may have changed.
+The parameters the panel offers are chosen in ``_PANEL_SETTINGS`` in
+``studio/provsql_studio/db.py``, each with its group (a section of the
+Config panel, the folded *Advanced* section, or the *Settings* of the
+Tools panel); everything else about them comes from ``pg_settings``.
+``describe_panel_settings`` returns, for ``GET /api/config``, each
+parameter's type, unit, bounds, choices, description, current value (the
+overrides applied) and whether the role may set it (from its context,
+``is_superuser`` and, on PostgreSQL 15+, ``has_parameter_privilege``);
+``app.js`` builds a widget from that, except for
+``provsql.fallback_compiler``, whose choice list is the live registry's
+available compilers. ``POST /api/config`` has ``validate_panel_guc`` set
+the value in a transaction rolled back at once, so PostgreSQL checks it
+and reports its canonical form, which is what is stored.
+``provsql.simplify_on_load`` additionally clears ``layout_cache`` so the
+next ``/api/circuit`` re-renders a circuit whose folded shape may have
+changed. Left out of the panel: the per-query toggles, the parameters
+Studio sets itself, the output ``provsql.last_eval_method``, and the
+debugging aids (``provsql.trace_rewrite``, ``provsql.verify_rewrite``,
+the switches hidden from ``pg_settings``).
 
 ``SET LOCAL`` scopes the change to the transaction so a parallel
 request on the same connection cannot see the override.

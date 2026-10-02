@@ -2467,12 +2467,6 @@ def exec_batch_on(
     *prelude, last = statements
     intermediate: list[StatementResult] = []
 
-    panel_verbose_str = (extra_gucs or {}).get("provsql.verbose_level", "0")
-    try:
-        panel_verbose = int(panel_verbose_str)
-    except (TypeError, ValueError):
-        panel_verbose = 0
-
     meta: dict = {"wrapped": wrap_last, "notices": []}
 
     # Notices reach the front-end only for SQL the user explicitly ran via
@@ -2643,7 +2637,13 @@ def exec_batch_on(
                 # us from queries that have side effects (writable
                 # CTEs, etc.); they error during the probe and we just
                 # discard the captured notices for that case.
-                if panel_verbose >= 20:
+                # The level in effect, not the panel's: the user's own
+                # statements may have set it.
+                cur.execute(
+                    "SELECT coalesce(current_setting("
+                    "'provsql.verbose_level', true), '0')::int"
+                )
+                if cur.fetchone()[0] >= 20:
                     cur.execute("SAVEPOINT verbose_probe")
                     cur.execute("SET LOCAL transaction_read_only = on")
                     probe_notices_at_start = len(meta["notices"])
@@ -3051,14 +3051,39 @@ _TOGGLE_GUCS = {
     "provsql.provenance",
     "provsql.update_provenance",
 }
-_PANEL_GUCS = {
-    "provsql.active",
-    "provsql.verbose_level",
-    "provsql.monte_carlo_seed",
-    "provsql.rv_mc_samples",
-    "provsql.simplify_on_load",
-    "provsql.fallback_compiler",
-}
+# The ProvSQL settings Studio shows, in display order, each with its group:
+# a section of the Config panel ("tracking", "limits", "evaluation",
+# "messages"), its folded "advanced" section for the rarely changed ones,
+# or "tools" for those the Tools screen shows.  Widgets, bounds, units and
+# descriptions come from pg_settings (describe_panel_settings), so only
+# this choice is written by hand.  Left out: the per-query toggles
+# (_TOGGLE_GUCS), the settings Studio sets itself
+# (aggtoken_text_as_uuid, classify_top_level), the output
+# last_eval_method, and the debugging aids (trace_rewrite,
+# verify_rewrite, and the switches hidden from pg_settings).
+# tool_search_path is a Studio option (TOOL_SEARCH_PATH), not an
+# override, and has its own widget on the Tools screen.
+_PANEL_SETTINGS: list[tuple[str, str]] = [
+    ("provsql.active", "tracking"),
+    ("provsql.implicit_freeze", "tracking"),
+    ("provsql.max_memory", "limits"),
+    ("provsql.max_worlds", "limits"),
+    ("provsql.monte_carlo_seed", "evaluation"),
+    ("provsql.rv_mc_samples", "evaluation"),
+    ("provsql.simplify_on_load", "evaluation"),
+    ("provsql.verbose_level", "messages"),
+    ("provsql.ess_warn_fraction", "advanced"),
+    ("provsql.gate_cache_size", "advanced"),
+    ("provsql.joint_max_states", "advanced"),
+    ("provsql.joint_max_treewidth", "advanced"),
+    ("provsql.mobius_max_cnf", "advanced"),
+    ("provsql.mobius_max_gates", "advanced"),
+    ("provsql.synchronous_commit", "advanced"),
+    ("provsql.wal_logging", "advanced"),
+    ("provsql.fallback_compiler", "tools"),
+    ("provsql.kcmcp_server", "tools"),
+]
+_PANEL_GUCS = {name for name, _ in _PANEL_SETTINGS}
 
 # Session-sticky modes the app keeps in app.config["SESSION_MODES"] and
 # injects into every backend call's extra_gucs.  Distinct from
@@ -3074,86 +3099,108 @@ _EXTRA_GUC_WHITELIST = _PANEL_GUCS | _SESSION_MODE_GUCS
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
 
-def show_panel_gucs(pool: ConnectionPool, runtime: dict[str, str]) -> dict[str, str]:
-    """Return the *effective* values of the panel GUCs after the runtime
-    overrides have been applied : i.e. what a query would see right now.
-    Runs SHOW inside a one-shot transaction so the SET LOCALs stay scoped.
-    """
-    out: dict[str, str] = {}
+def _can_set_superuser_settings(cur) -> bool:
+    """Whether this role may set a superuser-context setting: as a
+    superuser, or (PostgreSQL 15+) through a GRANT SET ON PARAMETER, which
+    describe_panel_settings checks per setting."""
+    cur.execute("SELECT current_setting('is_superuser') = 'on'")
+    return bool(cur.fetchone()[0])
+
+
+def describe_panel_settings(
+    pool: ConnectionPool, runtime: dict[str, str]
+) -> list[dict]:
+    """Describe the settings of _PANEL_SETTINGS for the panel to build its
+    widgets: type, unit, bounds, choices and description from pg_settings,
+    with the value a query would see now (the runtime overrides applied),
+    and whether this role may change it.  A setting the installed
+    extension does not have is left out."""
+    names = [n for n, _ in _PANEL_SETTINGS]
+    groups = dict(_PANEL_SETTINGS)
+    out: list[dict] = []
     with pool.connection() as conn, conn.cursor() as cur:
         apply_extra_gucs(
             cur, {n: v for n, v in runtime.items() if n in _PANEL_GUCS}
         )
-        for name in sorted(_PANEL_GUCS):
-            try:
-                cur.execute(f"SHOW {name}")
-                out[name] = cur.fetchone()[0]
-            except psycopg.Error:
-                out[name] = ""
+        superuser = _can_set_superuser_settings(cur)
+        cur.execute(
+            "SELECT name, vartype, unit, min_val, max_val, enumvals, context, "
+            "setting, boot_val, short_desc FROM pg_settings "
+            "WHERE name = ANY(%s)",
+            (names,),
+        )
+        rows = {r[0]: r for r in cur.fetchall()}
+        for name in names:
+            r = rows.get(name)
+            if r is None:
+                continue
+            (_, vartype, unit, min_val, max_val, enumvals, context,
+             setting, boot_val, short_desc) = r
+            if context == "user":
+                settable = True
+            elif context == "superuser":
+                settable = superuser
+                if not settable and conn.info.server_version >= 150000:
+                    cur.execute("SAVEPOINT _param_priv")
+                    try:
+                        cur.execute(
+                            "SELECT has_parameter_privilege(%s, 'SET')",
+                            (name,),
+                        )
+                        settable = bool(cur.fetchone()[0])
+                        cur.execute("RELEASE SAVEPOINT _param_priv")
+                    except psycopg.Error:
+                        cur.execute("ROLLBACK TO SAVEPOINT _param_priv")
+                        cur.execute("RELEASE SAVEPOINT _param_priv")
+            else:
+                # sighup / postmaster: the server's configuration file or
+                # ALTER SYSTEM, never a session.
+                settable = False
+            out.append({
+                "name": name,
+                "group": groups[name],
+                "vartype": vartype,
+                "unit": unit,
+                "min": min_val,
+                "max": max_val,
+                "enumvals": list(enumvals) if enumvals else None,
+                "context": context,
+                "value": setting,
+                "default": boot_val,
+                "description": short_desc,
+                "settable": settable,
+            })
         # Roll the SET LOCALs back so the connection returns to the pool clean.
         conn.rollback()
     return out
 
 
+def show_panel_gucs(pool: ConnectionPool, runtime: dict[str, str]) -> dict[str, str]:
+    """Return the *effective* values of the panel GUCs after the runtime
+    overrides have been applied : i.e. what a query would see right now."""
+    return {d["name"]: d["value"] for d in describe_panel_settings(pool, runtime)}
+
+
 def validate_panel_guc(
-    name: str, value: str, fallback_compilers: frozenset[str] | None = None
+    name: str, value: str, fallback_compilers: frozenset[str] | None = None,
+    pool: ConnectionPool | None = None,
 ) -> str:
     """Validate (name, value) for the Config panel and return the canonical
     value as it should be stored. Raises ValueError on rejection.
 
+    The value is checked by PostgreSQL itself, by setting it in a
+    transaction rolled back at once (with ``pool``), so the bounds, units
+    and choices of each setting are those of the installed extension, and
+    the error is PostgreSQL's; the canonical form is what PostgreSQL then
+    reports (``on`` for ``true``, ``2GB`` for ``2048MB``).
+
     ``fallback_compilers``, when given, is the live set of registered
-    compile-tool names (from provsql.tools) used to validate
-    ``provsql.fallback_compiler``; when ``None`` the value is accepted as
-    long as it is non-empty (the catalog could not be consulted)."""
+    compile-tool names (from provsql.tools) that
+    ``provsql.fallback_compiler`` must be one of."""
     if name not in _PANEL_GUCS:
         raise ValueError(f"GUC not user-configurable: {name}")
-    v = (value or "").strip().lower()
-    if name == "provsql.active":
-        if v in ("on", "true", "1", "yes"):
-            return "on"
-        if v in ("off", "false", "0", "no"):
-            return "off"
-        raise ValueError("provsql.active must be on or off")
-    if name == "provsql.verbose_level":
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            raise ValueError("provsql.verbose_level must be an integer 0..100")
-        if not (0 <= n <= 100):
-            raise ValueError("provsql.verbose_level must be between 0 and 100")
-        return str(n)
-    if name == "provsql.monte_carlo_seed":
-        # -1 means "seed from std::random_device" per src/provsql.c; any
-        # other int (including 0) is a literal seed for the mt19937_64
-        # used by the Bernoulli and gate_rv sampling paths.
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            raise ValueError("provsql.monte_carlo_seed must be an integer (-1 for non-deterministic)")
-        if n < -1:
-            raise ValueError("provsql.monte_carlo_seed must be -1 or a non-negative integer")
-        return str(n)
-    if name == "provsql.rv_mc_samples":
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            raise ValueError("provsql.rv_mc_samples must be a non-negative integer")
-        if n < 0:
-            raise ValueError("provsql.rv_mc_samples must be non-negative (0 disables the MC fallback)")
-        return str(n)
-    if name == "provsql.simplify_on_load":
-        if v in ("on", "true", "1", "yes"):
-            return "on"
-        if v in ("off", "false", "0", "no"):
-            return "off"
-        raise ValueError(f"{name} must be on or off")
+    raw = (value or "").strip()
     if name == "provsql.fallback_compiler":
-        # Validate against the live registry (the caller passes the
-        # registered compile-tool names from provsql.tools), not a
-        # hardcoded list, so an admin-registered compiler is accepted.
-        # Compare the raw value, not the lower-cased v: the SQL GUC takes
-        # whatever string verbatim and tool names are already lowercase.
-        raw = (value or "").strip()
         if not raw:
             raise ValueError("provsql.fallback_compiler must not be empty")
         if fallback_compilers is not None and raw not in fallback_compilers:
@@ -3161,8 +3208,21 @@ def validate_panel_guc(
                 "provsql.fallback_compiler must be one of: "
                 + ", ".join(sorted(fallback_compilers))
             )
+    if pool is None:
         return raw
-    raise ValueError(f"GUC not user-configurable: {name}")
+    with pool.connection() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT set_config(%s, %s, true)", (name, raw))
+            cur.execute("SELECT current_setting(%s)", (name,))
+            canonical = cur.fetchone()[0]
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            msg = (diag.message_primary if diag and diag.message_primary
+                   else str(e).strip())
+            raise ValueError(msg) from None
+        finally:
+            conn.rollback()
+    return canonical
 
 
 def set_guc(pool: ConnectionPool, name: str, value: str) -> None:
