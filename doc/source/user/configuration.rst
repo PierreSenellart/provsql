@@ -137,13 +137,13 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
       reachability route falls back to the generic path).
     * **≥ 20**: print the SQL query before and after provenance
       rewriting (requires PostgreSQL ≥ 15); report the knowledge
-      compilation method chosen and the size of its result; keep all
-      intermediate temporary files (Tseytin, d-DNNF, DOT) instead of
-      deleting them.
+      compilation method chosen and the size of its result.
     * **≥ 25**: report the gate count of a d-DNNF obtained by tree
       decomposition.
     * **≥ 30**: debug traces of the probability evaluators and the
-      safe-query detector.
+      safe-query detector; keep all intermediate temporary files
+      (Tseytin, d-DNNF, DOT) instead of deleting them, and report where
+      they are.
     * **≥ 40**: also print the time spent on rewriting.
     * **≥ 50**: also print the full parse tree of the query before and
       after rewriting, and the cost-calibration notices of the

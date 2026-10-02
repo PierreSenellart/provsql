@@ -87,13 +87,14 @@ Verbosity
 ----------
 
 The ``provsql.verbose_level`` GUC variable controls diagnostic output.
-Setting it to ``20`` is useful when debugging circuit export: intermediate
-DOT and circuit files are kept on disk instead of being deleted, and the
-d-DNNF method and gate count are reported. For example:
+At ``20``, the d-DNNF method and gate count are reported. At ``30``, which
+is useful when debugging circuit export, the intermediate DOT and circuit
+files are also kept on disk instead of being deleted, and their paths
+reported. For example:
 
 .. code-block:: postgresql
 
-    SET provsql.verbose_level = 20;
+    SET provsql.verbose_level = 30;
 
 The default is ``0`` (silent). See :doc:`configuration` for the full
 description of all thresholds.

@@ -192,7 +192,7 @@ std::string DotCircuit::render() const {
   std::string str((std::istreambuf_iterator<char>(ifs)),
                   std::istreambuf_iterator<char>());
 
-  if(provsql_verbose>=20)
+  if(provsql_verbose>=30)
     tmp.keep();
 
   return str;

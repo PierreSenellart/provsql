@@ -38,6 +38,9 @@ includes everything below it):
      - Output
    * - 0 (default)
      - Quiet.
+   * - 1+
+     - The safe-query / inversion-free certificate attached to a
+       rewritten query.
    * - 5+
      - Informational messages from individual evaluators (e.g.,
        comparator resolution, probability-method dispatch).
@@ -46,12 +49,14 @@ includes everything below it):
        reachability route falling back to the generic path).
    * - 20+
      - Full query text before and after ProvSQL rewriting (PostgreSQL
-       15+ only, via ``pg_get_querydef``), plus verbose output from
-       the Boolean circuit and DOT export code.
+       15+ only, via ``pg_get_querydef``), plus the knowledge
+       compilation method chosen and the size of its result.
    * - 25+ / 30+
      - Internals of specific evaluators (Boolean-circuit
        transformations, probability evaluation, the safe-query
-       rewriter).
+       rewriter). From 30, the intermediate temporary files (Tseytin,
+       d-DNNF, DOT) are kept instead of deleted, and their paths
+       reported.
    * - 40+
      - Adds timing of the rewriting phase.
    * - 50+

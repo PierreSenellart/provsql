@@ -1352,7 +1352,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
     ofs << content;
   }
 
-  if(provsql_verbose>=20) {
+  if(provsql_verbose>=30) {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
   }
 
@@ -1393,7 +1393,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
   dDNNF dnnf = parseDDNNF(ifs, inputOrder);
   ifs.close();
 
-  if(provsql_verbose>=20) {
+  if(provsql_verbose>=30) {
     tmp.keep();
     provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
   }
@@ -1693,7 +1693,7 @@ double BooleanCircuit::wmcCount(gate_t g, const std::string &requested,
     ret = parse_wmc_value(matched, tool.c_str());
   }
 
-  if(provsql_verbose >= 20)
+  if(provsql_verbose >= 30)
     tmp.keep();
   return ret;
 }
