@@ -27,3 +27,24 @@ remove_provenance
 1|Paris|{[],[personnel::4],[]}
 1|Paris|{[],[personnel::4],[]}
 (7 rows)
+remove_provenance
+
+(1 row)
+name|regexp_replace
+Dave|{[personnel::2],[],[personnel::1]}
+Ellen|{[personnel::2],[],[personnel::1]}
+John|{[personnel::2],[],[personnel::1]}
+Magdalen|{[personnel::2],[],[personnel::1]}
+Nancy|{[personnel::2],[],[personnel::1]}
+Paul|{[personnel::2],[],[personnel::1]}
+Susan|{[personnel::2],[],[personnel::1]}
+(7 rows)
+remove_provenance
+
+(1 row)
+city|regexp_replace
+Berlin|{[personnel::4;personnel::4],[],[]}
+New York|{[personnel::4;personnel::4],[],[]}
+Paris|{[personnel::4;personnel::4;personnel::4],[],[]}
+(3 rows)
+ERROR:  ProvSQL: where_provenance: Where-provenance does not support a comparison on an aggregate that stands for its group (HAVING, or a comparison kept outside the aggregation)

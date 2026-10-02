@@ -71,6 +71,8 @@ string WhereCircuit::toStringHelper(gate_t g, WhereGate parent) const
   case WhereGate::UNDETERMINED:
     op="?";
     break;
+  case WhereGate::CONDITION:
+    return "cond";
   case WhereGate::TIMES:
     op="⊗";
     break;
@@ -135,11 +137,36 @@ vector<set<WhereCircuit::Locator> > WhereCircuit::evaluate(gate_t g) const
   }
   break;
 
+  case WhereGate::CONDITION:
+    // Only a factor of a product beside the row it filters is a condition
+    // (TIMES below skips it).  A comparison anywhere else stands for the
+    // group it compares (a HAVING superseding the group's delta), whose
+    // columns the projection above expects: not supported.
+    throw CircuitException(
+      "Where-provenance does not support a comparison on an aggregate that "
+      "stands for its group (HAVING, or a comparison kept outside the "
+      "aggregation)");
+
   case WhereGate::TIMES:
     if(getWires(g).empty())
       throw CircuitException("No wire connected to ⊗ gate");
 
+    {
+      // A comparison beside the row (the rank cut of ORDER BY ... LIMIT)
+      // decides whether the row is there, not where its values come from:
+      // it adds no column, so the columns beside it keep their positions.
+      // A product of comparisons alone has no row beside them.
+      bool row=false;
+      for(auto g2 : getWires(g))
+        if(getGateType(g2)!=WhereGate::CONDITION)
+          row=true;
+      if(!row)
+        evaluate(*getWires(g).begin());   // throws, as for a lone comparison
+    }
+
     for(auto g2 : getWires(g)) {
+      if(getGateType(g2)==WhereGate::CONDITION)
+        continue;
       if(v.empty())
         v=evaluate(g2);
       else {

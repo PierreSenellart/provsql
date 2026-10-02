@@ -105,14 +105,24 @@ static string where_provenance_internal
         int nb_columns = stoi(SPI_getvalue(tuple, tupdesc, 5));
 
         c.setGateInput(f, table, nb_columns);
+      } else if(type == "cmp") {
+        /* A comparison is a condition on whether the row is there (the
+         * rank cut of ORDER BY ... LIMIT, a comparison on an aggregate):
+         * where-provenance is about where values are copied from, which a
+         * condition does not change.  sub_circuit_for_where stops at it, so
+         * it is a leaf here. */
+        c.setGate(f, WhereGate::CONDITION);
       } else {
         auto id=c.getGate(f);
 
-        if(type == "times" || type == "assumed" || type == "annotation") {
-          /* assumed and annotation are single-child wrappers; a
+        if(type == "times" || type == "assumed" || type == "annotation"
+           || type == "delta") {
+          /* assumed, annotation and delta are single-child wrappers; a
            * single-wire TIMES is the identity in WhereCircuit semantics (the
            * Locator-set union of one child is just that child's), so funnel
-           * all three through the same case. */
+           * them all through the same case.  delta says that a group exists:
+           * its grouping columns are copied from the rows of the group, the
+           * PLUS below it. */
           c.setGate(f, WhereGate::TIMES);
         } else if(type == "plus") {
           c.setGate(f, WhereGate::PLUS);

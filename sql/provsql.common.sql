@@ -2423,10 +2423,15 @@ $$ LANGUAGE plpgsql STRICT;
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token UUID)
   RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], extra TEXT) AS
 $$
+    -- A comparison (cmp) is a condition on whether a row is there, which
+    -- where-provenance ignores: the walk stops at it, leaving it a leaf, and
+    -- does not enter the aggregates and values it compares.
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
       SELECT $1,t,id,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) WITH ORDINALITY AS a(t,id)
+       WHERE provsql.get_gate_type($1) <> 'cmp'
         UNION ALL
       SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
+       WHERE provsql.get_gate_type(p1.t) <> 'cmp'
     ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)).info1, (get_infos(f)).info2], get_extra(f) FROM (
       -- One row per distinct (parent, child, child-position) edge.  The
       -- recursive closure (UNION ALL) re-emits a gate's outgoing edges once per
@@ -2439,9 +2444,12 @@ $$
       -- are duplicated k-fold.
       SELECT DISTINCT f, t::uuid, idx, gate_type, NULL::regclass AS table_name, NULL::integer AS nb_columns FROM transitive_closure
       UNION ALL
-        SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
+      -- The leaves, with their own type: an input is traced back to its
+      -- relation, any other leaf (an aggregation over no row, a constant)
+      -- is reported as what it is, for where_provenance to refuse by type.
+        SELECT DISTINCT leaf, NULL::uuid, NULL::int, leaf_type, i.table_name, i.nb_columns FROM (SELECT DISTINCT t AS leaf, provsql.get_gate_type(t) AS leaf_type FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) leaves LEFT JOIN LATERAL provsql.identify_token(leaf) i ON leaf_type = 'input'
       UNION ALL
-        SELECT DISTINCT $1, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+        SELECT DISTINCT $1, NULL::uuid, NULL::int, leaf_type, i.table_name, i.nb_columns FROM (SELECT provsql.get_gate_type($1) AS leaf_type WHERE $1 NOT IN (SELECT f FROM transitive_closure)) root LEFT JOIN LATERAL provsql.identify_token($1) i ON leaf_type = 'input'
       ) t
     -- order each parent's edges by child position so the where-circuit's TIMES
     -- concatenation reproduces the column order (input rows have idx NULL).

@@ -81,5 +81,12 @@ Limitations
 ------------
 
 Where-provenance is an experimental feature. Not all SQL constructs are
-fully supported when where-provenance is enabled. In particular,
-aggregate queries may not annotate all output cells correctly.
+fully supported when where-provenance is enabled. In particular:
+
+* In a ``GROUP BY`` query, a grouping column is located in every row of its
+  group; an aggregate value is computed rather than copied, so it has no
+  location.
+* An ``ORDER BY ... LIMIT`` decides which rows are in the answer, not where
+  their values come from: each value keeps the location it was copied from.
+* A ``HAVING`` clause, or a comparison on an aggregate kept outside the
+  aggregation, is not supported, nor is ``EXCEPT`` or another difference.

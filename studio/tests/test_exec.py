@@ -519,3 +519,36 @@ def test_notice_text_keeps_detail_and_hint():
     bare = SimpleNamespace(message_primary="ProvSQL: plain",
                            message_detail=None, message_hint=None)
     assert notice_text(bare) == "ProvSQL: plain"
+
+
+def test_window_function_columns_display_as_agg_tokens(client):
+    """Over tracked data a window function's column is an agg_token (ProvSQL
+    1.13): its cells arrive as the circuit root's UUID, so they can be
+    clicked through, with the value they display resolved alongside."""
+    payload = post_exec(
+        client,
+        "SELECT name, rank() OVER (ORDER BY id) AS r, "
+        "count(*) OVER (PARTITION BY city) AS n "
+        "FROM personnel WHERE name IN ('John', 'Dave') ORDER BY id",
+        mode="circuit",
+    )
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows", final
+    types = {c["name"]: c["type_name"] for c in final["columns"]}
+    assert types["r"] == types["n"] == "agg_token"
+    display = final["agg_display"]
+    shown = [[display.get(row[1]), display.get(row[2])] for row in final["rows"]]
+    # John is first by id, Dave second; John is alone in New York among
+    # the two, Dave alone in Paris.
+    assert shown == [["1 (*)", "1 (*)"], ["2 (*)", "1 (*)"]], shown
+
+
+def test_where_mode_order_by_limit(client):
+    """A tracked ORDER BY ... LIMIT (a rank-based cut in ProvSQL 1.13) runs in
+    Where mode: the cut is a condition beside each row, which leaves the
+    locations its values were copied from as they are."""
+    payload = post_exec(
+        client, "SELECT name FROM personnel ORDER BY id LIMIT 2", mode="where")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows", final
+    assert payload["wrapped"] is True

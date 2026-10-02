@@ -41,7 +41,8 @@ enum class WhereGate {
   PLUS,         ///< Sum (disjunction) of child where-provenance sets
   EQ,           ///< Equijoin gate recording the joined attribute pair
   PROJECT,      ///< Projection gate recording which attributes are kept
-  IN            ///< Input gate for a single base-relation tuple
+  IN,           ///< Input gate for a single base-relation tuple
+  CONDITION     ///< A comparison beside the row it filters: no column, no value copied
 };
 
 /**
