@@ -26,6 +26,22 @@ def test_select_returns_rows(client):
     assert any(row[0] == "John" for row in final["rows"])
 
 
+def test_where_mode_cap_is_not_a_freeze(client):
+    """The row cap Studio adds around a where-mode query is a LIMIT without
+    ORDER BY over tracked data.  ProvSQL (1.13+) reads such a LIMIT as a cut
+    it does not track, a freeze, which provsql.implicit_freeze = 'error'
+    refuses: written as LIMIT plain(n), the cap is not one, and the query
+    runs."""
+    payload = post_exec(
+        client,
+        "SET LOCAL provsql.implicit_freeze = 'error'; SELECT name FROM personnel",
+        mode="where",
+    )
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows", final
+    assert payload["wrapped"] is True
+
+
 def test_result_rows_truncate_when_query_exceeds_cap(test_dsn, tmp_path, monkeypatch):
     """Personnel has 7 rows; cap at 3 to force the fetchmany(N+1) peek to
     flag truncation. /api/exec must trim to max_rows and surface
@@ -261,7 +277,8 @@ def test_cancel_endpoint_aborts_in_flight_query(app, client):
         resp = c.post(
             "/api/exec",
             json={
-                "sql": "SELECT pg_sleep(5)",
+                "sql": "DO $$ BEGIN RAISE NOTICE 'partial'; "
+                       "PERFORM pg_sleep(5); END $$",
                 "mode": "circuit",
                 "request_id": request_id,
             },
@@ -298,6 +315,10 @@ def test_cancel_endpoint_aborts_in_flight_query(app, client):
     final = result_holder["payload"]["blocks"][-1]
     assert final["kind"] == "error"
     assert final["sqlstate"] == "57014"
+    # A Studio-styled message, without the notices buffered before the
+    # cancel (as for a statement timeout).
+    assert final["message"] == "Query canceled."
+    assert result_holder["payload"]["notices"] == []
 
 
 def test_cancel_endpoint_404s_when_no_query_in_flight(client):
@@ -321,6 +342,25 @@ def test_statement_timeout_returns_clear_error_and_drops_pg_notices(app, client)
     assert "statement timeout" in final["message"].lower()
     assert "100ms" in final["message"]
     assert payload["notices"] == []
+
+
+def test_resource_limit_error_shows_its_hint(client):
+    """ProvSQL (1.13+) stops an evaluation past provsql.max_worlds with a
+    program_limit_exceeded error whose HINT names the setting to raise:
+    Studio shows it with the message, so the user knows the way out."""
+    payload = post_exec(
+        client,
+        "SET LOCAL provsql.max_worlds = 2; "
+        "SELECT probability_evaluate(provenance()) FROM "
+        "(SELECT city FROM personnel GROUP BY city "
+        "HAVING SUM(id) > 3 AND COUNT(*) > 1) x",
+        mode="circuit",
+    )
+    final = payload["blocks"][-1]
+    assert final["kind"] == "error", final
+    assert final["sqlstate"] == "54000"
+    assert "provsql.max_worlds" in final["message"]
+    assert "HINT:  Raise provsql.max_worlds" in final["message"]
 
 
 def test_where_mode_falls_back_when_no_provenance_relation(client):

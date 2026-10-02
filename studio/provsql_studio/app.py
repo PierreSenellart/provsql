@@ -1550,10 +1550,9 @@ def create_app(
         db.save_persisted_gucs(app.config["RUNTIME_GUCS"])
         # The layout cache is keyed on (root, depth) only; any panel
         # GUC that changes what the C function returns (notably
-        # provsql.simplify_on_load, provsql.hybrid_evaluation) must
-        # invalidate cached scenes so the next /api/circuit fetches
-        # the fresh shape.
-        if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
+        # provsql.simplify_on_load) must invalidate cached scenes so
+        # the next /api/circuit fetches the fresh shape.
+        if name == "provsql.simplify_on_load":
             layout_cache.clear()
         return jsonify({"ok": True, "key": name, "value": canonical})
 

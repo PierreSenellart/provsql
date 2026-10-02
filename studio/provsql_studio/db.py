@@ -382,7 +382,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
     `pg_attribute` even when the ProvSQL planner hook adds one to their
     rewritten output (CS2's `f` and `f_replicated` are the canonical
     case). For these we fall back to a runtime probe: `SELECT * FROM
-    <qname> LIMIT 0` exposes the post-rewrite column list, and a
+    <qname> WHERE false` exposes the post-rewrite column list, and a
     `provsql uuid` column there means the view propagates provenance."""
     out: list[dict] = []
     with pool.connection() as conn:
@@ -471,7 +471,7 @@ def _probe_view_provenance(
     ``(propagates_provenance, prov_kind)``.
 
     * ``propagates_provenance`` is True iff
-      ``SELECT * FROM <schema>.<table> LIMIT 0`` exposes a ``provsql uuid``
+      ``SELECT * FROM <schema>.<table> WHERE false`` exposes a ``provsql uuid``
       column. Views/matviews never carry a literal `provsql` column in
       `pg_attribute` even when the ProvSQL planner hook adds one to their
       rewritten output (CS2's ``f`` and ``f_replicated`` are the canonical
@@ -516,7 +516,10 @@ def _probe_view_provenance(
             conn.add_notice_handler(collect)
             try:
                 with conn.cursor() as cur:
-                    cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
+                    # WHERE false, not LIMIT 0: plans the query without
+                    # fetching a row, and ProvSQL 1.13 warns about a LIMIT
+                    # without ORDER BY over tracked data.
+                    cur.execute(sql.SQL("SELECT * FROM {} WHERE false").format(qname))
                     desc = cur.description or []
                     for col in desc:
                         if col.name == "provsql" and col.type_code == _UUID_OID:
@@ -900,10 +903,10 @@ def list_relations(pool: ConnectionPool, *, max_rows: int = 100) -> list[dict]:
         for schema, table, regclass, estimated_rows in rels:
             with conn.cursor() as cur:
                 cur.execute(
-                    sql.SQL("SELECT * FROM {} LIMIT {}").format(
-                        sql.Identifier(schema, table),
-                        sql.Literal(fetch_limit),
+                    sql.SQL("SELECT * FROM {}").format(
+                        sql.Identifier(schema, table)
                     )
+                    + sql.SQL(_limit_clause(cur, fetch_limit))
                 )
                 cols = [
                     {"name": d.name, "type_name": _type_name(cur, d.type_code)}
@@ -1378,15 +1381,7 @@ def evaluate_circuit(
                 (target_path,),
             )
             apply_tool_search_path(cur, tool_search_path)
-            for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _EXTRA_GUC_WHITELIST:
-                    continue
-                cur.execute(
-                    sql.SQL("SET LOCAL {} = {}").format(
-                        sql.Identifier(*guc_name.split(".")),
-                        sql.Literal(guc_val),
-                    )
-                )
+            apply_extra_gucs(cur, extra_gucs)
             # When condition_uuid is set, splice it as the prov arg of
             # every RV-side call so the strip shows the truncated
             # distribution-profile.  rv_moment / rv_support /
@@ -1602,15 +1597,7 @@ def evaluate_circuit(
                 (target_path,),
             )
             apply_tool_search_path(cur, tool_search_path)
-            for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _EXTRA_GUC_WHITELIST:
-                    continue
-                cur.execute(
-                    sql.SQL("SET LOCAL {} = {}").format(
-                        sql.Identifier(*guc_name.split(".")),
-                        sql.Literal(guc_val),
-                    )
-                )
+            apply_extra_gucs(cur, extra_gucs)
             cur.execute(
                 sql.SQL(
                     "SELECT v FROM provsql.rv_sample({}::uuid, {}, {}) AS v"
@@ -1741,15 +1728,7 @@ def evaluate_circuit(
             # call ignores the user's panel overrides (e.g. setting
             # rv_mc_samples=0 to disable the MC fallback still gets MC).
             # exec_batch already does this for batched queries; mirror it.
-            for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _EXTRA_GUC_WHITELIST:
-                    continue
-                cur.execute(
-                    sql.SQL("SET LOCAL {} = {}").format(
-                        sql.Identifier(*guc_name.split(".")),
-                        sql.Literal(guc_val),
-                    )
-                )
+            apply_extra_gucs(cur, extra_gucs)
             # AFTER applying the user's runtime_gucs, ensure
             # provsql.verbose_level is at least 5 so the eval-strip's
             # probability calls surface the level-5 informational
@@ -1864,15 +1843,7 @@ def contributions(
             target_path = compose_search_path("", cur.fetchone()[0])
         cur.execute("SELECT set_config('search_path', %s, true)", (target_path,))
         apply_tool_search_path(cur, tool_search_path)
-        for guc_name, guc_val in (extra_gucs or {}).items():
-            if guc_name not in _EXTRA_GUC_WHITELIST:
-                continue
-            cur.execute(
-                sql.SQL("SET LOCAL {} = {}").format(
-                    sql.Identifier(*guc_name.split(".")),
-                    sql.Literal(guc_val),
-                )
-            )
+        apply_extra_gucs(cur, extra_gucs)
 
         cur.execute(
             sql.SQL(
@@ -2155,13 +2126,7 @@ def temporal(
         # convention, cf. CS4); render them at UTC so the timeline gets clean
         # ISO instants regardless of the server's timezone.
         cur.execute("SET LOCAL timezone TO 'UTC'")
-        for guc_name, guc_val in (extra_gucs or {}).items():
-            cur.execute(
-                sql.SQL("SET LOCAL {} = {}").format(
-                    sql.Identifier(*guc_name.split(".")),
-                    sql.Literal(guc_val),
-                )
-            )
+        apply_extra_gucs(cur, extra_gucs, whitelist=False)
         # Temporal reads the circuit only through sr_temporal, i.e. as a
         # Boolean function lifted by the Boolean->temporal homomorphism, so
         # the answer is invariant under the provenance class. Force 'boolean'
@@ -2631,15 +2596,7 @@ def exec_batch_on(
             # apply on top of the per-query toggles so the user can keep
             # the rewriter off via the panel without having to remember
             # it on every query.
-            for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _EXTRA_GUC_WHITELIST:
-                    continue
-                cur.execute(
-                    sql.SQL("SET LOCAL {} = {}").format(
-                        sql.Identifier(*guc_name.split(".")),
-                        sql.Literal(guc_val),
-                    )
-                )
+            apply_extra_gucs(cur, extra_gucs)
 
             # Run prelude statements; halt on first error.
             for stmt in prelude:
@@ -2660,7 +2617,7 @@ def exec_batch_on(
             # mirrors the fetchmany peek used in circuit mode (one
             # extra row distinguishes "exactly N" from "at least N").
             cap_clause = (
-                f" LIMIT {int(max_result_rows) + 1}"
+                _limit_clause(cur, int(max_result_rows) + 1)
                 if max_result_rows is not None and max_result_rows >= 0
                 else ""
             )
@@ -2952,6 +2909,57 @@ def _resolve_agg_display(
         return {}
 
 
+def apply_extra_gucs(cur, extra_gucs, whitelist: bool = True) -> list[str]:
+    """Apply runtime GUCs with ``SET LOCAL``, each in a savepoint of its own.
+
+    The values come from the Config panel and are persisted across Studio
+    runs, so they can outlive what the server accepts: a GUC unknown to the
+    installed extension, a value out of its range, one this role may not
+    set.  Such a setting is skipped, rather than failing the whole request.
+    With ``whitelist``, only the GUCs of ``_EXTRA_GUC_WHITELIST`` are
+    applied.  Returns the names of the settings skipped."""
+    skipped: list[str] = []
+    for guc_name, guc_val in (extra_gucs or {}).items():
+        if whitelist and guc_name not in _EXTRA_GUC_WHITELIST:
+            continue
+        cur.execute("SAVEPOINT studio_extra_guc")
+        try:
+            cur.execute(
+                sql.SQL("SET LOCAL {} = {}").format(
+                    sql.Identifier(*guc_name.split(".")),
+                    sql.Literal(guc_val),
+                )
+            )
+        except psycopg.Error:
+            cur.execute("ROLLBACK TO SAVEPOINT studio_extra_guc")
+            skipped.append(guc_name)
+        cur.execute("RELEASE SAVEPOINT studio_extra_guc")
+    return skipped
+
+
+def _limit_clause(cur: psycopg.Cursor, n: int) -> str:
+    """A ``LIMIT n`` clause that keeps the first rows as they come.
+
+    Over provenance-tracked data, ProvSQL 1.13 reads a bare ``LIMIT``
+    without ``ORDER BY`` as a cut it does not track, and warns about it;
+    ``LIMIT provsql.plain(n)`` says the cut is meant.  Older extensions have
+    no ``plain()``, and take the bare form silently.  Looked up once per
+    connection."""
+    conn = cur.connection
+    has_plain = getattr(conn, "_provsql_has_plain", None)
+    if has_plain is None:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT to_regprocedure('provsql.plain(anyelement)') IS NOT NULL"
+            )
+            row = c.fetchone()
+        has_plain = bool(row and row[0])
+        conn._provsql_has_plain = has_plain  # type: ignore[attr-defined]
+    if has_plain:
+        return f" LIMIT provsql.plain({int(n)}::bigint)"
+    return f" LIMIT {int(n)}"
+
+
 def _type_name(cur: psycopg.Cursor, oid: int) -> str:
     """Look up a type name for the OID. We cache once per connection on the cursor."""
     cache = getattr(cur.connection, "_type_name_cache", None)
@@ -2979,17 +2987,25 @@ def _error_result(e: psycopg.Error) -> StatementResult:
     )
 
 
-def _is_timeout_error(e: psycopg.Error) -> bool:
-    """A statement_timeout firing comes back as sqlstate 57014 with the
-    canonical message "canceling statement due to statement timeout". Other
-    57014 cancellations (lock_timeout, pg_cancel_backend) carry different
-    text, so message-matching distinguishes the timeout cleanly."""
+def _cancel_kind(e: psycopg.Error) -> str | None:
+    """Which cancellation a 57014 error is: "timeout" for a
+    statement_timeout (canonical message "canceling statement due to
+    statement timeout"), "user" for a pg_cancel_backend, which Studio's
+    Cancel button fires ("... due to user request"), None for anything
+    else (a lock_timeout, another error)."""
     diag = getattr(e, "diag", None)
-    sqlstate = diag.sqlstate if diag else None
-    if sqlstate != "57014":
-        return False
-    msg = (diag.message_primary if diag and diag.message_primary else str(e)).lower()
-    return "statement timeout" in msg
+    if not diag or diag.sqlstate != "57014":
+        return None
+    msg = (diag.message_primary or str(e)).lower()
+    if "statement timeout" in msg:
+        return "timeout"
+    if "user request" in msg:
+        return "user"
+    return None
+
+
+def _is_timeout_error(e: psycopg.Error) -> bool:
+    return _cancel_kind(e) == "timeout"
 
 
 def _timeout_error_result(timeout: str) -> StatementResult:
@@ -3006,14 +3022,21 @@ def _timeout_error_result(timeout: str) -> StatementResult:
 def _user_error_result(
     e: psycopg.Error, meta: dict, statement_timeout: str
 ) -> StatementResult:
-    """Translate a user-facing psycopg error into a StatementResult. On
-    statement_timeout, swap in a Studio-styled message and drop any captured
-    PostgreSQL notices: the timeout aborts execution mid-stream and any
-    NOTICE / WARNING text already buffered may be partial, so showing them
-    alongside the timeout would mislead more than help."""
-    if _is_timeout_error(e):
+    """Translate a user-facing psycopg error into a StatementResult. On a
+    statement_timeout or a Cancel, swap in a Studio-styled message and
+    drop any captured PostgreSQL notices: the cancellation aborts
+    execution mid-stream and any NOTICE / WARNING text already buffered
+    may be partial, so showing them alongside it would mislead more than
+    help."""
+    kind = _cancel_kind(e)
+    if kind == "timeout":
         meta["notices"] = []
         return _timeout_error_result(statement_timeout)
+    if kind == "user":
+        meta["notices"] = []
+        return StatementResult(
+            kind="error", message="Query canceled.", sqlstate="57014",
+        )
     return _error_result(e)
 
 
@@ -3034,7 +3057,6 @@ _PANEL_GUCS = {
     "provsql.monte_carlo_seed",
     "provsql.rv_mc_samples",
     "provsql.simplify_on_load",
-    "provsql.hybrid_evaluation",
     "provsql.fallback_compiler",
 }
 
@@ -3059,13 +3081,9 @@ def show_panel_gucs(pool: ConnectionPool, runtime: dict[str, str]) -> dict[str, 
     """
     out: dict[str, str] = {}
     with pool.connection() as conn, conn.cursor() as cur:
-        for name, value in runtime.items():
-            if name in _PANEL_GUCS:
-                cur.execute(
-                    sql.SQL("SET LOCAL {} = {}").format(
-                        sql.Identifier(*name.split(".")), sql.Literal(value)
-                    )
-                )
+        apply_extra_gucs(
+            cur, {n: v for n, v in runtime.items() if n in _PANEL_GUCS}
+        )
         for name in sorted(_PANEL_GUCS):
             try:
                 cur.execute(f"SHOW {name}")
@@ -3123,7 +3141,7 @@ def validate_panel_guc(
         if n < 0:
             raise ValueError("provsql.rv_mc_samples must be non-negative (0 disables the MC fallback)")
         return str(n)
-    if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
+    if name == "provsql.simplify_on_load":
         if v in ("on", "true", "1", "yes"):
             return "on"
         if v in ("off", "false", "0", "no"):

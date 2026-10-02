@@ -70,6 +70,14 @@
     7: 'power (^)',
     8: 'ln',
     9: 'exp',
+    10: 'percentile',
+    11: 'integer division',
+    12: 'round',
+    13: 'floor',
+    14: 'ceil',
+    15: 'abs',
+    16: 'as double precision',
+    17: 'as real',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -4355,13 +4363,28 @@
     const raw = message || '';
     const m = raw.match(/^ProvSQL:\s*(.*)$/s);
     const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
-    const text  = m ? m[1] : raw;
+    // The hint on a line of its own with its icon, as app.js's renderDiag
+    // shows it.
+    const lines = (m ? m[1] : raw).split('\n');
+    const hi = lines.findIndex((l, k) => k > 0 && /^HINT:\s/.test(l));
+    let hint = '';
+    if (hi >= 0) {
+      let j = hi + 1;
+      while (j < lines.length && !/^[A-Z][A-Z ]*:\s/.test(lines[j])) j++;
+      hint = [lines[hi].replace(/^HINT:\s*/, ''), ...lines.slice(hi + 1, j)]
+        .join('\n').trim();
+      lines.splice(hi, j - hi);
+    }
+    const text  = lines.join('\n');
     const tail  = (sqlstate && sqlstate !== 'XX000')
       ? ` <code>(SQLSTATE ${escapeHtml(sqlstate)})</code>`
       : '';
+    const hintHtml = hint
+      ? `<span class="wp-diag__hint"><i class="fas fa-lightbulb"></i>${escapeHtml(hint)}</span>`
+      : '';
     return `<div class="wp-error">`
          + `<i class="fas fa-exclamation-circle"></i> `
-         + `${badge}${escapeHtml(text)}${tail}`
+         + `${badge}${escapeHtml(text)}${tail}${hintHtml}`
          + `</div>`;
   }
 

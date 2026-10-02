@@ -3948,7 +3948,14 @@ function makeBlockRenderer(env, targets) {
     const raw = message || '';
     const m = raw.match(/^ProvSQL:\s*(.*)$/s);
     const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
-    const text  = m ? m[1] : raw;
+    const full  = m ? m[1] : raw;
+    // The HINT says what to do about the message (the setting to raise,
+    // the form to write instead), so it stays visible on its own line,
+    // outside the fold that hides the DETAIL tag and the CONTEXT.
+    const { text, hint } = splitHint(full);
+    const hintHtml = hint
+      ? `<span class="wp-diag__hint"><i class="fas fa-lightbulb"></i>${env.escapeHtml(hint)}</span>`
+      : '';
     // XX000 is the generic "internal_error" catch-all that provsql_error()
     // raises (the C macro doesn't set a specific errcode); appending it
     // adds noise without information, so skip it.
@@ -3961,19 +3968,36 @@ function makeBlockRenderer(env, targets) {
     // they don't push the result table off-screen. The first line stays
     // visible as the summary; clicking the disclosure triangle reveals
     // the rest.
+    // Whether to fold is decided on the full message, so that taking the
+    // hint out does not unfold the DETAIL line it came with.
     const newlineIdx = text.indexOf('\n');
     const isLong = newlineIdx >= 0 && (
-      (text.match(/\n/g) || []).length > 1 || text.length > 240
+      (full.match(/\n/g) || []).length > 1 || full.length > 240
     );
     if (isLong) {
       const head = text.slice(0, newlineIdx);
       const rest = text.slice(newlineIdx + 1);
       return `<details class="${cls} wp-diag--collapsible">`
-           + `<summary><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(head)}${tail}</summary>`
+           + `<summary><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(head)}${tail}${hintHtml}</summary>`
            + `<div class="wp-diag__body">${env.escapeHtml(rest)}</div>`
            + `</details>`;
     }
-    return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}</div>`;
+    return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}${hintHtml}</div>`;
+  }
+
+  // Take the "HINT:  ..." part out of a PostgreSQL message as psycopg
+  // formats it (message, then DETAIL / HINT / CONTEXT sections, each
+  // starting a line). Returns the message without it, and the hint text
+  // (null when there is none).
+  function splitHint(text) {
+    const lines = text.split('\n');
+    const i = lines.findIndex((l, k) => k > 0 && /^HINT:\s/.test(l));
+    if (i < 0) return { text, hint: null };
+    let j = i + 1;
+    while (j < lines.length && !/^[A-Z][A-Z ]*:\s/.test(lines[j])) j++;
+    const hint = [lines[i].replace(/^HINT:\s*/, ''), ...lines.slice(i + 1, j)]
+      .join('\n').trim();
+    return { text: [...lines.slice(0, i), ...lines.slice(j)].join('\n'), hint };
   }
 
   // Recognises the classifier NOTICE emitted by the planner hook when

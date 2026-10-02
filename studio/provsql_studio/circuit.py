@@ -76,6 +76,12 @@ _ARITH_OP_GLYPH = {
     9: "exp",   # PROVSQL_ARITH_EXP: e^x
     10: "pct",  # PROVSQL_ARITH_PERCENTILE: percentile_cont over a group
     11: "div",  # PROVSQL_ARITH_INTDIV: SQL division of two integers
+    12: "round",  # PROVSQL_ARITH_ROUND: round(v) / round(v, d)
+    13: "⌊·⌋",  # PROVSQL_ARITH_FLOOR
+    14: "⌈·⌉",  # PROVSQL_ARITH_CEIL
+    15: "|·|",  # PROVSQL_ARITH_ABS
+    16: "::float8",  # PROVSQL_ARITH_ASFLOAT8: read as double precision
+    17: "::real",  # PROVSQL_ARITH_ASFLOAT4: read as real
 }
 
 def _gate_label(row: dict, rv_families: dict | None = None) -> str:
@@ -522,15 +528,7 @@ def _fetch_subgraph(
         # import at module load.
         if extra_gucs:
             from . import db as _db
-            for guc_name, guc_val in extra_gucs.items():
-                if guc_name not in _db._EXTRA_GUC_WHITELIST:
-                    continue
-                cur.execute(
-                    pg_sql.SQL("SET LOCAL {} = {}").format(
-                        pg_sql.Identifier(*guc_name.split(".")),
-                        pg_sql.Literal(guc_val),
-                    )
-                )
+            _db.apply_extra_gucs(cur, extra_gucs)
         try:
             cur.execute(sql, (root, depth))
         except psycopg.errors.UndefinedFunction as e:

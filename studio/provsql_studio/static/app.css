@@ -967,6 +967,14 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
      leak from the head line into the summary. */
 }
 .wp-diag--collapsible > summary:hover { filter: brightness(0.97); }
+/* The HINT of a diagnostic, kept visible below its first line (also when
+   the rest is folded): what to do about the message. */
+.wp-diag__hint {
+  display: block;
+  margin-top: 0.35rem;
+  font-style: italic;
+}
+.wp-diag__hint i { color: var(--gold-700, #B8901E) !important; }
 .wp-diag__body {
   margin-top: 0.5rem;
   padding-top: 0.5rem;

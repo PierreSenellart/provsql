@@ -864,3 +864,34 @@ def test_expand_observe_data_is_noop_without_observe():
     rows = [{"node": "x", "parent": None, "child_pos": None,
              "gate_type": "plus", "extra": None, "depth": 0}]
     assert _circuit._expand_observe_data(rows) is rows
+
+
+def test_circuit_arith_operators_have_glyphs(client, test_dsn):
+    """Every arithmetic operator code ProvSQL writes into a gate_arith's
+    info1 renders with a glyph of its own, including those of 1.13 (integer
+    division, round, floor, ceil, abs, and the reads as a float), rather
+    than an empty circle."""
+    import uuid as _uuid
+    expected = {11: "div", 12: "round", 13: "⌊·⌋", 14: "⌈·⌉", 15: "|·|",
+                16: "::float8", 17: "::real"}
+    leaf = str(_uuid.uuid4())
+    roots = {}
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (leaf,))
+        for code in expected:
+            root = str(_uuid.uuid4())
+            children = [leaf, leaf] if code == 11 else [leaf]
+            cur.execute(
+                "SELECT provsql.create_gate(%s::uuid, 'arith', %s::uuid[], "
+                "%s, 0, NULL)",
+                (root, children, code),
+            )
+            roots[code] = root
+    for code, glyph in expected.items():
+        resp = client.get(f"/api/circuit/{roots[code]}")
+        assert resp.status_code == 200, resp.data
+        node = next(n for n in resp.get_json()["nodes"]
+                    if n["id"] == roots[code])
+        assert node["label"] == glyph, (code, node)

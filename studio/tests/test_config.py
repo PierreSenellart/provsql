@@ -358,3 +358,24 @@ def test_tool_search_path_empty_does_not_override(client):
     final = resp.get_json()["blocks"][-1]
     assert final["kind"] == "rows"
     assert final["rows"][0][0] == ""
+
+
+def test_stale_runtime_guc_does_not_break_requests(client, app):
+    """Panel overrides are persisted across Studio runs, so one can outlive
+    what the server accepts (a GUC the installed extension does not know, a
+    value now out of range).  It is skipped, each override being set in a
+    savepoint of its own, instead of failing every request; the others
+    still apply."""
+    runtime = app.config["RUNTIME_GUCS"]
+    saved = dict(runtime)
+    try:
+        runtime["provsql.monte_carlo_seed"] = "not-a-number"
+        runtime["provsql.verbose_level"] = "7"
+        r = client.post("/api/exec",
+                        json={"sql": "SHOW provsql.verbose_level",
+                              "mode": "circuit"})
+        assert r.status_code == 200, r.data
+        assert r.get_json()["blocks"][-1]["rows"][0][0] == "7"
+    finally:
+        runtime.clear()
+        runtime.update(saved)
