@@ -818,8 +818,10 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
 /* Generated number fields hold up to ten digits (max_worlds' 1048576,
    mobius_max_gates' 4000000). */
 #cfg-settings .wp-config__num { width: 5.2rem; }
-/* The Settings section at the foot of the Tools screen. */
+/* The Settings section at the foot of the Tools screen; its generated
+   rows follow the fixed ones, so the first keeps its separator. */
 .wp-tools__settings { margin-top: 0.9rem; }
+#tools-settings .wp-config__row:first-of-type { border-top: 1px solid var(--border-soft); }
 /* Single-select dropdown for a config row (currently the
    provsql.fallback_compiler picker). Sized to fit the long Panini
    option labels on one line; lives inside a wp-config__row--col so

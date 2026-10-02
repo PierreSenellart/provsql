@@ -1204,6 +1204,13 @@ chosen among the compilers available on the server; and
 ``provsql.kcmcp_server``, shown read-only, since it is set in the server's
 configuration.
 
+.. figure:: /_static/studio/tools-settings.png
+   :alt: The Settings section of the Studio Tools panel: the
+         provsql.tool_search_path field, the provsql.fallback_compiler
+         choice list, and the read-only provsql.kcmcp_server field.
+
+   The Settings section of the Tools panel.
+
 .. figure:: /_static/studio/tools-panel.png
    :alt: Studio Tools panel: the external-tool registry grouped by operation,
          each tool with an availability dot, cli/kcmcp badge, preference,
