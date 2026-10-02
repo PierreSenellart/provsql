@@ -5,7 +5,7 @@ t
 is_builtin
 f
 (1 row)
-NOTICE:  refused: provsql.wal_logging requires provsql.synchronous_commit
+NOTICE:  refused: provsql.store_wal_logging requires provsql.store_synchronous_commit
 NOTICE:  logged write accepted, probability 0.5
 wal_grew
 t

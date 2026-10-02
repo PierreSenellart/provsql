@@ -36869,7 +36869,7 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
-  DefineCustomBoolVariable("provsql.wal_logging",
+  DefineCustomBoolVariable("provsql.store_wal_logging",
                            "Write every mutation of the circuit store to the "
                            "WAL, so a replica can carry provenance.",
                            "PostgreSQL 15 and later. The circuit store is not "
@@ -36877,21 +36877,21 @@ void _PG_init(void) {
                            "standby or through a point-in-time restore; with "
                            "this on, each store message is written to the WAL "
                            "first and the standby's startup process applies it. "
-                           "Requires provsql.synchronous_commit, which is what "
+                           "Requires provsql.store_synchronous_commit, which is what "
                            "keeps the store on disk from falling behind the "
                            "WAL. A hot-standby backend then refuses to write to "
                            "the store, so provenance queries -- which create "
                            "gates as they run, reads included -- only work on "
                            "the primary. Off by default: it changes what the "
                            "cluster writes to its WAL.",
-                           &provsql_wal_logging,
+                           &provsql_store_wal_logging,
                            false,
                            PGC_SUSET,
                            0,
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.synchronous_commit",
+  DefineCustomBoolVariable("provsql.store_synchronous_commit",
                            "Force the circuit store to stable storage before "
                            "a transaction that wrote to it commits.",
                            "The provenance circuit lives outside PostgreSQL's "
@@ -36904,7 +36904,7 @@ void _PG_init(void) {
                            "On removes it, at the price of one flush per "
                            "store-writing transaction -- including read-only "
                            "queries, which create gates too.",
-                           &provsql_synchronous_commit,
+                           &provsql_store_synchronous_commit,
                            false,
                            PGC_USERSET,
                            0,

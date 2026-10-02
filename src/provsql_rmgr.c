@@ -21,8 +21,8 @@
  * **What it is for.**  Streaming replication and PITR: a standby's
  * startup process applies these records to its own store, so a replica
  * can carry provenance.  Crash recovery does *not* depend on them, and
- * that is deliberate: @c provsql.wal_logging requires
- * @c provsql.synchronous_commit, so a transaction cannot commit until
+ * that is deliberate: @c provsql.store_wal_logging requires
+ * @c provsql.store_synchronous_commit, so a transaction cannot commit until
  * its store writes are on disk, and the store on disk is therefore never
  * behind the WAL.  That requirement is what removes the checkpoint gap
  * an asynchronous store would open -- WAL before the last checkpoint's
@@ -57,7 +57,7 @@
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 
-bool provsql_wal_logging = false;
+bool provsql_store_wal_logging = false;
 
 /** True while this process is replaying a ProvSQL WAL record, which is
  *  the one case where writing to the store during recovery is right. */
@@ -158,23 +158,23 @@ bool provsql_store_write_allowed(void)
      refusing outright would take provenance away from standbys that
      rely on it today.  The documentation says which of the two a
      deployment is choosing. */
-  if(in_redo || !provsql_wal_logging)
+  if(in_redo || !provsql_store_wal_logging)
     return true;
   return !RecoveryInProgress();
 }
 
 void provsql_wal_log_store_message(const char *data, size_t len)
 {
-  if(!provsql_wal_logging || in_redo || RecoveryInProgress())
+  if(!provsql_store_wal_logging || in_redo || RecoveryInProgress())
     return;
 
-  if(!provsql_synchronous_commit)
+  if(!provsql_store_synchronous_commit)
     ereport(ERROR,
-            (errmsg("provsql.wal_logging requires provsql.synchronous_commit"),
+            (errmsg("provsql.store_wal_logging requires provsql.store_synchronous_commit"),
              errdetail("WAL records for the circuit store are only complete "
                        "if the store on disk is never behind the WAL, which "
                        "is what the at-commit sync barrier guarantees."),
-             errhint("SET provsql.synchronous_commit = on.")));
+             errhint("SET provsql.store_synchronous_commit = on.")));
 
   XLogBeginInsert();
   XLogRegisterData((char *) data, (uint32) len);
@@ -185,7 +185,7 @@ void provsql_wal_log_store_message(const char *data, size_t len)
 
 #include "provsql_rmgr.h"
 
-bool provsql_wal_logging = false;
+bool provsql_store_wal_logging = false;
 
 void provsql_register_rmgr(void) {}
 

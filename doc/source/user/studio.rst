@@ -1123,7 +1123,7 @@ value. The panel's sections are:
   ``provsql.gate_cache_size``, ``provsql.joint_max_states``,
   ``provsql.joint_max_treewidth``, ``provsql.mobius_max_cnf``,
   ``provsql.mobius_max_gates``) and the durability of the circuit
-  (``provsql.synchronous_commit``, ``provsql.wal_logging``).
+  (``provsql.store_synchronous_commit``, ``provsql.store_wal_logging``).
 * **Session**: the visible part of ``search_path`` (``provsql`` is always
   pinned at the end).
 * **Display limits**: :guilabel:`Max circuit depth` (the depth cap on the

@@ -505,11 +505,11 @@ extern int provsql_verbose;
  * for the current transaction, or empty when it has none yet. */
 extern char *provsql_transaction_token;
 
-/** Global variable set by the provsql.synchronous_commit run-time
+/** Global variable set by the provsql.store_synchronous_commit run-time
  * configuration parameter: when true, a transaction that has written to
  * the circuit store forces the store to stable storage before it
  * commits. */
-extern bool provsql_synchronous_commit;
+extern bool provsql_store_synchronous_commit;
 
 /** Global variable holding the probability evaluation method(s) used by the
  * most recent probability_evaluate call, exposed via the

@@ -3090,8 +3090,8 @@ _PANEL_SETTINGS: list[tuple[str, str]] = [
     ("provsql.joint_max_treewidth", "advanced"),
     ("provsql.mobius_max_cnf", "advanced"),
     ("provsql.mobius_max_gates", "advanced"),
-    ("provsql.synchronous_commit", "advanced"),
-    ("provsql.wal_logging", "advanced"),
+    ("provsql.store_synchronous_commit", "advanced"),
+    ("provsql.store_wal_logging", "advanced"),
     ("provsql.fallback_compiler", "tools"),
     ("provsql.kcmcp_server", "tools"),
 ]

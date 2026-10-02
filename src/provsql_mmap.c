@@ -193,13 +193,13 @@ void RegisterProvSQLMMapWorker(void)
  *
  * Two things narrow that window.  The worker forces the files out shortly
  * after the last write (PROVSQL_STORE_FLUSH_INTERVAL_MS), which bounds the
- * loss.  And, when provsql.synchronous_commit is on, a transaction that
+ * loss.  And, when provsql.store_synchronous_commit is on, a transaction that
  * wrote to the store sends a sync request before it commits and waits for
  * the reply, which closes the window entirely: the reply comes after every
  * earlier message of this backend has been applied and forced.
  * ------------------------------------------------------------------------- */
 
-bool provsql_synchronous_commit = false;
+bool provsql_store_synchronous_commit = false;
 
 /** Whether the current transaction has written anything to the store. */
 static bool store_written = false;
@@ -230,7 +230,7 @@ static void provsql_store_xact_callback(XactEvent event, void *arg)
   case XACT_EVENT_PRE_PREPARE:
     /* Still inside the transaction, so raising here aborts the commit
        rather than leaving it half-durable. */
-    if(store_written && provsql_synchronous_commit)
+    if(store_written && provsql_store_synchronous_commit)
       provsql_store_sync_barrier();
     break;
   case XACT_EVENT_COMMIT:

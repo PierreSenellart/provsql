@@ -4,13 +4,13 @@
 -- The circuit store is outside PostgreSQL's WAL, so a committed
 -- transaction's gates can still be in the kernel's page cache when the
 -- machine loses power.  The worker forces them out shortly after the
--- last write; provsql.synchronous_commit turns that into a barrier the
+-- last write; provsql.store_synchronous_commit turns that into a barrier the
 -- writing transaction waits on before it commits.
 
-SELECT current_setting('provsql.synchronous_commit') AS synchronous_commit_default,
-       current_setting('provsql.wal_logging')        AS wal_logging_default;
+SELECT current_setting('provsql.store_synchronous_commit') AS synchronous_commit_default,
+       current_setting('provsql.store_wal_logging')        AS wal_logging_default;
 
-SET provsql.synchronous_commit = on;
+SET provsql.store_synchronous_commit = on;
 
 CREATE TABLE sd_t (name text);
 INSERT INTO sd_t VALUES ('alice'), ('bob');
@@ -29,6 +29,6 @@ SELECT round(probability_evaluate(tok)::numeric, 4) AS survived_the_barrier
 -- Forcing the store out leaves it consistent.
 SELECT dangling_indices, unreferenced, bad_wires, bad_extra FROM check_store();
 
-RESET provsql.synchronous_commit;
+RESET provsql.store_synchronous_commit;
 DROP TABLE sd_join;
 DROP TABLE sd_t;

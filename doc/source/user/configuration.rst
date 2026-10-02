@@ -250,9 +250,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``provsql-reason: world-limit``) rather than running out of memory.
     ``0`` for no limit.
 
-.. _provsql-synchronous-commit:
+.. _provsql-store-synchronous-commit:
 
-``provsql.synchronous_commit`` (default: ``off``)
+``provsql.store_synchronous_commit`` (default: ``off``)
     Force the provenance circuit to stable storage before a transaction
     that wrote to it commits. The circuit is not protected by
     PostgreSQL's WAL (see :doc:`persistence`): on a power loss, gates of
@@ -263,12 +263,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     removes it, at the price of one flush per transaction that writes to
     the circuit. Provenance queries write to the circuit, reads included.
 
-.. _provsql-wal-logging:
+.. _provsql-store-wal-logging:
 
-``provsql.wal_logging`` (default: ``off``, PostgreSQL 15+)
+``provsql.store_wal_logging`` (default: ``off``, PostgreSQL 15+)
     Write every modification of the circuit to the WAL, so that a
     physical standby replays it and carries the provenance the primary
-    computed. Requires ``provsql.synchronous_commit``. With it on,
+    computed. Requires ``provsql.store_synchronous_commit``. With it on,
     provenance queries do not run on a hot standby, which refuses to
     write to the circuit. **Superuser only**. See :doc:`persistence`.
 
@@ -375,7 +375,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     command as the PostgreSQL operating-system user.
 
 All variables above **except** ``provsql.tool_search_path``,
-``provsql.wal_logging`` and ``provsql.kcmcp_server`` can be changed by any
+``provsql.store_wal_logging`` and ``provsql.kcmcp_server`` can be changed by any
 user for their own session.
 
 .. _search-path:

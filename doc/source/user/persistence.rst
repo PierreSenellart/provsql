@@ -85,7 +85,7 @@ heap's.  To remove it:
 
 .. code-block:: postgresql
 
-    SET provsql.synchronous_commit = on;
+    SET provsql.store_synchronous_commit = on;
 
 A transaction that has written to the store then forces it to stable
 storage before it commits.  The cost is one flush per store-writing
@@ -161,10 +161,10 @@ WAL, and the standby replays it:
 .. code-block:: postgresql
 
     -- in postgresql.conf, or per session as a superuser
-    provsql.synchronous_commit = on
-    provsql.wal_logging = on
+    provsql.store_synchronous_commit = on
+    provsql.store_wal_logging = on
 
-``provsql.wal_logging`` requires ``provsql.synchronous_commit``.  With
+``provsql.store_wal_logging`` requires ``provsql.store_synchronous_commit``.  With
 it on, a hot-standby backend **refuses** to write to the store, so
 provenance queries, reads included, do not run on the standby.  The
 standby carries the provenance of what the
@@ -180,7 +180,7 @@ reserved on the `PostgreSQL wiki
 must not load two extensions claiming the same id.  And a PostgreSQL fork whose
 storage replays WAL offline -- Amazon Aurora, Neon, Google AlloyDB,
 Microsoft HorizonDB -- does not run extension resource managers, so
-``provsql.wal_logging`` must stay off there.
+``provsql.store_wal_logging`` must stay off there.
 
 .. _persistence-cleanup:
 

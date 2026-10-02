@@ -45,10 +45,10 @@ of the gap are:
   :cfile:`MMappedUUIDHashTable.cpp`), so an interrupted write leaves an
   unreferenced record rather than a dangling index;
 * **a periodic flush and an at-commit barrier**
-  (``provsql.synchronous_commit``), which bound and then remove what a
+  (``provsql.store_synchronous_commit``), which bound and then remove what a
   machine crash can lose;
 * **a custom WAL resource manager** (:cfile:`provsql_rmgr.c`,
-  ``provsql.wal_logging``, PostgreSQL 15+), which lets a standby carry
+  ``provsql.store_wal_logging``, PostgreSQL 15+), which lets a standby carry
   the store;
 * **a mark-and-sweep rebuild** (:cfile:`circuit_cleanup.c`), the one
   operation allowed to remove gates, and the repair tool for a store an

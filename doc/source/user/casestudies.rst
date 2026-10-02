@@ -461,7 +461,7 @@ Persistence and administration
    "``circuit_cleanup``", "", "", "", "", "", "", "", "", "", ""
    "``migrate_table_info``", "", "", "", "", "", "", "", "", "", ""
    "``provsql.gate_cache_size`` GUC", "", "", "", "", "", "", "", "", "", ""
-   "``provsql.synchronous_commit`` / ``provsql.wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.store_synchronous_commit`` / ``provsql.store_wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", "", ""
    "``provsql.implicit_freeze`` GUC", "", "", "", "", "", "", "", "", "", ""
 
 Export and visualisation

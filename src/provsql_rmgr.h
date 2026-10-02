@@ -10,10 +10,10 @@
 
 #include "postgres.h"
 
-/** Global variable set by the provsql.wal_logging run-time configuration
+/** Global variable set by the provsql.store_wal_logging run-time configuration
  *  parameter: when true, every mutation of the circuit store is written
  *  to the WAL before it is written to the store. */
-extern bool provsql_wal_logging;
+extern bool provsql_store_wal_logging;
 
 /**
  * @brief Register ProvSQL's resource manager with PostgreSQL.

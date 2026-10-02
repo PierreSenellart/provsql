@@ -78,7 +78,7 @@ void provsql_mmap_main_loop(void);
  * transaction's gates can still be sitting in the kernel's page cache
  * when the machine loses power.  Forcing them out this long after the
  * last write bounds the loss, the way @c synchronous_commit @c = @c off
- * bounds the heap's; @c provsql.synchronous_commit removes it entirely,
+ * bounds the heap's; @c provsql.store_synchronous_commit removes it entirely,
  * at the price of one flush per store-writing transaction.
  */
 #define PROVSQL_STORE_FLUSH_INTERVAL_MS 200
@@ -117,7 +117,7 @@ void provsql_store_flush(void);
 /**
  * @brief Note that this transaction has written to the circuit store.
  *
- * Arms the at-commit sync barrier (@c provsql.synchronous_commit) and the
+ * Arms the at-commit sync barrier (@c provsql.store_synchronous_commit) and the
  * @c PREPARE @c TRANSACTION refusal.
  */
 void provsql_store_note_write(void);

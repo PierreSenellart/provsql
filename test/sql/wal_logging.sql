@@ -15,8 +15,8 @@ SELECT rm_builtin AS is_builtin
 
 -- Logging requires the at-commit barrier: what keeps replay complete is
 -- that the store on disk is never behind the WAL.
-SET provsql.wal_logging = on;
-SET provsql.synchronous_commit = off;
+SET provsql.store_wal_logging = on;
+SET provsql.store_synchronous_commit = off;
 DO $$
 DECLARE t uuid := public.uuid_generate_v4();
 BEGIN
@@ -27,7 +27,7 @@ EXCEPTION WHEN others THEN
 END $$;
 
 -- With both, the write goes through and the record is emitted.
-SET provsql.synchronous_commit = on;
+SET provsql.store_synchronous_commit = on;
 SELECT pg_current_wal_insert_lsn() AS before \gset
 DO $$
 DECLARE t uuid := public.uuid_generate_v4();
@@ -38,5 +38,5 @@ BEGIN
 END $$;
 SELECT pg_current_wal_insert_lsn() > :'before'::pg_lsn AS wal_grew;
 
-RESET provsql.wal_logging;
-RESET provsql.synchronous_commit;
+RESET provsql.store_wal_logging;
+RESET provsql.store_synchronous_commit;
