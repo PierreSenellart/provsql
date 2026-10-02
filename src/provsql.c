@@ -2431,6 +2431,18 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     provsql_notice("Lowering recursive CTE '%s':\n body   = %s\n coldef = %s",
                    cte->ctename, body_text, coldef.data);
 
+  /* The fixpoint is driven into a temporary table, which PostgreSQL forbids
+   * in a security-restricted operation: the filling of a materialized view
+   * (CREATE MATERIALIZED VIEW, REFRESH) is one. */
+  if (InSecurityRestrictedOperation())
+    provsql_unsupported_hint(
+      PROVSQL_GAP, "recursion-in-restricted-operation",
+      "Use CREATE TABLE AS instead: the table it creates carries the same "
+      "provenance.",
+      "recursive query over provenance-tracked relations in a materialized "
+      "view (or another security-restricted operation) not supported: its "
+      "evaluation needs a temporary table, which PostgreSQL forbids there");
+
   /* Drive the fixpoint now, leaving a tracked temp table `ctename`.
    *
    * Under the 'absorptive' provenance class (or 'boolean', which
