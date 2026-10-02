@@ -24,6 +24,11 @@ extern "C" {
 
 unsigned provsql_poll_count = 0;
 
+/** The resource limit the evaluation stopped at, if any: its tag, message
+ *  and hint, raised by provsql_cancel_if_interrupted */
+static bool limit_hit = false;
+static std::string limit_tag, limit_message, limit_hint;
+
 /** Resident memory at the first evaluation of the statement, and when that
  *  statement started (the budget is per statement) */
 static size_t baseline_rss = 0;
@@ -70,6 +75,7 @@ provsql_interrupt_scope::provsql_interrupt_scope()
 {
   TimestampTz statement = GetCurrentStatementStartTimestamp();
   provsql_interrupted = false;
+  limit_hit = false;
   prev_ = signal(SIGINT, provsql_sigint_handler);
   if (statement != baseline_statement) {
     baseline_statement = statement;
@@ -98,9 +104,22 @@ void provsql_check_memory(void)
   if (provsql_max_memory <= 0)
     return;
   if (provsql_memory_used() > (size_t)provsql_max_memory * 1024 * 1024)
-    throw CircuitException(
-      "the evaluation used more memory than provsql.max_memory (" +
-      std::to_string(provsql_max_memory) + " MB)");
+    provsql_limit_exceeded(
+      "memory-limit",
+      ("the evaluation used more memory than provsql.max_memory (" +
+       std::to_string(provsql_max_memory) + " MB)").c_str(),
+      "Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or "
+      "set it to 0 for no limit.");
+}
+
+void provsql_limit_exceeded(const char *tag, const char *message,
+                            const char *hint)
+{
+  limit_hit = true;
+  limit_tag = tag;
+  limit_message = message;
+  limit_hint = hint;
+  throw CircuitException(message);
 }
 
 void provsql_cancel_if_interrupted(void)
@@ -108,5 +127,18 @@ void provsql_cancel_if_interrupted(void)
   if (provsql_interrupted) {
     provsql_interrupted = false;
     CHECK_FOR_INTERRUPTS();
+  }
+  if (limit_hit) {
+    /* Copied out: ereport does not return, and the strings would otherwise
+     * keep the text of this limit until the next one */
+    char *tag = pstrdup(limit_tag.c_str());
+    char *message = pstrdup(limit_message.c_str());
+    char *hint = pstrdup(limit_hint.c_str());
+    limit_hit = false;
+    ereport(ERROR,
+            (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+             errmsg("ProvSQL: %s", message),
+             errdetail("provsql-reason: %s; scope: deliberate", tag),
+             errhint("%s", hint)));
   }
 }

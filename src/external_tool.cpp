@@ -168,9 +168,12 @@ int run_external_tool(const std::string &cmdline) {
 
   if (tool_memory_exceeded) {
     tool_memory_exceeded = false;
-    throw CircuitException(
-      "an external tool took the evaluation past provsql.max_memory (" +
-      std::to_string(provsql_max_memory) + " MB) and was stopped");
+    provsql_limit_exceeded(
+      "memory-limit",
+      ("an external tool took the evaluation past provsql.max_memory (" +
+       std::to_string(provsql_max_memory) + " MB) and was stopped").c_str(),
+      "Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or "
+      "set it to 0 for no limit.");
   }
 
   return rv;

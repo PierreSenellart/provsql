@@ -229,8 +229,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Memory the evaluations of a statement (a semiring, a probability, a
     moment, a sample, Shapley values...) may add to the backend: once its
     resident memory has grown by more than this since the statement's
-    first evaluation, the evaluation stops with an error, as it does on a
-    cancel or a ``statement_timeout``. An external tool it runs (``d4``,
+    first evaluation, the evaluation stops with a
+    ``program_limit_exceeded`` error (SQLSTATE ``54000``, tagged
+    ``provsql-reason: memory-limit``). An external tool it runs (``d4``,
     ``c2d``...), with the processes the tool forks, is counted with that
     growth, and stopped once the two together exceed the budget. The
     check is periodic, so the budget can be exceeded by what is allocated
@@ -244,8 +245,10 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     enumerated. A condition with no closed form (a comparison on a ``SUM``,
     on two aggregates, on an ``array_agg``...) is evaluated by enumerating
     the worlds of the group, up to 2\ :sup:`n` for *n* rows, in time and
-    in memory: beyond this many, the evaluation stops with an error
-    rather than running out of memory. ``0`` for no limit.
+    in memory: beyond this many, the evaluation stops with a
+    ``program_limit_exceeded`` error (SQLSTATE ``54000``, tagged
+    ``provsql-reason: world-limit``) rather than running out of memory.
+    ``0`` for no limit.
 
 .. _provsql-synchronous-commit:
 

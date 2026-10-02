@@ -67,6 +67,16 @@ void provsql_check_memory(void);
  *        tool's memory is counted against the same budget, added to this.
  */
 size_t provsql_memory_used(void);
+
+/**
+ * @brief Stop the evaluation at a resource limit (@c provsql.max_memory,
+ *        @c provsql.max_worlds): throws, like a cancel, after recording the
+ *        limit, which @c provsql_cancel_if_interrupted then raises as a
+ *        @c program_limit_exceeded error (54000) with @p tag on its DETAIL
+ *        line and @p hint as its HINT, instead of an internal error.
+ */
+void provsql_limit_exceeded(const char *tag, const char *message,
+                            const char *hint);
 }
 
 /**

@@ -74,7 +74,7 @@ BEGIN
 EXCEPTION
   WHEN query_canceled THEN
     RAISE EXCEPTION 'expected the memory limit, got the statement_timeout';
-  WHEN OTHERS THEN
+  WHEN program_limit_exceeded THEN
     IF SQLERRM LIKE '%external tool%provsql.max_memory%' THEN
       RAISE NOTICE 'external tool stopped by provsql.max_memory';
     ELSE

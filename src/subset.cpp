@@ -40,10 +40,12 @@ extern int provsql_max_worlds;
 void check_world_count(std::size_t count)
 {
   if (provsql_max_worlds > 0 && count > (std::size_t)provsql_max_worlds)
-    throw CircuitException(
-      "a condition on an aggregate of a group needs more than "
-      "provsql.max_worlds (" + std::to_string(provsql_max_worlds) +
-      ") of its possible worlds enumerated");
+    provsql_limit_exceeded(
+      "world-limit",
+      ("a condition on an aggregate of a group needs more than "
+       "provsql.max_worlds (" + std::to_string(provsql_max_worlds) +
+       ") of its possible worlds enumerated").c_str(),
+      "Raise provsql.max_worlds, or set it to 0 for no limit.");
 }
 
 namespace {

@@ -6,7 +6,11 @@ create_provenance_mapping
 
 (1 row)
 NOTICE:  sr_formula cancelled
-NOTICE:  ProvSQL: provenance_evaluate_compiled: the evaluation used more memory than provsql.max_memory (50 MB)
+NOTICE:  ProvSQL: the evaluation used more memory than provsql.max_memory (50 MB) / provsql-reason: memory-limit; scope: deliberate / Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or set it to 0 for no limit.
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: a condition on an aggregate of a group needs more than provsql.max_worlds (100) of its possible worlds enumerated / provsql-reason: world-limit; scope: deliberate / Raise provsql.max_worlds, or set it to 0 for no limit.
 remove_provenance
 
 (1 row)
