@@ -236,3 +236,33 @@ def test_changes_inside_a_transaction(temporal_client, temporal_dsn):
     (bob,) = rows["bob"]
     assert cid["lower"] is not None and cid["upper"] is None
     assert bob["lower"] is None and bob["upper"] is not None
+
+
+def test_relation_picker_offers_plain_tracked_table(temporal_client, temporal_dsn):
+    """A tracked table with no validity column of its own -- its history is
+    in update_provenance -- is offered as a relation, and its timeline comes
+    from the default mapping: the row inserted under update_provenance
+    from its insert, the one deleted up to its delete, the others always."""
+    import psycopg
+    with psycopg.connect(temporal_dsn) as conn:
+        conn.execute("SET search_path = public, provsql")
+        conn.execute("CREATE TABLE plain_tracked (name text)")
+        conn.execute("INSERT INTO plain_tracked VALUES ('ann'), ('bob')")
+        conn.execute("SELECT add_provenance('plain_tracked')")
+        conn.commit()
+        conn.execute("SET provsql.update_provenance = on")
+        conn.execute("INSERT INTO plain_tracked VALUES ('cid')")
+        conn.commit()
+        conn.execute("DELETE FROM plain_tracked WHERE name = 'bob'")
+        conn.commit()
+    rels = temporal_client.get("/api/temporal_relations").get_json()
+    assert "plain_tracked" in {r["qname"] for r in rels}
+    d = _temporal(temporal_client, source="relation",
+                  relation="plain_tracked", timeop="full")
+    assert d.status_code == 200, d.get_json()
+    rows = {r["cells"][0]: r["valid_time"] for r in d.get_json()["result"]}
+    assert _years(rows["ann"]) == [(None, None)]
+    (cid,) = rows["cid"]
+    (bob,) = rows["bob"]
+    assert cid["lower"] is not None and cid["upper"] is None
+    assert bob["lower"] is None and bob["upper"] is not None

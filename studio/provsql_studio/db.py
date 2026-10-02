@@ -1901,8 +1901,10 @@ def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
     The time-travel SRFs (`timeslice` / `timetravel` / `history`) run over any
     provenance-tracked relation -- a table with `add_provenance`, or a view /
     materialised view that projects such tables (CS4's `person_position`). We
-    surface, from non-system / non-ProvSQL schemas, relations that either carry
-    a `tstzmultirange` column (the validity convention) or are a view / matview.
+    surface, from non-system / non-ProvSQL schemas, the tracked tables (a
+    `provsql` uuid column: their history is in `update_provenance`, which the
+    default mapping reads), the tables that carry a `tstzmultirange` column
+    (the validity convention), and the views / matviews.
     Provenance mappings (the `(provenance, value <multirange>)` shape made by
     `create_provenance_mapping`) are excluded -- they belong in the mapping
     picker, not as relations to inspect.
@@ -1919,7 +1921,9 @@ def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
             OR EXISTS (
               SELECT 1 FROM pg_attribute a
               WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-                AND a.atttypid = 'pg_catalog.tstzmultirange'::regtype
+                AND (a.atttypid = 'pg_catalog.tstzmultirange'::regtype
+                     OR (a.attname = 'provsql'
+                         AND a.atttypid = 'uuid'::regtype))
             )
           )
           AND NOT (
