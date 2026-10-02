@@ -49,7 +49,9 @@ inconsistent:
 
   The block counterpart is :sqlfunc:`replace_block`, which re-mints a
   whole :sqlfunc:`repair_key` block, and :sqlfunc:`replace_update`, which
-  gives a recorded data modification a different probability.
+  gives a recorded data modification a different probability (the
+  modification keeps its time, so a temporal reading of the table does
+  not change).
 
 * **Per-relation metadata follows the transaction.** A rolled-back
   :sqlfunc:`add_provenance` leaves no record; a rolled-back ``DROP TABLE``

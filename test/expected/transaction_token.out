@@ -48,3 +48,15 @@ REPLACE
 id|v|formula
 3|c|c ⊖ 𝟙
 (1 row)
+replacement_keeps_validity
+t
+(1 row)
+undone
+t
+(1 row)
+provsql.update_provenance
+off
+(1 row)
+provsql.update_provenance
+off
+(1 row)

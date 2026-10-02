@@ -578,7 +578,8 @@ DECLARE
 BEGIN
   UPDATE update_provenance
      SET ts = now_ts,
-         valid_time = CASE WHEN query_type = 'TRANSACTION' THEN valid_time
+         valid_time = CASE WHEN query_type IN ('TRANSACTION', 'REPLACE')
+                           THEN valid_time
                            ELSE tstzmultirange(tstzrange(now_ts, NULL)) END
    WHERE provsql = NEW.provsql;
   RETURN NULL;
@@ -639,10 +640,10 @@ BEGIN
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_times(old_token, insert_token);
-    PERFORM set_config('provsql.update_provenance', 'off', false);
+    PERFORM set_config('provsql.update_provenance', 'off', true);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('provsql.update_provenance', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'on', true);
   END LOOP;
 
   RETURN NULL;
@@ -687,18 +688,18 @@ BEGIN
   -- the transaction it belongs to, so undo() can reverse either.
   delete_token := provenance_times(tx_token, delete_token);
 
-  PERFORM set_config('provsql.update_provenance', 'off', false);
+  PERFORM set_config('provsql.update_provenance', 'off', true);
   EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
-  PERFORM set_config('provsql.update_provenance', 'on', false);
+  PERFORM set_config('provsql.update_provenance', 'on', true);
 
   FOR r IN (SELECT * FROM OLD_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_monus(old_token, delete_token);
 
-    PERFORM set_config('provsql.update_provenance', 'off', false);
+    PERFORM set_config('provsql.update_provenance', 'off', true);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('provsql.update_provenance', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'on', true);
   END LOOP;
 
   RETURN NULL;
@@ -747,24 +748,24 @@ BEGIN
     old_token := r.provsql;
     new_token := provenance_times(old_token, update_token);
 
-    PERFORM set_config('provsql.update_provenance', 'off', false);
+    PERFORM set_config('provsql.update_provenance', 'off', true);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('provsql.update_provenance', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'on', true);
   END LOOP;
 
-  PERFORM set_config('provsql.update_provenance', 'off', false);
+  PERFORM set_config('provsql.update_provenance', 'off', true);
   EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
-  PERFORM set_config('provsql.update_provenance', 'on', false);
+  PERFORM set_config('provsql.update_provenance', 'on', true);
 
   FOR r IN (SELECT * FROM OLD_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_monus(old_token, update_token);
 
-    PERFORM set_config('provsql.update_provenance', 'off', false);
+    PERFORM set_config('provsql.update_provenance', 'off', true);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('provsql.update_provenance', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'on', true);
   END LOOP;
 
   RETURN NULL;
@@ -815,6 +816,94 @@ END;
 $$;
 $sql$;
   EXECUTE $sql$
+CREATE OR REPLACE FUNCTION undo(
+  c uuid
+)
+RETURNS uuid
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  undo_query text;
+  undone_query text;
+  undo_token uuid;
+  schema_rec RECORD;
+  table_rec RECORD;
+  row_rec RECORD;
+  new_x uuid;
+  tracking text := current_setting('provsql.update_provenance');
+BEGIN
+  -- Test for the row, not for its query text: a TRANSACTION row has no
+  -- query of its own, and undoing a whole transaction is exactly what it
+  -- is there for.
+  SELECT query INTO undone_query
+  FROM update_provenance
+  WHERE provsql = c
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE NOTICE 'Unable to find % in update_provenance', c;
+    RETURN c;
+  END IF;
+
+  SELECT query
+  INTO undo_query
+  FROM pg_stat_activity
+  WHERE pid = pg_backend_pid();
+
+  undo_token := public.uuid_generate_v4();
+  PERFORM create_gate(undo_token, 'update');
+  INSERT INTO update_provenance(provsql, query, query_type, username, ts,
+                                valid_time, xid, tx_token)
+  VALUES (
+    undo_token,
+    undo_query,
+    'UNDO',
+    current_user,
+    CURRENT_TIMESTAMP,
+    tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)),
+    pg_current_xact_id(),
+    transaction_token()
+  );
+
+  -- Off for the rewriting below, then back to what it was, for this
+  -- transaction only: a session-level change would outlive it.
+  PERFORM set_config('provsql.update_provenance', 'off', true);
+
+  FOR schema_rec IN
+    SELECT nspname
+    FROM pg_namespace
+    WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast','pg_temp_1','pg_toast_temp_1')
+  LOOP
+    FOR table_rec IN
+      EXECUTE format('SELECT tablename AS tname FROM pg_tables WHERE schemaname = %L', schema_rec.nspname)
+    LOOP
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = schema_rec.nspname
+          AND table_name = table_rec.tname
+          AND table_name <> 'update_provenance'
+          AND column_name = 'provsql'
+      ) THEN
+        FOR row_rec IN
+          EXECUTE format('SELECT provsql AS x FROM %I.%I', schema_rec.nspname, table_rec.tname)
+        LOOP
+          new_x := replace_the_circuit(row_rec.x, c, undo_token);
+          EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2',
+                         schema_rec.nspname, table_rec.tname)
+          USING new_x, row_rec.x;
+        END LOOP;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  PERFORM set_config('provsql.update_provenance', tracking, true);
+
+  RETURN undo_token;
+END;
+$$;
+$sql$;
+  EXECUTE $sql$
 CREATE OR REPLACE FUNCTION replace_update(
   old uuid,
   p double precision
@@ -829,6 +918,7 @@ DECLARE
   table_rec RECORD;
   row_rec RECORD;
   new_x uuid;
+  tracking text := current_setting('provsql.update_provenance');
 BEGIN
   IF old IS NULL OR p IS NULL THEN
     RAISE EXCEPTION 'replace_update: neither argument may be NULL';
@@ -851,10 +941,14 @@ BEGIN
                                 valid_time, xid, tx_token)
   VALUES (new_token, old_row.query, 'REPLACE', current_user,
           CURRENT_TIMESTAMP,
-          tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)),
+          -- The modification keeps its time: only its probability changes,
+          -- and the rows will carry the new gate in place of the old one.
+          old_row.valid_time,
           pg_current_xact_id(), transaction_token());
 
-  PERFORM set_config('provsql.update_provenance', 'off', false);
+  -- Off for the rewriting below, then back to what it was, for this
+  -- transaction only: a session-level change would outlive it.
+  PERFORM set_config('provsql.update_provenance', 'off', true);
 
   FOR schema_rec IN
     SELECT nspname
@@ -886,7 +980,7 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  PERFORM set_config('provsql.update_provenance', 'on', false);
+  PERFORM set_config('provsql.update_provenance', tracking, true);
 
   RETURN new_token;
 END;

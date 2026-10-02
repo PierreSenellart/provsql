@@ -86,6 +86,28 @@ SELECT query_type FROM update_provenance WHERE provsql = :'new_update'::uuid;
 -- Row 3 still reads as deleted, now through the replacement gate.
 SELECT id, v, sr_formula(provsql, 'tt_map') AS formula
   FROM tt_e WHERE id = 3 ORDER BY v;
+-- Only the probability changes: the replacement keeps the time of the
+-- modification it replaces, so the timeline does not move.
+SELECT (SELECT valid_time FROM update_provenance
+         WHERE provsql = :'new_update'::uuid)
+     = (SELECT valid_time FROM update_provenance
+         WHERE provsql = :'del3'::uuid) AS replacement_keeps_validity;
+SET provsql.active = on;
+
+-- undo() and replace_update() switch provsql.update_provenance off while
+-- they rewrite the rows, then back to what it was: off stays off.
+SET provsql.update_provenance = off;
+SELECT undo(:'new_update'::uuid) IS NOT NULL AS undone;
+SHOW provsql.update_provenance;
+
+-- The statement triggers do the same switching, which leaves a SET LOCAL
+-- local: tracking does not outlive the transaction that asked for it.
+BEGIN;
+SET LOCAL provsql.update_provenance = on;
+INSERT INTO tt_e VALUES (4, 'd');
+COMMIT;
+SHOW provsql.update_provenance;
+SET provsql.active = off;
 
 DELETE FROM update_provenance;
 SET provsql.update_provenance = off;
