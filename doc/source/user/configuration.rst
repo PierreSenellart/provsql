@@ -230,11 +230,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     moment, a sample, Shapley values...) may add to the backend: once its
     resident memory has grown by more than this since the statement's
     first evaluation, the evaluation stops with an error, as it does on a
-    cancel or a ``statement_timeout``. The check is periodic, so the
-    budget can be exceeded by what is allocated between two checks;
-    external tools such as ``d4`` run in processes of their own and are
-    not counted. Available on Linux, macOS and FreeBSD; elsewhere the
-    setting has no effect. Example: ``SET provsql.max_memory = '1GB'``.
+    cancel or a ``statement_timeout``. An external tool it runs (``d4``,
+    ``c2d``...), with the processes the tool forks, is counted with that
+    growth, and stopped once the two together exceed the budget. The
+    check is periodic, so the budget can be exceeded by what is allocated
+    between two checks. Available on Linux, macOS and FreeBSD; elsewhere
+    the setting has no effect. Example: ``SET provsql.max_memory = '1GB'``.
 
 .. _provsql-max-worlds:
 

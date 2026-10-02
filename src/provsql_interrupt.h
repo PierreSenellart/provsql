@@ -60,6 +60,13 @@ extern unsigned provsql_poll_count;
  *        resident memory grow by more than @c provsql.max_memory.
  */
 void provsql_check_memory(void);
+
+/**
+ * @brief How much the backend's resident memory has grown since the first
+ *        evaluation of the statement, in bytes (0 before it).  An external
+ *        tool's memory is counted against the same budget, added to this.
+ */
+size_t provsql_memory_used(void);
 }
 
 /**

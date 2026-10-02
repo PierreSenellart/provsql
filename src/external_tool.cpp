@@ -20,7 +20,10 @@ extern "C" {
 }
 
 #include "external_tool.h"
+#include "Circuit.h"
 #include "ToolRegistry.h"
+#include "process_memory.h"
+#include "provsql_interrupt.h"
 #include "provsql_config.h"
 
 #include <string>
@@ -54,6 +57,10 @@ static const char *DEFAULT_PATH =
  * forked workers.  The pending interrupt is then raised by the
  * @c CHECK_FOR_INTERRUPTS() in @c run_external_tool, with the child reaped.
  */
+/** Set by @c run_in_own_pgroup when it killed a tool that took the
+ *  statement past @c provsql.max_memory. */
+static bool tool_memory_exceeded = false;
+
 static int run_in_own_pgroup(const std::string &cmdline)
 {
 #ifdef PROVSQL_NO_SUBPROCESS
@@ -83,6 +90,7 @@ static int run_in_own_pgroup(const std::string &cmdline)
   setpgid(child, child);
 
   int status = 0;
+  unsigned polls = 0;
   for (;;) {
     pid_t w = waitpid(child, &status, WNOHANG);
     if (w == child)
@@ -102,6 +110,19 @@ static int run_in_own_pgroup(const std::string &cmdline)
       killpg(child, SIGKILL);
       pid_t r;
       do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
+      break;
+    }
+    /* provsql.max_memory: every 100 ms, the resident memory of the tool and
+     * of the processes it forked (its process group), with what the
+     * statement's evaluations have added to the backend; past the budget,
+     * the group is killed as on a cancel. */
+    if (provsql_max_memory > 0 && ++polls % 10 == 0 &&
+        provsql_memory_used() + provsql_process_group_rss(child) >
+          (std::size_t)provsql_max_memory * 1024 * 1024) {
+      killpg(child, SIGKILL);
+      pid_t r;
+      do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
+      tool_memory_exceeded = true;
       break;
     }
     pg_usleep(10000);                 /* 10 ms; an arriving signal wakes us via EINTR */
@@ -128,6 +149,7 @@ int run_external_tool(const std::string &cmdline) {
     setenv("PATH", new_path.c_str(), 1);
   }
 
+  tool_memory_exceeded = false;
   int rv = run_in_own_pgroup(cmdline);
 
   if (override_path) {
@@ -143,6 +165,13 @@ int run_external_tool(const std::string &cmdline) {
    * masked by a downstream "tool killed by signal" error.  A no-op when no
    * interrupt is pending. */
   CHECK_FOR_INTERRUPTS();
+
+  if (tool_memory_exceeded) {
+    tool_memory_exceeded = false;
+    throw CircuitException(
+      "an external tool took the evaluation past provsql.max_memory (" +
+      std::to_string(provsql_max_memory) + " MB) and was stopped");
+  }
 
   return rv;
 }

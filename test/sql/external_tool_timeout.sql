@@ -57,6 +57,33 @@ END $$;
 
 RESET statement_timeout;
 RESET provsql.tool_search_path;
+
+-- provsql.max_memory counts an external tool: a fake "d4" that builds a
+-- 128 MB string, then waits, is stopped once its process group takes the
+-- statement past 50 MB, with an error naming the setting (the 10s
+-- statement_timeout only guards the test).
+\! mkdir -p /tmp/provsql_extcancel/mem && printf '#!/bin/sh\nexec awk '"'"'BEGIN{s="a"; for(i=0;i<27;i++) s=s s; system("sleep 30")}'"'"'\n' > /tmp/provsql_extcancel/mem/d4 && chmod 755 /tmp/provsql_extcancel/mem /tmp/provsql_extcancel/mem/d4
+SET provsql.tool_search_path = '/tmp/provsql_extcancel/mem';
+SET provsql.max_memory = '50MB';
+SET statement_timeout = '10s';
+DO $$
+BEGIN
+  PERFORM probability_evaluate(provenance(), 'compilation', 'd4')
+    FROM (SELECT a.x FROM extc a, extc b WHERE a.x <> b.x GROUP BY a.x) q;
+  RAISE EXCEPTION 'expected the external tool to be stopped, but the query completed';
+EXCEPTION
+  WHEN query_canceled THEN
+    RAISE EXCEPTION 'expected the memory limit, got the statement_timeout';
+  WHEN OTHERS THEN
+    IF SQLERRM LIKE '%external tool%provsql.max_memory%' THEN
+      RAISE NOTICE 'external tool stopped by provsql.max_memory';
+    ELSE
+      RAISE;
+    END IF;
+END $$;
+RESET statement_timeout;
+RESET provsql.max_memory;
+RESET provsql.tool_search_path;
 SELECT remove_provenance('extc');
 DROP TABLE extc;
 \else

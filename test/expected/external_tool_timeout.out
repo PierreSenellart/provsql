@@ -3,6 +3,7 @@ add_provenance
 
 (1 row)
 NOTICE:  hanging external tool interrupted by statement_timeout
+NOTICE:  external tool stopped by provsql.max_memory
 remove_provenance
 
 (1 row)
