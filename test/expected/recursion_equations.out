@@ -77,3 +77,22 @@ NOTICE:  provsql-reason: where-recursive-cycle; scope: out-of-scope
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|hid|path|prob
+22|2|1->2|0.500000
+33|3|1->2->3|0.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

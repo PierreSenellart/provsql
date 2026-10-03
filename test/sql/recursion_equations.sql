@@ -149,3 +149,35 @@ END $$;
 DROP TABLE eq_r, eq_lbl, eq_cost, eq_neg, eq_p, eq_iv, eq_one;
 SELECT remove_provenance('eq_e');
 DROP TABLE eq_e;
+
+-- A recursion over an outer join derives, in some worlds, rows absent from
+-- the database as it is: here the null-padded row of node 2 when its id is
+-- missing, through which node 3 is still reached.  Those rows are tuples of
+-- the recursion as much as the others.  With ids 22 (node 2) and 33 (node 3)
+-- each present at probability 0.5, the row of node 3 holds whenever 33 does:
+-- 0.5, not 0.25, which would wrongly require 22 as well.  (The links are
+-- certain; both tables are tracked, an outer join with the null-padded side
+-- alone tracked being one ProvSQL does not lower.)
+CREATE TABLE eq_link(hid int, parent_hid int);
+INSERT INTO eq_link VALUES (2, 1), (3, 2);
+CREATE TABLE eq_ids(id int, node int);
+INSERT INTO eq_ids VALUES (22, 2), (33, 3);
+SELECT add_provenance('eq_link');
+SELECT add_provenance('eq_ids');
+DO $$ BEGIN PERFORM set_prob(provenance(), 1) FROM eq_link; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eq_ids; END $$;
+CREATE TABLE eq_paths AS
+  WITH RECURSIVE p AS (
+      SELECT id, hid, parent_hid || '->' || hid AS path FROM l WHERE parent_hid = 1
+    UNION
+      SELECT t.id, t.hid, s.path || '->' || t.hid
+      FROM l t JOIN p s ON s.hid = t.parent_hid),
+  l AS (SELECT id, hid, parent_hid FROM eq_link LEFT JOIN eq_ids ON node = hid)
+  SELECT id, hid, path, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM p WHERE id IS NOT NULL;
+SELECT remove_provenance('eq_paths');
+SELECT * FROM eq_paths ORDER BY hid;
+DROP TABLE eq_paths;
+SELECT remove_provenance('eq_link');
+SELECT remove_provenance('eq_ids');
+DROP TABLE eq_link, eq_ids;

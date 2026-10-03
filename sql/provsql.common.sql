@@ -1793,7 +1793,11 @@ CREATE OR REPLACE FUNCTION resolve_fix_system(sys uuid) RETURNS uuid[] AS
  * 3. the CTE body is run once over that table, through ProvSQL's normal
  *    rewriting: the token it gives a tuple is the right-hand side f_t of
  *    its equation, an ordinary circuit over the input tokens and the
- *    unknowns;
+ *    unknowns.  A row this round derives that plain recursion did not --
+ *    absent from the database as it is, present in other worlds, as the
+ *    null-padded row of an outer join -- is a tuple of the recursion too:
+ *    it is added with an unknown of its own, and the round run again,
+ *    until it derives no new row;
  * 4. a @c fixsystem gate gathers the unknowns and the right-hand sides,
  *    and @c resolve_fix_system gives each tuple its token: the ordinary
  *    circuit a fixpoint iteration would reach, for a tuple derived
@@ -1828,6 +1832,11 @@ DECLARE
   seed      uuid := public.uuid_generate_v4();
   active    text := current_setting('provsql.active');
   joincond  text;
+  ncols     text;
+  wcols     text;
+  added     bigint;
+  known     bigint := 0;
+  rounds    int := 0;
   xs        uuid[];
   fs        uuid[];
   sys       uuid;
@@ -1842,36 +1851,68 @@ BEGIN
   EXECUTE format('CREATE TEMP TABLE provsql_rec_new (LIKE %I) ON COMMIT DROP',
                  work_name);
 
-  -- 1-2. The derived tuples, by plain recursion, and one unknown each.
+  -- Match two tables on the text form of the user columns: null-safe
+  -- like IS NOT DISTINCT FROM, but hashable, which a column-wise
+  -- IS NOT DISTINCT FROM is not (it would make this a nested loop).
+  SELECT string_agg('n.' || trim(c), ', '), string_agg('w.' || trim(c), ', ')
+    INTO ncols, wcols
+    FROM unnest(string_to_array(colnames, ',')) AS c;
+  joincond := format('ROW(%s)::text = ROW(%s)::text', ncols, wcols);
+  EXECUTE 'CREATE TEMP TABLE provsql_rec_eq (tid tid, i bigint, x uuid) '
+          'ON COMMIT DROP';
+
+  -- 1. The derived tuples, by plain recursion.
   PERFORM set_config('provsql.active', 'off', true);
   EXECUTE format(
     'INSERT INTO %1$I(%2$s) WITH RECURSIVE %1$I(%2$s) AS (%3$s) '
     'SELECT %2$s FROM %1$I',
     work_name, colnames, body_sql);
-  EXECUTE format(
-    'CREATE TEMP TABLE provsql_rec_eq ON COMMIT DROP AS '
-    'SELECT ctid AS tid, i, public.uuid_generate_v5(%L, ''x'' || i) AS x '
-    'FROM (SELECT ctid, row_number() OVER () AS i FROM %I) t',
-    seed, work_name);
-  EXECUTE format(
-    'UPDATE %I w SET provsql = e.x FROM provsql_rec_eq e WHERE w.ctid = e.tid',
-    work_name);
-  PERFORM provsql.create_gate(x, 'fixvar') FROM provsql_rec_eq;
-  PERFORM set_config('provsql.active', active, true);
 
-  -- 3. One round over the unknowns: each tuple's right-hand side.
-  EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, body_sql);
+  LOOP
+    -- 2. One unknown for each tuple that has none yet.
+    PERFORM set_config('provsql.active', 'off', true);
+    EXECUTE format(
+      'INSERT INTO provsql_rec_eq '
+      'SELECT ctid, %2$s + i, public.uuid_generate_v5(%1$L, ''x'' || (%2$s + i)) '
+      'FROM (SELECT ctid, row_number() OVER () AS i FROM %3$I '
+      '      WHERE provsql IS NULL) t',
+      seed, known, work_name);
+    EXECUTE format(
+      'UPDATE %I w SET provsql = e.x FROM provsql_rec_eq e '
+      'WHERE w.ctid = e.tid AND w.provsql IS NULL',
+      work_name);
+    PERFORM provsql.create_gate(e.x, 'fixvar')
+      FROM provsql_rec_eq e WHERE e.i > known;
+    SELECT coalesce(max(i), 0) INTO known FROM provsql_rec_eq;
+    PERFORM set_config('provsql.active', active, true);
+
+    -- 3. One round over the unknowns: each tuple's right-hand side.
+    EXECUTE 'TRUNCATE provsql_rec_new';
+    EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, body_sql);
+
+    -- The round may derive rows plain recursion does not: a row that is
+    -- absent from the database as it is but present in other worlds, which
+    -- ProvSQL keeps for its provenance (the null-padded row of an outer
+    -- join, ...).  Those are tuples of the recursion too, with equations of
+    -- their own, and what derives from them as well: add them and run the
+    -- round again, until it derives no new row.  With no such row, which is
+    -- the usual case, the round runs once.
+    PERFORM set_config('provsql.active', 'off', true);
+    EXECUTE format(
+      'INSERT INTO %1$I(%2$s) SELECT %3$s FROM provsql_rec_new n '
+      'WHERE NOT EXISTS (SELECT 1 FROM %1$I w WHERE %4$s)',
+      work_name, colnames, ncols, joincond);
+    GET DIAGNOSTICS added = ROW_COUNT;
+    EXIT WHEN added = 0;
+    rounds := rounds + 1;
+    IF rounds > 100000 THEN
+      RAISE EXCEPTION 'ProvSQL: the rows this recursion derives in other '
+                      'worlds than the database as it is do not stop '
+                      'growing';
+    END IF;
+  END LOOP;
 
   -- 4. The system, and each tuple's component of its solution.
-  PERFORM set_config('provsql.active', 'off', true);
-  -- Match the two tables on the text form of the user columns: null-safe
-  -- like IS NOT DISTINCT FROM, but hashable, which a column-wise
-  -- IS NOT DISTINCT FROM is not (it would make this a nested loop).
-  SELECT format('ROW(%s)::text = ROW(%s)::text',
-                string_agg('n.' || trim(c), ', '),
-                string_agg('w.' || trim(c), ', '))
-    INTO joincond
-    FROM unnest(string_to_array(colnames, ',')) AS c;
   EXECUTE format(
     'SELECT array_agg(e.x ORDER BY e.i), '
     'array_agg(coalesce(n.provsql, provsql.gate_zero()) ORDER BY e.i) '
