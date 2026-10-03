@@ -91,7 +91,8 @@ Datum text_datum(const std::string &s) {
 Datum to_datum(const semiring::Boolean &, bool v)         { return BoolGetDatum(v); }
 Datum to_datum(const semiring::Counting &, unsigned v) {
   if(v == semiring::Counting::INFINITE)
-    throw CircuitException(
+    throw CircuitRefusal(
+            PROVSQL_DELIBERATE, "recursion-infinite-count",
             "This tuple has infinitely many derivations (it is derived "
             "through a cycle of its recursive query), which an integer "
             "count cannot represent.");
@@ -170,7 +171,14 @@ void fixpoint_cache_store(const GenericCircuit &c, const Sem &sr)
     for(std::size_t i = 0; i < vec.size(); ++i) {
       const std::string tok =
         uuid2string(provsqlUuidV5(prefix + std::to_string(i + 1)));
-      Datum d = to_datum(sr, vec[i]);
+      /* A component with no value in the result type (an infinite count)
+       * is not cached: the row reading it is refused on its own. */
+      Datum d;
+      try {
+        d = to_datum(sr, vec[i]);
+      } catch(const CircuitException &) {
+        continue;
+      }
       MemoryContext old = MemoryContextSwitchTo(fixpoint_cache_cxt);
       d = datumCopy(d, fixpoint_cache_typbyval, fixpoint_cache_typlen);
       MemoryContextSwitchTo(old);
@@ -491,6 +499,9 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
     Oid type = get_fn_expr_argtype(fcinfo->flinfo, 3);
 
     return provenance_evaluate_compiled_internal(*DatumGetUUIDP(token), table, semiring, type);
+  } catch(const CircuitRefusal &r) {
+    provsql_cancel_if_interrupted();
+    provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
   } catch(const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("provenance_evaluate_compiled: %s", e.what());

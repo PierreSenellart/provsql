@@ -82,25 +82,29 @@ SELECT n, sr_tropical(tok, 'eq_neg') AS min_cost_negative FROM eq_r ORDER BY n;
 SELECT n, sr_why(tok, 'eq_lbl') AS why, sr_which(tok, 'eq_lbl') AS which
 FROM eq_r WHERE n = 2;
 -- Counting: every row has infinitely many derivations, which an integer
--- count cannot hold.
+-- count cannot hold.  A deliberate refusal: SQLSTATE 0A000, tagged.
 DO $$
-DECLARE r record; c text;
+DECLARE r record; c text; d text;
 BEGIN
   FOR r IN SELECT n, tok FROM eq_r ORDER BY n LOOP
     BEGIN
       c := sr_counting(r.tok, 'eq_one')::text;
-    EXCEPTION WHEN OTHERS THEN c := 'count refused';
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+      c := 'count refused, ' || SQLSTATE || ' / ' || coalesce(d, 'untagged');
     END;
     RAISE NOTICE 'node %: %', r.n, c;
   END LOOP;
 END $$;
--- How-provenance (formal power series) has no finite value: refused.
+-- How-provenance (formal power series) has no finite value: refused, tagged.
 DO $$
+DECLARE d text;
 BEGIN
   PERFORM sr_how(tok, 'eq_lbl') FROM eq_r WHERE n = 2;
   RAISE NOTICE 'how-provenance was not refused';
 EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'how-provenance refused';
+  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+  RAISE NOTICE 'how-provenance refused, % / %', SQLSTATE, coalesce(d, 'untagged');
 END $$;
 
 -- The equations themselves: three unknowns, one per row of the cycle, and

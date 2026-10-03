@@ -56,11 +56,11 @@ n|min_cost_negative
 n|why|which
 2|{{a},{a,b,c},{a,b,c,e},{a,c,e}}|{a,b,c,e}
 (1 row)
-NOTICE:  node 1: count refused
-NOTICE:  node 2: count refused
-NOTICE:  node 3: count refused
-NOTICE:  node 4: count refused
-NOTICE:  how-provenance refused
+NOTICE:  node 1: count refused, 0A000 / provsql-reason: recursion-infinite-count; scope: deliberate
+NOTICE:  node 2: count refused, 0A000 / provsql-reason: recursion-infinite-count; scope: deliberate
+NOTICE:  node 3: count refused, 0A000 / provsql-reason: recursion-infinite-count; scope: deliberate
+NOTICE:  node 4: count refused, 0A000 / provsql-reason: recursion-infinite-count; scope: deliberate
+NOTICE:  how-provenance refused, 0A000 / provsql-reason: recursion-cycle-no-value; scope: deliberate
 n|reads_unknowns|equations
 1|t|3
 2|t|3

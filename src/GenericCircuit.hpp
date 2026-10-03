@@ -612,7 +612,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       for(const auto &c : getWires(u)) {
         if(dep.at(c)) {
           if(var != u)
-            throw CircuitException(
+            throw CircuitRefusal(
+                    PROVSQL_GAP, "recursion-nonlinear",
                     "This recursion's equations are not linear: a product "
                     "has two factors depending on the recursive relation");
           var = c;
@@ -652,7 +653,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       break;
 
     default:
-      throw CircuitException(
+      throw CircuitRefusal(
+              PROVSQL_GAP, "recursion-nonlinear",
               std::string("This recursion's equations are not linear "
                           "semiring expressions in the recursive relation "
                           "(gate of type ") + gate_type_name[t] +
@@ -745,7 +747,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
 
     if(!semiring.absorptive()) {
       if(!semiring.has_star())
-        throw CircuitException(
+        throw CircuitRefusal(
+                PROVSQL_DELIBERATE, "recursion-cycle-no-value",
                 "This recursion's equations are cyclic (a tuple is derived "
                 "through itself), and the requested semiring is neither "
                 "absorptive nor gives the sum of the powers of a value: the "

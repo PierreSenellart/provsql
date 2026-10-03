@@ -223,6 +223,38 @@ virtual char const * what() const noexcept {
 };
 
 /**
+ * @brief A refusal by design, or a known gap, rather than an error.
+ *
+ * Reported to the client as a ProvSQL refusal (SQLSTATE @c 0A000, with a
+ * @c provsql-reason tag and its scope; see @c provsql_unsupported), so
+ * that tooling can tell it from an internal fault.
+ */
+class CircuitRefusal : public CircuitException
+{
+const char *scope_; ///< @c PROVSQL_DELIBERATE, @c PROVSQL_GAP, ...
+const char *tag_;   ///< Stable short tag of the refusal
+
+public:
+/**
+ * @brief Construct a refusal.
+ * @param scope  Its kind (@c PROVSQL_DELIBERATE, @c PROVSQL_GAP, ...).
+ * @param tag    Its stable short tag.
+ * @param m      The message a user reads.
+ */
+CircuitRefusal(const char *scope, const char *tag, const std::string &m)
+  : CircuitException(m), scope_(scope), tag_(tag) {
+}
+/** @brief The kind of the refusal. */
+const char *scope() const noexcept {
+  return scope_;
+}
+/** @brief The tag of the refusal. */
+const char *tag() const noexcept {
+  return tag_;
+}
+};
+
+/**
  * @brief Pre-increment operator for @c gate_t.
  * @param g  Gate to increment.
  * @return   Reference to the incremented gate.
