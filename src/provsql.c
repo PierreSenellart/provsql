@@ -9487,6 +9487,32 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           free_parsestate(pstate);
         }
 
+        if (!aggregation && OidIsValid(constants->OID_FUNCTION_GATE_ZERO) &&
+            OidIsValid(constants->OID_OPERATOR_NOT_EQUAL_UUID)) {
+          /* A selection on aggregate values at a level that does not
+           * aggregate keeps its rows, annotated by the comparison.  Those
+           * whose comparison provenance_cmp finds false in every world (a
+           * rank compared with itself shifted) are dropped here, as rows
+           * holding in no world may be: evaluating the rest of the query on
+           * them could raise where SQL, which never sees them, does not. */
+          OpExpr *nonzero = makeNode(OpExpr);
+          FuncExpr *zero = makeNode(FuncExpr);
+
+          zero->funcid = constants->OID_FUNCTION_GATE_ZERO;
+          zero->funcresulttype = constants->OID_TYPE_UUID;
+          zero->location = -1;
+          nonzero->opno = constants->OID_OPERATOR_NOT_EQUAL_UUID;
+          nonzero->opfuncid = get_opcode(nonzero->opno);
+          nonzero->opresulttype = BOOLOID;
+          nonzero->args = list_make2(copyObject(cmp), zero);
+          nonzero->location = -1;
+          q->jointree->quals = q->jointree->quals == NULL
+            ? (Node *) nonzero
+            : (Node *) makeBoolExpr(AND_EXPR,
+                                    list_make2(q->jointree->quals, nonzero),
+                                    -1);
+        }
+
         if (!aggregation && !group_by_rewrite && op == SR_TIMES &&
             prov_atts != NIL) {
           /* The row tokens carry the delta; supersede it only when licensed,
@@ -15176,6 +15202,99 @@ static bool count_cte_refs_walker(Node *node, void *cx) {
     return r;
   }
   return expression_tree_walker(node, count_cte_refs_walker, cx);
+}
+
+/**
+ * @brief The constant 0 of the built-in numeric type @p type, or @c NULL.
+ */
+static Const *numeric_zero(Oid type) {
+  switch (type) {
+  case INT2OID:
+    return makeConst(INT2OID, -1, InvalidOid, 2, Int16GetDatum(0), false, true);
+  case INT4OID:
+    return makeConst(INT4OID, -1, InvalidOid, 4, Int32GetDatum(0), false, true);
+  case INT8OID:
+    return makeConst(INT8OID, -1, InvalidOid, 8, Int64GetDatum(0), false,
+                     FLOAT8PASSBYVAL);
+  case FLOAT4OID:
+    return makeConst(FLOAT4OID, -1, InvalidOid, 4, Float4GetDatum(0), false,
+                     true);
+  case FLOAT8OID:
+    return makeConst(FLOAT8OID, -1, InvalidOid, 8, Float8GetDatum(0), false,
+                     FLOAT8PASSBYVAL);
+  case NUMERICOID:
+    return makeConst(NUMERICOID, -1, InvalidOid, -1,
+                     DirectFunctionCall1(int4_numeric, Int32GetDatum(0)),
+                     false, false);
+  default:
+    return NULL;
+  }
+}
+
+/**
+ * @brief Walker: make every built-in division total, @c a/b becoming
+ *        @c a/NULLIF(b,0), and likewise for @c %.
+ *
+ * The rewriting keeps rows that plain SQL never computes: those whose
+ * presence is only a matter of provenance (a selection on aggregate values,
+ * the padding of an outer join, ...), absent from the database as it is and
+ * possibly present in no world.  The query's expressions are evaluated on
+ * them all the same, and a division by zero there would fail a query SQL
+ * answers.  An error in one world is not an answer for the others: as in
+ * the semantics, where a function undefined on its arguments is NULL, a
+ * division by zero gives NULL.  Where SQL itself divides by zero on the
+ * database as it is, it fails and the semantics says nothing; the NULL
+ * given there is one of the answers it allows.
+ *
+ * Only the operators of @c pg_catalog over the built-in numeric types are
+ * rewritten; ProvSQL's own operators over aggregate values are left as they
+ * are.  The divisor is evaluated once, as before.  A walker, changing each
+ * division where it stands: the rewritten tree has nodes reachable from
+ * several places, which a copying mutator would separate.
+ */
+static bool total_division_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *) node, total_division_walker, cx, 0);
+  if (expression_tree_walker(node, total_division_walker, cx))
+    return true;
+  if (IsA(node, OpExpr)) {
+    OpExpr *op = (OpExpr *) node;
+    char *name;
+    Node *divisor;
+    Oid type;
+    Const *zero;
+
+    if (list_length(op->args) != 2)
+      return false;
+    name = get_opname(op->opno);
+    if (name == NULL || (strcmp(name, "/") != 0 && strcmp(name, "%") != 0))
+      return false;
+    if (get_func_namespace(op->opfuncid) != PG_CATALOG_NAMESPACE)
+      return false;
+    divisor = lsecond(op->args);
+    if (IsA(divisor, NullIfExpr))
+      return false;
+    type = exprType(divisor);
+    zero = numeric_zero(type);
+    if (zero != NULL) {
+      TypeCacheEntry *tc = lookup_type_cache(type, TYPECACHE_EQ_OPR);
+      if (OidIsValid(tc->eq_opr)) {
+        NullIfExpr *nullif = makeNode(NullIfExpr);
+        nullif->opno = tc->eq_opr;
+        nullif->opfuncid = get_opcode(tc->eq_opr);
+        nullif->opresulttype = type;
+        nullif->opretset = false;
+        nullif->opcollid = InvalidOid;
+        nullif->inputcollid = InvalidOid;
+        nullif->args = list_make2(divisor, zero);
+        nullif->location = -1;
+        lsecond(op->args) = nullif;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -35629,6 +35748,8 @@ static PlannedStmt *provsql_planner(Query *q,
       if (matview_fill)
         finish_matview_fill(q, matview_fill_types);
       recount_cte_refs_walker((Node *)q, NULL);
+      if (provsql_active)
+        total_division_walker((Node *) q, NULL);
 #if PG_VERSION_NUM < 130000
       reset_varnoold_walker((Node *)q, NULL);
 #endif

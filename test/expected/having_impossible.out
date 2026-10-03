@@ -129,5 +129,4 @@ q|g|p|is_zero
 evaluator, sum > 6|1|0.0000|t
 evaluator, sum > 6|2|0.0000|t
 evaluator, sum > 6|3|0.5000|f
-evaluator, sum > 6|4|0.0000|t
-(4 rows)
+(3 rows)

@@ -848,6 +848,54 @@ pg_uuid_t provsql_build_delta(const pg_uuid_t *token) {
   return delta;
 }
 
+/**
+ * @brief Is @p sum the gate of @p base plus a nonzero constant?
+ *
+ * The aggregate-value arithmetic builds @c x+c as a @c gate_arith PLUS over
+ * the token of @c x and a @c gate_value; tokens being content-addressed, the
+ * same @c x is the same token.
+ */
+static bool is_shift_of(const pg_uuid_t *sum, const pg_uuid_t *base) {
+  unsigned n = 0, m = 0, info1 = 0, info2 = 0;
+  pg_uuid_t *ch = NULL, *vch = NULL;
+  gate_type t = provsql_fetch_gate(sum, &n, &ch);
+  bool result = false;
+
+  if (t == gate_arith && n == 2) {
+    int k = same_token(&ch[0], base) ? 1 : same_token(&ch[1], base) ? 0 : -1;
+    if (k >= 0) {
+      provsql_internal_get_infos(sum, &info1, &info2);
+      if (info1 == PROVSQL_ARITH_PLUS &&
+          provsql_fetch_gate(&ch[k], &m, &vch) == gate_value) {
+        char *v = provsql_internal_get_extra(&ch[k]);
+        char *end;
+        double c = strtod(v, &end);
+        result = end != v && *end == '\0' && c != 0 && c == c;
+      }
+    }
+  }
+  free(ch);
+  free(vch);
+  return result;
+}
+
+/**
+ * @brief Does @c left @c op @c right hold in no world, by its shape alone?
+ *
+ * Recognised: @c x+c @c = @c x with @c c a nonzero constant, in either order,
+ * the comparison of a row's rank with itself shifted that a self-join on
+ * consecutive ranks builds for each row paired with itself.  Cheap, and
+ * deliberately narrow: a row it rules out is one the rewriting may drop.
+ */
+static bool cmp_impossible(const pg_uuid_t *left, Oid op,
+                           const pg_uuid_t *right) {
+  char *name = get_opname(op);
+
+  if (name == NULL || strcmp(name, "=") != 0)
+    return false;
+  return is_shift_of(left, right) || is_shift_of(right, left);
+}
+
 PG_FUNCTION_INFO_V1(provenance_cmp);
 /**
  * @brief The comparison gate @c left @c op @c right of a HAVING condition.
@@ -867,6 +915,10 @@ Datum provenance_cmp(PG_FUNCTION_ARGS) {
   left = PG_GETARG_UUID_P(0);
   op = PG_GETARG_OID(1);
   right = PG_GETARG_UUID_P(2);
+
+  /* False in every world: 𝟘, which the rewriting's filter on it drops. */
+  if (cmp_impossible(left, op, right))
+    return uuid_result(address_of_zero());
 
   name_begin(&buf, "cmp");
   name_add_uuid(&buf, left);

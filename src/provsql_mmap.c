@@ -1062,6 +1062,31 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_FLOAT8(result);
 }
 
+void provsql_internal_get_infos(const pg_uuid_t *token,
+                                unsigned *info1, unsigned *info2)
+{
+  STARTWRITEM();
+  ADDWRITEM("i", char);
+  ADDWRITEDB();
+  ADDWRITEM(token, pg_uuid_t);
+
+  provsql_shmem_lock_exclusive();
+
+  if(!SENDWRITEM() || !READB(*info1, int) || !READB(*info2, int)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type i)");
+  }
+
+  provsql_shmem_unlock();
+}
+
+char *provsql_internal_get_extra(const pg_uuid_t *token)
+{
+  text *t = DatumGetTextPP(DirectFunctionCall1(get_extra,
+                                               UUIDPGetDatum(token)));
+  return text_to_cstring(t);
+}
+
 PG_FUNCTION_INFO_V1(get_infos);
 /** @brief PostgreSQL-callable wrapper for get_infos(). */
 Datum get_infos(PG_FUNCTION_ARGS)
@@ -1072,19 +1097,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
-  STARTWRITEM();
-  ADDWRITEM("i", char);
-  ADDWRITEDB();
-  ADDWRITEM(token, pg_uuid_t);
-
-  provsql_shmem_lock_exclusive();
-
-  if(!SENDWRITEM() || !READB(info1, int) || !READB(info2, int)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot communicate with pipe (message type i)");
-  }
-
-  provsql_shmem_unlock();
+  provsql_internal_get_infos(token, &info1, &info2);
 
   {
     TupleDesc tupdesc;

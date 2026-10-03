@@ -1,0 +1,36 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|speed
+1|6
+2|5
+(2 rows)
+self_pairs
+0
+(1 row)
+remove_provenance
+
+(1 row)
+x|speed
+1|6
+1|2
+2|5
+(3 rows)
+self_pairs|divided_by_zero_is_null
+3|t
+(1 row)
+remove_provenance
+
+(1 row)
+x|undefined
+1|
+2|
+3|
+(3 rows)
+remove_provenance
+
+(1 row)

@@ -58,6 +58,10 @@ test: scalar_subquery
 test: join_syntax_equivalence
 test: agg_distinct agg_order_by agg_arithmetic agg_functions agg_deviation
 test: window_aggregates
+
+# Rows kept for their provenance alone: dropped where cheaply impossible,
+# and never failing a division SQL does not
+test: phantom_rows
 test: agg_distinct_null_where
 test: agg_distinct_expr
 test: agg_token_casts

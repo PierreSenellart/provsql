@@ -106,7 +106,8 @@ SELECT remove_provenance('hi_s2'); SELECT 'scalar possible' AS q, p FROM hi_s2;
 
 -- The same predicates as a selection on the aggregate column of a subquery
 -- reach the evaluator, which finds them zero: a zero row and an absent row
--- are the same.
+-- are the same.  g=4, whose sum is NULL in every world, gets a comparison that
+-- is the zero gate itself, and its row is dropped.
 CREATE TABLE hi_e AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p,
     sr_formula(provenance()) = '𝟘' AS is_zero
   FROM (SELECT g, sum(x) AS v FROM hi GROUP BY g) t WHERE v > 6;

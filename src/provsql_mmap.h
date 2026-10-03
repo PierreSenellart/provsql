@@ -234,6 +234,17 @@ gate_type provsql_fetch_gate(const pg_uuid_t *token,
                              unsigned *nb_children_out,
                              pg_uuid_t **children_out);
 
+/**
+ * @brief Read a gate's @c info1 and @c info2, through the worker.
+ */
+void provsql_internal_get_infos(const pg_uuid_t *token,
+                                unsigned *info1, unsigned *info2);
+
+/**
+ * @brief Read a gate's @c extra text, through the worker; @c palloc'd.
+ */
+char *provsql_internal_get_extra(const pg_uuid_t *token);
+
 
 #ifdef PROVSQL_INPROCESS_STORE
 
