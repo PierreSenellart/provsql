@@ -196,4 +196,32 @@ DROP TABLE absp_r;
 SELECT remove_provenance('absp_e');
 DROP TABLE absp_e;
 
+-- The value-fixpoint bound (derivable tuples + 1 rounds) may exceed the
+-- driver's round guard: the all-pairs closure of an n-cycle has n^2 tuples.
+-- The guard only applies before the tuple set settles.  Here, on a 2-cycle,
+-- the rows settle at round 3 on 4 tuples, so the loop ends at round 5,
+-- beyond max_iter = 3; the tokens are those of the absorptive value.
+-- Expected: (1,2) 0.5 / 3, (2,1) 0.5 / 4, (1,1) and (2,2) 0.25 / 7.
+CREATE TABLE absg_e(src int, dst int, p float8, cost float8);
+INSERT INTO absg_e VALUES (1,2,0.5,3),(2,1,0.5,4);
+SELECT add_provenance('absg_e');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM absg_e; END $$;
+SELECT create_provenance_mapping('absg_cost', 'absg_e', 'cost');
+BEGIN;
+SELECT provsql.eval_recursive(
+  'SELECT src, dst FROM absg_e UNION SELECT r.a, e.dst FROM absg_e e JOIN absg_pair r ON e.src = r.b',
+  'absg_pair', 'a, b', 'a integer, b integer', 3);
+CREATE TEMP TABLE absg_r AS
+  SELECT a, b, get_extra(provenance()) AS assumption,
+         round(probability_evaluate(provenance())::numeric, 6) AS prob,
+         sr_tropical(provenance(), 'absg_cost', nonnegative => true) AS min_cost
+  FROM absg_pair;
+COMMIT;
+SELECT remove_provenance('absg_r');
+SELECT * FROM absg_r ORDER BY a, b;
+DROP TABLE absg_r;
+SELECT remove_provenance('absg_e');
+DROP TABLE absg_e;
+DROP TABLE absg_cost;
+
 RESET provsql.provenance;

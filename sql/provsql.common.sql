@@ -1766,8 +1766,8 @@ CREATE OR REPLACE FUNCTION plant_canonical(
  * the @c 'absorptive' assumption marker, so that non-absorptive semiring
  * evaluations (counting, why-provenance: genuinely infinite on cyclic data)
  * refuse them while probability, Boolean, formula-as-circuit and min-plus
- * evaluations proceed.  Under the general classes, cyclic input trips the
- * @p max_iter guard.
+ * evaluations proceed.  Under the general classes, cyclic input is refused
+ * at that same bound, its annotation having no value.
  *
  * This function has no @c SET @c search_path on purpose: @p body_sql is the
  * caller's deparsed query and must resolve relation names in the caller's path.
@@ -1777,7 +1777,9 @@ CREATE OR REPLACE FUNCTION plant_canonical(
  * @param work_name  the working relation name @p body_sql references (the CTE name)
  * @param colnames   comma-separated user columns, e.g. @c 'node'
  * @param coldef     column definitions for the working table, e.g. @c 'node integer'
- * @param max_iter   safety bound on fixpoint rounds (non-termination guard)
+ * @param max_iter   safety bound on the rounds before the tuple set settles
+ *                   (non-termination guard); once it has, the value-fixpoint
+ *                   bound ends the loop instead
  */
 CREATE OR REPLACE FUNCTION eval_recursive(
   body_sql  text,
@@ -1831,9 +1833,13 @@ BEGIN
 
   LOOP
     iters := iters + 1;
-    -- Hard safety bound (also catches genuinely unbounded recursion, e.g. an
-    -- unbounded counter, where even the tuple set never stabilises).
-    IF iters > max_iter THEN
+    -- Safety bound on the rounds before the tuple set settles: it catches
+    -- genuinely unbounded recursion, e.g. an unbounded counter, where the
+    -- tuple set never stabilises.  Once it has settled, the loop is bounded
+    -- by the value fixpoint below (ntuples + 1 rounds), which may exceed
+    -- max_iter -- the all-pairs closure of an n-cycle needs n^2 + 1 -- so the
+    -- guard no longer applies.
+    IF ntuples IS NULL AND iters > max_iter THEN
       /* Not even the rows stop changing: the recursion derives tuples without
        * end (an unbounded counter), which SQL does not terminate on either.
        * A recursion whose rows settle while its derivations repeat exits at
