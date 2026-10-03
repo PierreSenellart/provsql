@@ -526,7 +526,6 @@ def _fetch_subgraph(
         )
     out: list[dict] = []
     import psycopg
-    from psycopg import sql as pg_sql
     with pool.connection() as conn, conn.cursor() as cur:
         # Apply panel-managed GUCs (provsql.simplify_on_load, ...) so
         # the user's panel choice controls what
