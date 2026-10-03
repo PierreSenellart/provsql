@@ -145,24 +145,8 @@ SELECT x, n FROM ci_mv3 ORDER BY x;
 RESET provsql.active;
 DROP MATERIALIZED VIEW ci_mv2, ci_mv3;
 
--- ---------------------------------------------------------------
--- (7c) A recursive query over a tracked relation cannot fill a
---     materialized view: its evaluation needs a temporary table,
---     which PostgreSQL forbids while it fills one.  Refused with the
---     cause and the way out, CREATE TABLE AS, which works.
--- ---------------------------------------------------------------
-CREATE MATERIALIZED VIEW ci_mv4 AS
-  WITH RECURSIVE r AS (SELECT x FROM ci_src_a WHERE x = 1
-                       UNION SELECT a.x FROM ci_src_a a JOIN r ON a.x = r.x + 1)
-  SELECT x FROM r;
-CREATE TABLE ci_t7 AS
-  WITH RECURSIVE r AS (SELECT x FROM ci_src_a WHERE x = 1
-                       UNION SELECT a.x FROM ci_src_a a JOIN r ON a.x = r.x + 1)
-  SELECT x FROM r;
-SET provsql.active = off;
-SELECT count(*) AS t7_rows FROM ci_t7;
-RESET provsql.active;
-DROP TABLE ci_t7;
+-- (A recursive query cannot fill a materialized view: tested with the
+-- recursive queries, in recursive.sql, which PostgreSQL 15+ runs.)
 
 -- ---------------------------------------------------------------
 -- (8) CTAS WITH NO DATA: structure-only, inner SELECT not executed.

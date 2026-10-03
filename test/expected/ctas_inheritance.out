@@ -48,12 +48,6 @@ x|n
 2|1
 3|1
 (3 rows)
-ERROR:  ProvSQL: recursive query over provenance-tracked relations in a materialized view (or another security-restricted operation) not supported: its evaluation needs a temporary table, which PostgreSQL forbids there
-DETAIL:  provsql-reason: recursion-in-restricted-operation; scope: gap
-HINT:  Use CREATE TABLE AS instead: the table it creates carries the same provenance.
-t7_rows
-3
-(1 row)
 t8_kind|t8_ancestors_correct
 tid|t
 (1 row)

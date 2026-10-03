@@ -488,3 +488,25 @@ SELECT id, round(p::numeric, 6) AS p FROM rsib_r ORDER BY id;
 DROP TABLE rsib_r;
 SELECT remove_provenance('rsib');
 DROP TABLE rsib;
+
+-- A recursive query over a tracked relation cannot fill a materialized view:
+-- its evaluation needs a temporary table, which PostgreSQL forbids while it
+-- fills one.  Refused with the cause and the way out, CREATE TABLE AS, which
+-- works.
+CREATE TABLE rmv(x int);
+INSERT INTO rmv VALUES (1), (2), (3);
+SELECT add_provenance('rmv');
+CREATE MATERIALIZED VIEW rmv_mv AS
+  WITH RECURSIVE r AS (SELECT x FROM rmv WHERE x = 1
+                       UNION SELECT a.x FROM rmv a JOIN r ON a.x = r.x + 1)
+  SELECT x FROM r;
+CREATE TABLE rmv_t AS
+  WITH RECURSIVE r AS (SELECT x FROM rmv WHERE x = 1
+                       UNION SELECT a.x FROM rmv a JOIN r ON a.x = r.x + 1)
+  SELECT x FROM r;
+SET provsql.active = off;
+SELECT count(*) AS rmv_t_rows FROM rmv_t;
+RESET provsql.active;
+DROP TABLE rmv_t;
+SELECT remove_provenance('rmv');
+DROP TABLE rmv;
