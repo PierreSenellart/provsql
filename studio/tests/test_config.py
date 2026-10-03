@@ -8,6 +8,8 @@ per-query toggles.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def test_config_get_shows_defaults_and_no_overrides(client):
     cfg = client.get("/api/config").get_json()
@@ -432,10 +434,16 @@ def test_config_server_wide_setting_is_read_only(client):
     assert resp.status_code == 400
 
 
-def test_rewritten_query_shown_for_a_level_set_in_the_query(client):
+def test_rewritten_query_shown_for_a_level_set_in_the_query(client, test_dsn):
     """Where mode shows the query before and after rewriting at
     verbose_level 20, also when the level is set by the user's own
     statements rather than the panel."""
+    import psycopg
+    with psycopg.connect(test_dsn) as conn:
+        if conn.info.server_version < 150000:
+            # The rewriting notices print the query through pg_get_querydef,
+            # which PostgreSQL 15 introduced.
+            pytest.skip("query-rewriting notices require PostgreSQL 15+")
     resp = client.post("/api/exec", json={
         "sql": "SET LOCAL provsql.verbose_level = 20; "
                "SELECT name FROM personnel",
