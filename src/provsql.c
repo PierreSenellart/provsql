@@ -111,7 +111,7 @@ bool provsql_interrupted = false;
 static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enabled
 bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
-int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+int provsql_verbose = 0; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 /** @brief Values of @c provsql.implicit_freeze */
 enum { PROVSQL_FREEZE_WARN, PROVSQL_FREEZE_ERROR };
 int provsql_implicit_freeze = PROVSQL_FREEZE_WARN; ///< What an implicit freezing does: warn, or error; @c provsql.implicit_freeze GUC
@@ -23794,7 +23794,7 @@ static void process_set_operation_union(const constants_t *constants,
 
   stmt->colTypes = lappend_oid(stmt->colTypes, constants->OID_TYPE_UUID);
   stmt->colTypmods = lappend_int(stmt->colTypmods, -1);
-  stmt->colCollations = lappend_int(stmt->colCollations, 0);
+  stmt->colCollations = lappend_oid(stmt->colCollations, InvalidOid);
   stmt->all = true;
 }
 
@@ -36982,7 +36982,7 @@ void _PG_init(void) {
                              &provsql_transaction_token,
                              "",
                              PGC_USERSET,
-                             GUC_NO_SHOW_ALL,
+                             GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                              NULL,
                              NULL,
                              NULL);
@@ -37361,7 +37361,7 @@ void _PG_init(void) {
                           0,
                           INT_MAX,
                           PGC_USERSET,
-                          GUC_NO_SHOW_ALL,
+                          GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                           NULL,
                           NULL,
                           NULL);
@@ -37488,7 +37488,7 @@ void _PG_init(void) {
                            &provsql_joint_width,
                            true,
                            PGC_USERSET,
-                           GUC_NO_SHOW_ALL,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                            NULL,
                            NULL,
                            NULL);
@@ -37514,7 +37514,7 @@ void _PG_init(void) {
                            &provsql_mobius,
                            true,
                            PGC_USERSET,
-                           GUC_NO_SHOW_ALL,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                            NULL,
                            NULL,
                            NULL);
