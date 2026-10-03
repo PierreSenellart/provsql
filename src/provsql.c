@@ -15824,7 +15824,6 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
                                   exprCollation((Node *)te->expr),
                                   0));
       leftcols = lappend_int(leftcols, colno);
-      rightcols = lappend_int(rightcols, 0);
       colnames = lappend(colnames,
                          makeString(pstrdup(te->resname ? te->resname
                                                         : "?column?")));
@@ -15843,7 +15842,6 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
                                   exprTypmod((Node *)te->expr),
                                   exprCollation((Node *)te->expr),
                                   0));
-      leftcols = lappend_int(leftcols, 0);
       rightcols = lappend_int(rightcols, colno);
       colnames = lappend(colnames,
                          makeString(pstrdup(te->resname ? te->resname
@@ -16241,13 +16239,11 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
     av = lappend(av, makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i],
                              Rc->coll[i], 0));
     lcols = lappend_int(lcols, Rc->attno[i]);
-    rcols = lappend_int(rcols, 0);
     cn = lappend(cn, makeString(pstrdup(Rc->name[i])));
   }
   for (i = 0; i < Sc->n; ++i) {
     av = lappend(av, makeVar(2, Sc->attno[i], Sc->type[i], Sc->typmod[i],
                              Sc->coll[i], 0));
-    lcols = lappend_int(lcols, 0);
     rcols = lappend_int(rcols, Sc->attno[i]);
     cn = lappend(cn, makeString(pstrdup(Sc->name[i])));
   }
@@ -23123,13 +23119,11 @@ join:
       av = lappend(av, makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
                                Rc.coll[i], 0));
       lcols = lappend_int(lcols, Rc.attno[i]);
-      rcols = lappend_int(rcols, 0);
       cn = lappend(cn, makeString(pstrdup(Rc.name[i])));
     }
     for (i = 0; i < Qc.n; ++i) {
       av = lappend(av, makeVar(Q_idx, Qc.attno[i], Qc.type[i], Qc.typmod[i],
                                Qc.coll[i], 0));
-      lcols = lappend_int(lcols, 0);
       rcols = lappend_int(rcols, Qc.attno[i]);
       cn = lappend(cn, makeString(pstrdup(Qc.name[i])));
     }
