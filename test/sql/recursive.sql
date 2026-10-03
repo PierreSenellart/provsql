@@ -4,12 +4,14 @@
 -- Provenance for recursive queries (WITH RECURSIVE), PG15+.
 --
 -- The planner hook lowers a recursive CTE whose body touches a provenance-
--- tracked relation into a fixpoint evaluation (provsql.eval_recursive): the
--- user writes a plain recursive query and the result carries provenance like
--- any provenance-tracked SELECT.  Each round re-evaluates `base UNION
--- recursive` through ProvSQL's own rewriting, so the recursive join yields
--- `times` gates, the untracked base branch yields gate_one, and the UNION
--- yields the `plus` merge of alternative derivations.
+-- tracked relation into one equation per derived row
+-- (provsql.eval_recursive_system): the user writes a plain recursive query
+-- and the result carries provenance like any provenance-tracked SELECT.  One
+-- round of `base UNION recursive` through ProvSQL's own rewriting gives each
+-- row its equation, the recursive join yielding `times` gates, the untracked
+-- base branch gate_one, and the UNION the `plus` merge of alternative
+-- derivations; a row derived through no cycle gets the circuit of its
+-- derivations, the rows of a cycle their equations.
 
 -- A probabilistic DAG of edges + named edge variables.
 CREATE TABLE redge(src int, dst int, p float8, label text);
@@ -52,32 +54,42 @@ DROP TABLE st_result;
 
 DROP TABLE redge;
 
--- Cyclic data, default (no boolean_provenance): the circuit never stabilises
--- structurally, so the round guard fires.  Shown via a direct driver call with
--- a small round bound.
+-- Cyclic data, default class: both nodes are derived through the cycle, so
+-- the recursion is recorded as their equations, x1 = 1 ⊕ e21 ⊗ x2 and
+-- x2 = e12 ⊗ x1, which the semiring evaluating them solves: both nodes are
+-- reachable, sr_formula prints the equations, and the number of derivations,
+-- infinite, is refused.
 CREATE TABLE cedge(src int, dst int);
 INSERT INTO cedge VALUES (1,2), (2,1);
 SELECT add_provenance('cedge');
-\set VERBOSITY terse
-SELECT provsql.eval_recursive(
-  'SELECT 1 UNION SELECT e.dst FROM cedge e JOIN cyc r ON e.src = r.node',
-  'cyc', 'node', 'node integer', 3);
-\set VERBOSITY default
--- Its SQLSTATE and tag, read from the raised error rather than from the
--- message, which VERBOSITY terse above leaves out (its CONTEXT carries the
--- deparsed round, whose text differs between PostgreSQL versions).  A recursion
--- whose rounds do not end has no provenance to give, so the refusal is
--- deliberate; the bag recursion answers the same way.
+SELECT create_provenance_mapping('cedge_lbl', 'cedge', '''e'' || src || dst');
+SELECT create_provenance_mapping('cedge_one', 'cedge', '1');
+CREATE TABLE cyc_r AS
+  WITH RECURSIVE cyc(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM cedge e JOIN cyc r ON e.src = r.node)
+  SELECT node, sr_boolean(provenance(), 'cedge_lbl') AS reachable,
+         sr_formula(provenance(), 'cedge_lbl') AS equations,
+         provenance() AS tok
+  FROM cyc;
+SELECT remove_provenance('cyc_r');
+SELECT node, reachable, equations FROM cyc_r ORDER BY node;
 DO $$
-DECLARE d text;
+DECLARE r record; c text;
 BEGIN
-  PERFORM provsql.eval_recursive(
-    'SELECT 1 UNION SELECT e.dst FROM cedge e JOIN cyc r ON e.src = r.node',
-    'cyc', 'node', 'node integer', 3);
-EXCEPTION WHEN feature_not_supported THEN
-  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
-  RAISE NOTICE '% / %', SQLSTATE, d;
+  FOR r IN SELECT node, tok FROM cyc_r ORDER BY node LOOP
+    BEGIN
+      c := sr_counting(r.tok, 'cedge_one')::text;
+    EXCEPTION WHEN OTHERS THEN c := 'count refused';
+    END;
+    RAISE NOTICE 'node %: %', r.node, c;
+  END LOOP;
 END $$;
+DROP TABLE cyc_r, cedge_lbl, cedge_one;
+-- The bag recursion over the same cycle never ends a round empty: a recursion
+-- whose rounds do not end has no provenance to give, so the refusal is
+-- deliberate.  Its SQLSTATE and tag, read from the raised error.
 DO $$
 DECLARE d text;
 BEGIN
@@ -138,7 +150,7 @@ DROP TABLE srf_edge;
 
 -- Regression (crash): with provsql.active = off the planner hook must stand
 -- back and let a WITH RECURSIVE over a tracked relation plan as ordinary SQL.
--- It must not drive the fixpoint (eval_recursive): that runs SPI / temp-table
+-- It must not drive the lowering (eval_recursive_system): that runs SPI / temp-table
 -- creation at plan time and its per-round INSERT ... SELECT formerly crashed
 -- the backend under active = off (a synthesized provsql target entry left with
 -- a NULL expr that the planner dereferenced).

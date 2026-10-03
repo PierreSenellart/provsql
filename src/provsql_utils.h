@@ -663,7 +663,6 @@ extern bool provsql_simplify_on_load;
  * path against the raw MC path and as a bisection knob if a
  * closure rule turns out to be unsound on some workload. */
 extern bool provsql_hybrid_evaluation;
-extern bool provsql_recursion_equations; ///< @c provsql.recursion_equations GUC
 
 /** @brief Hidden diagnostic flag for the family of closed-form /
  *  analytic probability evaluators that resolve @c gate_cmps inside

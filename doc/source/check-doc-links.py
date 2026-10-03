@@ -70,8 +70,8 @@ INTERNAL_FUNCTIONS = {
     # route (eval_reachability); users never call these directly.
     'gather_reachability_edges', 'gather_reachability_sources',
     'token_conjunctive_leaves',
-    # assumption-marker constructor: called by the rewriters and by
-    # eval_recursive's cyclic truncation, not (normally) by users;
+    # assumption-marker constructor: called by the rewriters and by the
+    # reachability route, not (normally) by users;
     # assume_boolean is its documented compatibility wrapper.
     'provenance_assume',
     # Triggers
@@ -138,7 +138,8 @@ INTERNAL_FUNCTIONS = {
     # called directly by users.  eval_reachability is the
     # decomposition-aligned route (bounded-treewidth data), backed by
     # reachability_materialize.
-    'eval_recursive', 'eval_recursive_all', 'eval_reachability',
+    'eval_recursive_system', 'resolve_fix_system', 'fixpoint_token',
+    'eval_recursive_all', 'eval_reachability',
     'reachability_materialize',
     'reachability_materialize_hops', 'reachability_materialize_any',
     'reachability_materialize_cover',

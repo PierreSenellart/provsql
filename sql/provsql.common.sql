@@ -1745,198 +1745,6 @@ CREATE OR REPLACE FUNCTION plant_canonical(
   'provsql','plant_canonical' LANGUAGE C STRICT;
 
 /**
- * @brief Driver for provenance over recursive queries (WITH RECURSIVE).
- *
- * Invoked by the planner hook (@c lower_recursive_cte in @c provsql.c) when it
- * lowers a recursive CTE whose body touches provenance-tracked relations.  The
- * hook deparses the CTE body to SQL and calls this function, which runs naive
- * bottom-up (fixpoint) evaluation: each round re-evaluates the body
- * @c base @c UNION @c recursive over a tracked working table until the
- * provenance tokens stop changing.  Every round goes through ProvSQL's normal
- * rewriting, so the recursive join yields @c times gates, the untracked base
- * branch yields @c gate_one, and the @c UNION yields the @c plus merge of
- * alternative derivations -- no provenance is plumbed by hand here.  The result
- * is left in a tracked temp table named @p work_name, which the hook then scans
- * in place of the CTE.
- *
- * The working tables (@p work_name and a scratch @c provsql_rec_new) are created once and
- * reused across rounds (TRUNCATE + INSERT), so the round count never
- * accumulates relation locks.  Because content-addressed gate UUIDs make
- * structurally identical sub-circuits share, the fixpoint test is an exact
- * relational @c EXCEPT and the circuit stays the shared (polynomial) form.
- *
- * Scope: UNION (set) recursion.  On *acyclic* input the structural fixpoint is
- * reached and the resulting circuit is the universal provenance, sound for any
- * semiring.  On *cyclic* input the circuit never stabilises structurally; when
- * the session's provenance class (@c provsql.provenance) is @c 'absorptive' or
- * @c 'boolean' we instead stop at the value-fixpoint bound (number of
- * derivable tuples) -- every minimal, tuple-repetition-free derivation is then
- * covered, and the longer ones are absorbed in any absorptive semiring (after
- * Deutch, Milo, Roy & Tannen, ICDT 2014) -- and wrap the resulting tokens in
- * the @c 'absorptive' assumption marker, so that non-absorptive semiring
- * evaluations (counting, why-provenance: genuinely infinite on cyclic data)
- * refuse them while probability, Boolean, formula-as-circuit and min-plus
- * evaluations proceed.  Under the general classes, cyclic input is refused
- * at that same bound, its annotation having no value.
- *
- * This function has no @c SET @c search_path on purpose: @p body_sql is the
- * caller's deparsed query and must resolve relation names in the caller's path.
- *
- * @param body_sql   the recursive CTE body, e.g.
- *                   @c 'SELECT 1 UNION SELECT e.dst FROM edge e JOIN reach r ON e.src=r.node'
- * @param work_name  the working relation name @p body_sql references (the CTE name)
- * @param colnames   comma-separated user columns, e.g. @c 'node'
- * @param coldef     column definitions for the working table, e.g. @c 'node integer'
- * @param max_iter   safety bound on the rounds before the tuple set settles
- *                   (non-termination guard); once it has, the value-fixpoint
- *                   bound ends the loop instead
- */
-CREATE OR REPLACE FUNCTION eval_recursive(
-  body_sql  text,
-  work_name text,
-  colnames  text,
-  coldef    text,
-  max_iter  int DEFAULT 1000)
-  RETURNS void AS
-$$
-DECLARE
-  changed   boolean;        -- circuit changed structurally this round
-  set_stable boolean;       -- user-column tuple set unchanged this round
-  iters     int := 0;
-  new_count int;            -- rows in provsql_rec_new this round (INSERT ROW_COUNT)
-  -- The derivations of a tuple can repeat through the tuple itself although
-  -- the tuple set stabilises: on cyclic data, but also on acyclic data through
-  -- a null-padded row that re-derives itself or a projection onto constants.
-  -- The circuit then keeps growing, one summand per round, and only an
-  -- absorptive class has a value for it: 1 ⊕ a = 1 gives x ⊕ x ⊗ y = x, so a
-  -- derivation that extends another is absorbed by it, and every step of a
-  -- cycle contracts -- a ⊖ b <= a by residuation, so a monus in the cycle is
-  -- covered too, not only a product.  (Where the surplus derivation adds
-  -- nothing at all, as a null-padded row re-deriving itself does, the same
-  -- fact reads as idempotence, a ⊕ a = a.)  A
-  -- minimal derivation cannot repeat a tuple, so it has depth <= (number of
-  -- derivable tuples); after that many naive rounds the value equals the least
-  -- fixpoint of an absorptive class, and the surplus derivations are absorbed
-  -- at evaluation time.  We learn that bound from the tuple-set fixpoint: in
-  -- an absorptive class we stop there and mark the tokens with the
-  -- 'absorptive' assumption, so evaluation under a non-absorptive semiring
-  -- refuses rather than silently returning a truncated value; in another class
-  -- there is no value to give, and reaching the bound is what tells us so --
-  -- the refusal comes then, rather than after max_iter rounds of building
-  -- circuit for an answer that will not come.
-  absorptive_mode boolean :=
-    coalesce(current_setting('provsql.provenance', true), 'semiring')
-      IN ('absorptive', 'boolean');
-  truncated boolean := false; -- exited at the value fixpoint
-  ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
-BEGIN
-  EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
-  DROP TABLE IF EXISTS provsql_rec_new;
-
-  -- Tracked working table (carries provsql), initially empty, plus a scratch
-  -- table of the same shape; both reused across rounds.
-  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid) ON COMMIT DROP',
-                 work_name, coldef);
-  PERFORM provsql.planted_scope(work_name);
-  EXECUTE format('CREATE TEMP TABLE provsql_rec_new (LIKE %I) ON COMMIT DROP',
-                 work_name);
-
-  LOOP
-    iters := iters + 1;
-    -- Safety bound on the rounds before the tuple set settles: it catches
-    -- genuinely unbounded recursion, e.g. an unbounded counter, where the
-    -- tuple set never stabilises.  Once it has settled, the loop is bounded
-    -- by the value fixpoint below (ntuples + 1 rounds), which may exceed
-    -- max_iter -- the all-pairs closure of an n-cycle needs n^2 + 1 -- so the
-    -- guard no longer applies.
-    IF ntuples IS NULL AND iters > max_iter THEN
-      /* Not even the rows stop changing: the recursion derives tuples without
-       * end (an unbounded counter), which SQL does not terminate on either.
-       * A recursion whose rows settle while its derivations repeat exits at
-       * the value fixpoint below, tagged, and never reaches this. */
-      RAISE EXCEPTION 'ProvSQL: the rounds of this recursion do not reach a '
-                      'fixpoint (after % of them): the rows it derives keep '
-                      'changing, so there is no fixpoint to annotate -- plain '
-                      'SQL does not terminate on such a recursion either',
-                      max_iter
-        USING ERRCODE = 'feature_not_supported',
-              DETAIL = 'provsql-reason: recursion-no-fixpoint; scope: deliberate';
-    END IF;
-
-    -- One round of naive evaluation: re-run the CTE body over the current
-    -- working table.  INSERT targets a tracked table, so ProvSQL fills provsql.
-    -- Take the row count from the INSERT itself (counting provsql_rec_new directly would be
-    -- an aggregate over a provenance-tracked table -> an agg_token).
-    EXECUTE 'TRUNCATE provsql_rec_new';
-    EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, body_sql);
-    GET DIAGNOSTICS new_count = ROW_COUNT;
-
-    -- Exact structural fixpoint test (content-addressed tokens => set equality).
-    EXECUTE format(
-      'SELECT EXISTS((TABLE provsql_rec_new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE provsql_rec_new))',
-      work_name) INTO changed;
-
-    -- Learn the round bound from the tuple-set fixpoint (the set stabilises
-    -- after finitely many rounds even where the derivations do not).
-    IF ntuples IS NULL THEN
-      EXECUTE format(
-        'SELECT NOT EXISTS('
-        || '(SELECT %2$s FROM provsql_rec_new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
-        || '(SELECT %2$s FROM %1$I EXCEPT SELECT %2$s FROM provsql_rec_new))',
-        work_name, colnames) INTO set_stable;
-      IF set_stable THEN
-        ntuples := new_count;
-      END IF;
-    END IF;
-
-    -- Copy provsql_rec_new into the working table (tracked -> tracked carries the tokens).
-    EXECUTE format('TRUNCATE %I', work_name);
-    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM provsql_rec_new', work_name, colnames);
-
-    -- Structural fixpoint: done (acyclic / fully converged) -- sound for any
-    -- semiring.
-    EXIT WHEN NOT changed;
-
-    -- The derivations repeat through a tuple: the rows have settled, the
-    -- circuit has not, and it will not (one summand per round from here on).
-    -- The bound is the tuple-set fixpoint plus one confirming round, so that a
-    -- recursion whose token depth merely lags the tuple-set saturation still
-    -- exits through the structural test above, untagged.
-    IF ntuples IS NOT NULL AND iters >= ntuples + 1 THEN
-      IF absorptive_mode THEN
-        -- The value of an absorptive class is reached: stop, tagged below.
-        truncated := true;
-        EXIT;
-      END IF;
-      /* No absorption: the annotation of such a tuple gains a term per round
-       * and has no value, so there is nothing to return -- a refusal by what
-       * the recursion means, not a limit of the driver. */
-      RAISE EXCEPTION 'ProvSQL: the rounds of this recursion do not reach a '
-                      'fixpoint (the rows settled after % of them, the '
-                      'derivations did not): a tuple is derived through '
-                      'itself, which cyclic data does, and so does a '
-                      'null-padded row that re-derives itself or a projection '
-                      'onto constants on acyclic data, so its annotation '
-                      'gains a term at every round.  Only an absorptive '
-                      'provenance class has a value for it (set '
-                      'provsql.provenance to absorptive or to boolean)',
-                      iters
-        USING ERRCODE = 'feature_not_supported',
-              DETAIL = 'provsql-reason: recursion-no-fixpoint; scope: deliberate';
-    END IF;
-  END LOOP;
-
-  -- Tokens of a truncated fixpoint are sound only under absorptive
-  -- evaluation: record that in the circuit itself.
-  IF truncated THEN
-    EXECUTE format(
-      'UPDATE %I SET provsql = provsql.provenance_assume(provsql, ''absorptive'')',
-      work_name);
-  END IF;
-END
-$$ LANGUAGE plpgsql SET client_min_messages = warning;
-
-/**
  * @brief Address of the @c fixpoint gate reading component @p i of the
  *        equation system @p sys (internal)
  *
@@ -1966,14 +1774,17 @@ CREATE OR REPLACE FUNCTION resolve_fix_system(sys uuid) RETURNS uuid[] AS
   'provsql','resolve_fix_system' LANGUAGE C STRICT VOLATILE;
 
 /**
- * @brief Driver for provenance over recursive queries, as an equation
- *        system solved at evaluation time (internal)
+ * @brief Driver for provenance over recursive queries (WITH RECURSIVE),
+ *        as an equation system (internal)
  *
- * Alternative to @c eval_recursive, selected by the
- * @c provsql.recursion_equations GUC.  Instead of unrolling the fixpoint
- * round after round, it records the recursion as one equation per derived
- * tuple, x_t = f_t(x), and leaves its solution to evaluation time, where
- * the semiring is known:
+ * Invoked by the planner hook (@c lower_recursive_cte in @c provsql.c) when
+ * it lowers a recursive CTE with @c UNION whose body touches
+ * provenance-tracked relations; the hook deparses the CTE body to SQL and
+ * scans, in place of the CTE, the table this function fills.  Instead of
+ * unrolling the fixpoint round after round, it records the recursion as one
+ * equation per derived tuple, x_t = f_t(x), and leaves the value of the
+ * tuples derived through themselves to evaluation time, where the semiring
+ * is known:
  *
  * 1. the derived tuples are computed by PostgreSQL's own recursion, with
  *    provenance tracking off;
@@ -1984,15 +1795,24 @@ CREATE OR REPLACE FUNCTION resolve_fix_system(sys uuid) RETURNS uuid[] AS
  *    its equation, an ordinary circuit over the input tokens and the
  *    unknowns;
  * 4. a @c fixsystem gate gathers the unknowns and the right-hand sides,
- *    and each tuple's token becomes a @c fixpoint gate reading its
- *    component of the least solution.
+ *    and @c resolve_fix_system gives each tuple its token: the ordinary
+ *    circuit a fixpoint iteration would reach, for a tuple derived
+ *    through no cycle; a @c fixpoint gate over its cyclic component's own
+ *    system otherwise.
  *
  * The recursion thus costs plain SQL's rounds plus one, and the circuit
  * one round of derivations, whatever the data's cycles; whether a cyclic
- * system has a value is decided by the semiring evaluating it (see
- * @c GenericCircuit::solveFixSystem).
+ * component has a value is decided by the semiring evaluating it (see
+ * @c GenericCircuit::solveFixSystem): every absorptive semiring, and those
+ * with a star (counting with an infinite count, min-plus with negative
+ * cycles, why- and which-provenance); @c sr_formula renders the equations.
  *
- * @param body_sql   the recursive CTE body (as for @c eval_recursive)
+ * This function has no @c SET @c search_path on purpose: @p body_sql is
+ * the caller's deparsed query and must resolve relation names in the
+ * caller's path.
+ *
+ * @param body_sql   the recursive CTE body, e.g.
+ *                   @c 'SELECT 1 UNION SELECT e.dst FROM edge e JOIN reach r ON e.src=r.node'
  * @param work_name  the working relation name @p body_sql references
  * @param colnames   comma-separated user columns
  * @param coldef     column definitions for the working table
@@ -2087,9 +1907,8 @@ $$ LANGUAGE plpgsql SET client_min_messages = warning;
  * round, which ends when a round derives nothing.  Each tuple of it is one
  * derivation, annotated by the product along that derivation, and two
  * derivations of the same tuple are two rows and are not merged: that is what
- * distinguishes it from @c UNION, whose driver (@c eval_recursive) sums the
- * derivations of a tuple into one row and stops when the set of rows stops
- * changing.
+ * distinguishes it from @c UNION, whose driver (@c eval_recursive_system)
+ * sums the derivations of a tuple into one row.
  *
  * @c work_name holds the previous round, which the recursive term reads by the
  * name of the CTE; @c all_name accumulates the answer and is what the query
@@ -11215,7 +11034,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
 
 /**
  * @brief Fixpoint driver for the recursive reachability shape:
- * decomposition-aligned compilation with fallback to eval_recursive
+ * decomposition-aligned compilation with fallback to eval_recursive_system
  *
  * Called (at plan time, over SPI) by the recursive-CTE lowering when
  * the provenance class is 'absorptive' or 'boolean'
@@ -11227,7 +11046,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * working table with one tokenised row per reachable vertex.  On any
  * failure (data treewidth above the cap, per-node state bound, edges
  * that are not independent base tuples...), falls back to the generic
- * @c eval_recursive() fixpoint, preserving its behaviour exactly.
+ * @c eval_recursive_system() driver, preserving its behaviour exactly.
  *
  * @param edge_rel the provenance-tracked edge relation
  * @param source_attribute name of the source-vertex column
@@ -11345,7 +11164,7 @@ BEGIN
       RAISE NOTICE 'ProvSQL: reachability route for "%" fell back to the generic fixpoint (%)',
         regexp_replace(work_name, '^provsql_rec_[0-9]+a?_', ''), SQLERRM;
     END IF;
-    PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
+    PERFORM provsql.eval_recursive_system(body_sql, work_name, colnames, coldef);
   END;
 END
 $$ LANGUAGE plpgsql;

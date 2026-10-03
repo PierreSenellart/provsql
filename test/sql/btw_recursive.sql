@@ -12,7 +12,7 @@
 -- and resolves them by the linear certified-island sweep, reported under
 -- this route's own name 'reachability' (see last_eval_method), and the
 -- whole artefact surface (interpret-as-dd, Shapley) works on them.  On any
--- failure the route falls back to the generic eval_recursive fixpoint.
+-- failure the route falls back to the generic eval_recursive_system driver.
 
 SET provsql.provenance = 'boolean';
 
@@ -376,9 +376,9 @@ DROP TABLE btwr_g;
 DROP TABLE btwr_f;
 
 -- Fallback: data treewidth above the cap (K14) falls back to the
--- generic fixpoint, with a notice under provsql.verbose_level >= 10;
--- the query still answers (acyclic orientation, so eval_recursive
--- terminates).
+-- generic driver, with a notice under provsql.verbose_level >= 10;
+-- the query still answers (acyclic orientation, so every row gets an
+-- ordinary circuit).
 SET provsql.verbose_level = 10;
 CREATE TABLE btwr_k14(src int, dst int);
 INSERT INTO btwr_k14

@@ -116,17 +116,14 @@ add_provenance
 create_provenance_mapping
 
 (1 row)
-eval_recursive
-
-(1 row)
 remove_provenance
 
 (1 row)
-a|b|assumption|prob|min_cost
-1|1|absorptive|0.250000|7
-1|2|absorptive|0.500000|3
-2|1|absorptive|0.500000|4
-2|2|absorptive|0.250000|7
+a|b|prob|min_cost
+1|1|0.250000|7
+1|2|0.500000|3
+2|1|0.500000|4
+2|2|0.250000|7
 (4 rows)
 remove_provenance
 

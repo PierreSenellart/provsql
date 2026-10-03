@@ -136,7 +136,6 @@ int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route:
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
-bool provsql_recursion_equations = true; ///< Lower a set-semantics recursive CTE to an equation system solved per semiring at evaluation (@c eval_recursive_system) instead of unrolling its fixpoint; controlled by the @c provsql.recursion_equations GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
 bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
@@ -1186,7 +1185,7 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
  *
  * A recursive CTE referenced more than once (e.g. in two arms of a top-level
  * UNION) must be lowered -- and its backing temp table created by
- * @c eval_recursive -- exactly once: re-running the fixpoint would
+ * @c eval_recursive_system -- exactly once: re-running the driver would
  * @c DROP @c TABLE the temp table that an earlier reference's analyzed scan
  * already bound to by OID, yielding "could not open relation with OID ...".
  * @c inline_ctes_in_rtable records each lowering here and reuses it for
@@ -2258,11 +2257,12 @@ static const char *rec_work_table_cte(const char *relname) {
  * ProvSQL cannot rewrite @c WITH @c RECURSIVE in place: the recursive term
  * forbids the aggregate that provenance-merging needs.  Instead, for a recursive
  * CTE whose body touches provenance-tracked relations, we deparse the body to
- * SQL, run @c provsql.eval_recursive over SPI now (at plan time) -- it evaluates
- * @c base @c UNION @c recursive to a fixpoint, letting ProvSQL's own rewriting
- * compute the join @c times gates, the untracked base branch's @c gate_one, and
- * the @c UNION @c plus merge -- and leaves a tracked temp table named after the
- * CTE holding @c (cols..., @c provsql).  We then rewrite this CTE reference into
+ * SQL, run @c provsql.eval_recursive_system over SPI now (at plan time) -- it
+ * computes the rows of @c base @c UNION @c recursive by plain recursion, then
+ * one round of the body over them through ProvSQL's own rewriting, which gives
+ * each row the right-hand side of its equation (the join @c times gates, the
+ * untracked base branch's @c gate_one, the @c UNION @c plus merge) -- and leaves
+ * a tracked temp table named after the CTE holding @c (cols..., @c provsql).  We then rewrite this CTE reference into
  * a plain scan of that table, which the rest of @c process_query handles as an
  * ordinary tracked relation.
  *
@@ -2270,16 +2270,16 @@ static const char *rec_work_table_cte(const char *relname) {
  * @c detect_reachability_cte recognises as reachability over a tracked edge
  * relation is driven through @c provsql.eval_reachability instead (compilation
  * along a tree decomposition of the data graph), which falls back to
- * @c eval_recursive on any failure; @p entry then records what the planting of
+ * @c eval_recursive_system on any failure; @p entry then records what the planting of
  * aggregations over the CTE needs.
  *
  * Returns @c true on success, @c false if the shape is unsupported (the caller
  * raises the error): only @c UNION (set) recursion is lowered, and not a term
  * with a set-returning function in its target list.  The lowering applies in
- * every provenance class.  On acyclic data the fixpoint is structural and the
- * circuit sound for any semiring; on cyclic data @c eval_recursive stops at
- * the value fixpoint under an absorptive class (tokens marked with the
- * @c 'absorptive' assumption) and hits its iteration bound otherwise.  SPI
+ * every provenance class.  A row derived through no cycle gets the ordinary
+ * circuit of its derivations, sound for any semiring; the rows of a cyclic
+ * component get @c fixpoint gates over their equations, which the semiring
+ * evaluating them solves, or refuses where it has no value for them.  SPI
  * work and temp-table creation happen during planning.
  *
  * @param cte    the recursive CTE
@@ -2307,8 +2307,8 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     return false;
 
   /* A recursion of the two kinds, each with its own driver: UNION sums the
-   * derivations of a tuple and stops when the set of rows stops changing
-   * (eval_recursive), UNION ALL keeps one row per derivation and stops on a
+   * derivations of a tuple, through its equation (eval_recursive_system),
+   * UNION ALL keeps one row per derivation and stops on a
    * round that derives nothing (eval_recursive_all).  Anything that is not a
    * plain UNION is left to the caller, which raises the refusal. */
   if (cteq->setOperations == NULL ||
@@ -2452,7 +2452,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
    * driver, which compiles one certified provenance circuit per
    * reachable vertex along a tree decomposition of the data graph
    * (linear-size for bounded data treewidth, cyclic data included) and
-   * falls back to eval_recursive on any failure.  The compiled circuit
+   * falls back to eval_recursive_system on any failure.  The compiled circuit
    * is the exact Boolean function of the reachability lineage but only
    * the absorptive quotient of its (infinite) recursive semiring
    * provenance, hence the class gating; the materialised roots carry
@@ -2554,9 +2554,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                        quote_literal_cstr(coldef.data));
     } else {
       appendStringInfo(&call,
-                       provsql_recursion_equations
-                         ? "SELECT provsql.eval_recursive_system(%s, %s, %s, %s)"
-                         : "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
+                       "SELECT provsql.eval_recursive_system(%s, %s, %s, %s)",
                        quote_literal_cstr(body_text),
                        quote_literal_cstr(work_name),
                        quote_literal_cstr(cols.data),
@@ -2568,7 +2566,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   rc = SPI_execute(call.data, false, 0);
   SPI_finish();
   if (rc < 0)
-    provsql_error("Recursive CTE lowering: eval_recursive failed (%d)", rc);
+    provsql_error("Recursive CTE lowering: eval_recursive_system failed (%d)", rc);
 
   /* Replace the CTE reference with a scan of the populated table, the star's
    * provenance column read from the table's own. */
@@ -2676,7 +2674,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
 #if PG_VERSION_NUM >= 150000
             /* A recursive CTE referenced more than once (e.g. once per
              * UNION arm) must be lowered exactly once: re-running
-             * eval_recursive would DROP and recreate its temp table,
+             * eval_recursive_system would DROP and recreate its temp table,
              * invalidating the OID the first reference's analyzed scan
              * bound to.  Reuse the earlier lowering when we have it. */
             Query *memo = lookup_lowered_cte(*lowered, cte->ctename);
@@ -33464,7 +33462,7 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
    * since UNION/EXCEPT branches may reference CTEs.  Gated on
    * provsql.active: when provenance tracking is off the hook must stand
    * back and let the query plan as ordinary SQL -- it must not, in
-   * particular, drive the recursive-CTE fixpoint (eval_recursive), which
+   * particular, drive the recursive-CTE lowering (eval_recursive_system), which
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(constants, q);
@@ -37070,21 +37068,6 @@ void _PG_init(void) {
    * possible, lower MC variance, more methods usable on continuous
    * circuits); off only serves developer A/B against pure MC and as
    * a bisection escape valve if a closure rule misbehaves. */
-  DefineCustomBoolVariable("provsql.recursion_equations",
-                           "Lower a recursive CTE to an equation system "
-                           "solved at evaluation time.",
-                           "When on, a set-semantics recursive CTE not "
-                           "taken by the reachability route is lowered to "
-                           "one equation per derived tuple, solved for the "
-                           "semiring at evaluation time, instead of an "
-                           "unrolled fixpoint circuit. Experimental.",
-                           &provsql_recursion_equations,
-                           true,
-                           PGC_USERSET,
-                           0,
-                           NULL,
-                           NULL,
-                           NULL);
   DefineCustomBoolVariable("provsql.hybrid_evaluation",
                            "Run the hybrid-evaluator simplifier and "
                            "island decomposer inside probability_evaluate. "
