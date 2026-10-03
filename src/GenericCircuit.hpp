@@ -731,7 +731,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     for(const auto v : comps[c])
       comp_of[v] = c;
 
-  /* Better-than in the natural order of an absorptive, totally ordered
+  /* Better-than in the natural order of an absorptive, selective
    * semiring: a ⊕ b = a, with a ≠ b. */
   const auto better = [&](const V &a, const V &b) -> bool {
                         return !semiring.equal(a, b) && semiring.equal(plus2(a, b), a);
@@ -778,9 +778,9 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       x[comp[k]] = entry[k];
     }
 
-    if(semiring.totally_ordered() && semiring.exact_equality()) {
+    if(semiring.selective() && semiring.exact_equality()) {
       /* Dijkstra from the entry values: in an absorptive semiring
-       * extending a derivation never improves it, so with a total order
+       * extending a derivation never improves it, so with a selective plus
        * the best unsettled value is final (Ramusat, Maniu & Senellart,
        * EDBT 2021). */
       const auto worse = [&](const std::pair<V, std::size_t> &p,

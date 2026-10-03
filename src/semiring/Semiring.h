@@ -412,19 +412,22 @@ virtual bool idempotent() const {
 }
 
 /**
- * @brief Return @c true if the natural order of the semiring is total
+ * @brief Return @c true if @f$\oplus@f$ is selective
  *        (for all @f$a, b@f$, @f$a \oplus b \in \{a, b\}@f$).
  *
- * In an absorptive semiring with a total order, the least solution of a
- * cyclic equation system (a recursive query, see
+ * In an idempotent semiring this is the same as a total natural order;
+ * in general it is stronger (the counting semiring has a total natural
+ * order, but @f$a + b@f$ is neither @f$a@f$ nor @f$b@f$).  In a selective
+ * absorptive semiring (a selective dioid, in Gondran & Minoux's terms),
+ * the least solution of a cyclic equation system (a recursive query, see
  * @c GenericCircuit::solveFixSystem) is found by Dijkstra's algorithm,
  * generalised to semirings (Ramusat, Maniu & Senellart, EDBT 2021):
- * absorption makes extending a derivation never improve it, and the total
- * order lets the best unsettled value be final.
+ * absorption makes extending a derivation never improve it, and
+ * selectivity lets the best unsettled value be final.
  *
  * @return @c false by default; override to return @c true.
  */
-virtual bool totally_ordered() const {
+virtual bool selective() const {
   return false;
 }
 

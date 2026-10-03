@@ -76,7 +76,7 @@ virtual bool mul_idempotent() const override {
 virtual bool absorptive() const override {
   return true;
 }
-virtual bool totally_ordered() const override {
+virtual bool selective() const override {
   return true;
 }
 /**

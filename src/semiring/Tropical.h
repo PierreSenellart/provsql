@@ -61,6 +61,11 @@ virtual value_type plus(const std::vector<value_type> &v) const override {
   if(v.empty()) return zero();
   return *std::min_element(v.begin(), v.end());
 }
+/** @brief @f$\min@f$ returns one of its arguments; absorptive only on
+ *  nonnegative costs (@c TropicalNonneg). */
+virtual bool selective() const override {
+  return true;
+}
 virtual value_type times(const std::vector<value_type> &v) const override {
   return std::accumulate(v.begin(), v.end(), 0.0);
 }
@@ -122,9 +127,6 @@ value_type parse_leaf(const char *v) const {
 class TropicalNonneg : public Tropical {
 public:
 virtual bool absorptive() const override {
-  return true;
-}
-virtual bool totally_ordered() const override {
   return true;
 }
 value_type parse_leaf(const char *v) const {
