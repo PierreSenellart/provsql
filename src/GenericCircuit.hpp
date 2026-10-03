@@ -37,6 +37,7 @@
  * interpret them).
  */
 #include "GenericCircuit.h"
+#include "FixSystemGraph.h"
 
 #include <deque>
 #include <functional>
@@ -675,54 +676,15 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       b[i] = evaluate(f, provenance_mapping, semiring);
   }
 
-  /* Strongly connected components of the dependency graph j -> i
-   * (iterative Tarjan).  A component is emitted once every component
-   * depending on it has been, so the emission order is the reverse of the
-   * order in which the equations can be solved. */
+  /* Strongly connected components of the dependency graph j -> i, in
+   * solving order. */
   std::vector<std::vector<std::size_t> > comps;
   {
-    const std::size_t UNSEEN = static_cast<std::size_t>(-1);
-    std::vector<std::size_t> index(n, UNSEEN), low(n, 0);
-    std::vector<char> on_stack(n, 0);
-    std::vector<std::size_t> tstack;
-    std::size_t counter = 0;
-    for(std::size_t root = 0; root < n; ++root) {
-      if(index[root] != UNSEEN)
-        continue;
-      std::vector<std::pair<std::size_t, std::size_t> > call{{root, 0}};
-      index[root] = low[root] = counter++;
-      tstack.push_back(root);
-      on_stack[root] = 1;
-      while(!call.empty()) {
-        auto &[v, k] = call.back();
-        if(k < out[v].size()) {
-          const std::size_t u = out[v][k++].first;
-          if(index[u] == UNSEEN) {
-            index[u] = low[u] = counter++;
-            tstack.push_back(u);
-            on_stack[u] = 1;
-            call.emplace_back(u, 0);
-          } else if(on_stack[u])
-            low[v] = std::min(low[v], index[u]);
-          continue;
-        }
-        if(low[v] == index[v]) {
-          std::vector<std::size_t> comp;
-          std::size_t u;
-          do {
-            u = tstack.back();
-            tstack.pop_back();
-            on_stack[u] = 0;
-            comp.push_back(u);
-          } while(u != v);
-          comps.push_back(std::move(comp));
-        }
-        const std::size_t done = v;
-        call.pop_back();
-        if(!call.empty())
-          low[call.back().first] = std::min(low[call.back().first], low[done]);
-      }
-    }
+    std::vector<std::vector<std::size_t> > adj(n);
+    for(std::size_t j = 0; j < n; ++j)
+      for(const auto &e : out[j])
+        adj[j].push_back(e.first);
+    comps = fixSystemComponents(adj);
   }
 
   std::vector<V> x(n, zero);
@@ -737,7 +699,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                         return !semiring.equal(a, b) && semiring.equal(plus2(a, b), a);
                       };
 
-  for(std::size_t ci = comps.size(); ci-- > 0; ) {
+  for(std::size_t ci = 0; ci < comps.size(); ++ci) {
     provsql_poll_interrupt();
     const auto &comp = comps[ci];
 

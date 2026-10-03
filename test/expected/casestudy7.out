@@ -127,6 +127,19 @@ p3|ext(p5,p3) ⊗ ext(p6,p5)|0.420000
 p4|ext(p6,p4)|0.900000
 p5|ext(p6,p5)|0.700000
 (5 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|reliability
+r2|0.875040
+r3|0.800160
+r4|0.585600
+r5|0.549600
+(4 rows)
+NOTICE:  counting refused on 4 of 4 nodes
 remove_provenance
 
 (1 row)

@@ -27,6 +27,7 @@
 #include "utils/uuid.h"
 
 #include "agg_token.h"
+#include "gate_builders.h"
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
 
@@ -371,12 +372,33 @@ Datum provenance_times(PG_FUNCTION_ARGS) {
   if (PG_ARGISNULL(0))
     return uuid_result(address_of_one());
   n = filtered_tokens(PG_GETARG_ARRAYTYPE_P(0), address_of_one(), &tokens);
-  if (n == 0)
-    return uuid_result(address_of_one());
-  if (n == 1)
-    return uuid_result(&tokens[0]);
-  result = nary_gate(gate_times, "times", "times-canonical", tokens, n);
+  result = provsql_build_times(tokens, n);
   return uuid_result(&result);
+}
+
+/* The nonnull tokens, @p neutral dropped, in order, into @p out (room for
+ * @p n). */
+static int drop_neutral(const pg_uuid_t *tokens, int n,
+                        const pg_uuid_t *neutral, pg_uuid_t *out) {
+  int i, kept = 0;
+  for (i = 0; i < n; ++i)
+    if (memcmp(tokens[i].data, neutral->data, UUID_LEN) != 0)
+      out[kept++] = tokens[i];
+  return kept;
+}
+
+pg_uuid_t provsql_build_times(const pg_uuid_t *tokens, int n) {
+  pg_uuid_t *kept = (pg_uuid_t *)palloc(sizeof(pg_uuid_t) * (n > 0 ? n : 1));
+  pg_uuid_t result;
+  n = drop_neutral(tokens, n, address_of_one(), kept);
+  if (n == 0)
+    result = *address_of_one();
+  else if (n == 1)
+    result = kept[0];
+  else
+    result = nary_gate(gate_times, "times", "times-canonical", kept, n);
+  pfree(kept);
+  return result;
 }
 
 PG_FUNCTION_INFO_V1(provenance_plus);
@@ -395,12 +417,22 @@ Datum provenance_plus(PG_FUNCTION_ARGS) {
   int n;
 
   n = filtered_tokens(PG_GETARG_ARRAYTYPE_P(0), address_of_zero(), &tokens);
-  if (n == 0)
-    return uuid_result(address_of_zero());
-  if (n == 1)
-    return uuid_result(&tokens[0]);
-  result = nary_gate(gate_plus, "plus", "plus-canonical", tokens, n);
+  result = provsql_build_plus(tokens, n);
   return uuid_result(&result);
+}
+
+pg_uuid_t provsql_build_plus(const pg_uuid_t *tokens, int n) {
+  pg_uuid_t *kept = (pg_uuid_t *)palloc(sizeof(pg_uuid_t) * (n > 0 ? n : 1));
+  pg_uuid_t result;
+  n = drop_neutral(tokens, n, address_of_zero(), kept);
+  if (n == 0)
+    result = *address_of_zero();
+  else if (n == 1)
+    result = kept[0];
+  else
+    result = nary_gate(gate_plus, "plus", "plus-canonical", kept, n);
+  pfree(kept);
+  return result;
 }
 
 /* -------------------------------------------------------------------------
@@ -754,8 +786,7 @@ PG_FUNCTION_INFO_V1(provenance_monus);
  */
 Datum provenance_monus(PG_FUNCTION_ARGS) {
   const pg_uuid_t *token1, *token2;
-  StringInfoData buf;
-  pg_uuid_t monus, children[2];
+  pg_uuid_t monus;
 
   if (PG_ARGISNULL(0))
     ereport(ERROR,
@@ -764,11 +795,18 @@ Datum provenance_monus(PG_FUNCTION_ARGS) {
   if (PG_ARGISNULL(1))
     return uuid_result(token1);
   token2 = PG_GETARG_UUID_P(1);
+  monus = provsql_build_monus(token1, token2);
+  return uuid_result(&monus);
+}
+
+pg_uuid_t provsql_build_monus(const pg_uuid_t *token1, const pg_uuid_t *token2) {
+  StringInfoData buf;
+  pg_uuid_t monus, children[2];
 
   if (same_token(token1, token2) || same_token(token1, address_of_zero()))
-    return uuid_result(address_of_zero());
+    return *address_of_zero();
   if (same_token(token2, address_of_zero()))
-    return uuid_result(token1);
+    return *token1;
 
   name_begin(&buf, "monus");
   name_add_uuid(&buf, token1);
@@ -777,7 +815,7 @@ Datum provenance_monus(PG_FUNCTION_ARGS) {
   children[0] = *token1;
   children[1] = *token2;
   provsql_internal_create_gate(&monus, gate_monus, 2, children);
-  return uuid_result(&monus);
+  return monus;
 }
 
 PG_FUNCTION_INFO_V1(provenance_delta);
@@ -787,20 +825,27 @@ PG_FUNCTION_INFO_V1(provenance_delta);
  */
 Datum provenance_delta(PG_FUNCTION_ARGS) {
   const pg_uuid_t *token;
-  StringInfoData buf;
   pg_uuid_t delta;
 
   if (PG_ARGISNULL(0))
     return uuid_result(address_of_one());
   token = PG_GETARG_UUID_P(0);
+  delta = provsql_build_delta(token);
+  return uuid_result(&delta);
+}
+
+pg_uuid_t provsql_build_delta(const pg_uuid_t *token) {
+  StringInfoData buf;
+  pg_uuid_t delta;
+
   if (same_token(token, address_of_zero()) || same_token(token, address_of_one()))
-    return uuid_result(token);
+    return *token;
 
   name_begin(&buf, "delta");
   name_add_uuid(&buf, token);
   delta = name_end(&buf);
   provsql_internal_create_gate(&delta, gate_delta, 1, token);
-  return uuid_result(&delta);
+  return delta;
 }
 
 PG_FUNCTION_INFO_V1(provenance_cmp);

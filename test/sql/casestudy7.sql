@@ -490,24 +490,36 @@ SELECT remove_provenance('cs7_anc');
 SELECT paper, lineage, prob FROM cs7_anc ORDER BY paper;
 DROP TABLE cs7_anc;
 
--- Cyclic without boolean_provenance: the fixpoint never stabilises.
+-- Cyclic without boolean_provenance: the recursion is recorded as an
+-- equation system, solved by the semiring evaluating it.  Its probability is
+-- the connection reliability the 'boolean' class gives below; the number of
+-- its derivations, infinite through the cycles, is refused when evaluated.
 SET provsql.provenance = 'semiring';
+SELECT create_provenance_mapping('cs7_count', 'extends', '1');
+CREATE TABLE cs7_conn AS
+  WITH RECURSIVE conn(node) AS (
+      SELECT 'r1'
+    UNION
+      SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric,6) AS reliability,
+         provenance() AS tok
+  FROM conn WHERE node <> 'r1';
+SELECT remove_provenance('cs7_conn');
+SELECT node, reliability FROM cs7_conn ORDER BY node;
 DO $$
-DECLARE raised boolean := false;
+DECLARE refused int := 0; r record;
 BEGIN
-  BEGIN
-    PERFORM node FROM (
-      WITH RECURSIVE conn(node) AS (
-          SELECT 'r1'
-        UNION
-          SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
-      ) SELECT node FROM conn) s;
-  EXCEPTION WHEN OTHERS THEN raised := true;
-  END;
-  IF NOT raised THEN
-    RAISE EXCEPTION 'expected cyclic reachability to fail without boolean_provenance';
-  END IF;
+  FOR r IN SELECT tok FROM cs7_conn LOOP
+    BEGIN
+      PERFORM sr_counting(r.tok, 'cs7_count');
+    EXCEPTION WHEN OTHERS THEN refused := refused + 1;
+    END;
+  END LOOP;
+  RAISE NOTICE 'counting refused on % of % nodes', refused,
+    (SELECT count(*) FROM cs7_conn);
 END $$;
+DROP TABLE cs7_conn, cs7_count;
 
 -- Cyclic under boolean_provenance: reachability converges; the
 -- probability is connection reliability.

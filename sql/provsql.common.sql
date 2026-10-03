@@ -1951,6 +1951,21 @@ $$
 $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
+ * @brief The token of each tuple of the equation system @p sys (internal)
+ *
+ * Tuples outside every cycle of the system get their right-hand side
+ * rebuilt over the tokens of the tuples they read, as a fixpoint iteration
+ * would build it; the tuples of each cyclic component a @c fixpoint gate
+ * over a system of their own.  See @c fix_system.cpp.
+ *
+ * @param sys  a @c fixsystem gate, with one unknown and one right-hand
+ *             side per tuple
+ * @return     the token of each tuple, in the order of the unknowns
+ */
+CREATE OR REPLACE FUNCTION resolve_fix_system(sys uuid) RETURNS uuid[] AS
+  'provsql','resolve_fix_system' LANGUAGE C STRICT VOLATILE;
+
+/**
  * @brief Driver for provenance over recursive queries, as an equation
  *        system solved at evaluation time (internal)
  *
@@ -2046,14 +2061,17 @@ BEGIN
   IF xs IS NOT NULL THEN
     sys := public.uuid_generate_v5(seed, 'system');
     PERFORM provsql.create_gate(sys, 'fixsystem', xs || fs);
-    -- A component's address is a function of its system and index, so
-    -- that evaluation can name every component of a system it solves.
-    PERFORM provsql.create_gate(provsql.fixpoint_token(sys, i::int),
-                                'fixpoint', ARRAY[sys], i::int, 0, NULL)
-      FROM provsql_rec_eq;
+    -- Each tuple's token: rebuilt over the others' where it is derived
+    -- through no cycle, a fixpoint gate over its cyclic component's own
+    -- system otherwise.
+    -- Unnested with its index, so that each row reads its own token and
+    -- not a copy of the whole array.
     EXECUTE format(
-      'UPDATE %I w SET provsql = provsql.fixpoint_token(%L, e.i::int) '
-      'FROM provsql_rec_eq e WHERE w.provsql = e.x',
+      'UPDATE %I w SET provsql = t.tok '
+      'FROM provsql_rec_eq e '
+      'JOIN unnest(provsql.resolve_fix_system(%L)) WITH ORDINALITY AS t(tok, i) '
+      'ON t.i = e.i '
+      'WHERE w.provsql = e.x',
       work_name, sys);
   END IF;
   PERFORM set_config('provsql.active', active, true);

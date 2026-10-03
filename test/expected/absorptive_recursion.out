@@ -85,14 +85,27 @@ remove_provenance
 add_provenance
 
 (1 row)
-NOTICE:  semiring class refuses the self-derivation
+create_provenance_mapping
+
+(1 row)
 remove_provenance
 
 (1 row)
 n|root_type|prob
-2|assumed|0.500000
-3|assumed|0.250000
-|assumed|0.500000
+2|input|0.500000
+3|times|0.250000
+|fixpoint|0.500000
+(3 rows)
+NOTICE:  n=2: 1 derivation(s)
+NOTICE:  n=3: 1 derivation(s)
+NOTICE:  n=NULL: count refused
+remove_provenance
+
+(1 row)
+n|root_type|prob
+2|input|0.500000
+3|times|0.250000
+|fixpoint|0.500000
 (3 rows)
 remove_provenance
 

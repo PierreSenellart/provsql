@@ -136,7 +136,7 @@ int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route:
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
-bool provsql_recursion_equations = false; ///< Lower a set-semantics recursive CTE to an equation system solved per semiring at evaluation (@c eval_recursive_system) instead of unrolling its fixpoint; controlled by the @c provsql.recursion_equations GUC
+bool provsql_recursion_equations = true; ///< Lower a set-semantics recursive CTE to an equation system solved per semiring at evaluation (@c eval_recursive_system) instead of unrolling its fixpoint; controlled by the @c provsql.recursion_equations GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
 bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
@@ -37079,7 +37079,7 @@ void _PG_init(void) {
                            "semiring at evaluation time, instead of an "
                            "unrolled fixpoint circuit. Experimental.",
                            &provsql_recursion_equations,
-                           false,
+                           true,
                            PGC_USERSET,
                            0,
                            NULL,

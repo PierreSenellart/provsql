@@ -156,31 +156,45 @@ DROP TABLE absf_b;
 -- own rows through an outer join, so a null-padded row re-derives itself at
 -- every round (a null key matches nothing), and the annotation gains a term
 -- each round although the rows settle.  Plain SQL returns three rows, so this
--- is the same situation as cyclic data and not a divergence of the query: the
--- default class refuses it, naming the derivation rather than the data, and
--- 'absorptive' reads it as the absorptive fixpoint, tagged.
+-- is the same situation as cyclic data and not a divergence of the query:
+-- the null-padded row is the one tuple of the recursion's equations derived
+-- through itself, and it alone is a fixpoint, whose value the evaluating
+-- semiring decides; the other two rows have ordinary circuits.
 --   e = {(1,2), (2,3)}, both at p = 0.5, so over the four worlds
---   n=2 needs (1,2)            -> 0.5
---   n=3 needs both             -> 0.25
+--   n=2 needs (1,2)            -> 0.5, one derivation
+--   n=3 needs both             -> 0.25, one derivation
 --   n=NULL needs (1,2), since 2 has no successor in {(1,2)} and 3 has none
---     in {(1,2),(2,3)}         -> 0.5
+--     in {(1,2),(2,3)}         -> 0.5, infinitely many derivations: the
+--                                 count is refused
 RESET provsql.provenance;
 CREATE TABLE absp_e(src int, dst int);
 INSERT INTO absp_e VALUES (1,2),(2,3);
 SELECT add_provenance('absp_e');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM absp_e; END $$;
+SELECT create_provenance_mapping('absp_one', 'absp_e', '1');
+CREATE TABLE absp_r AS
+  WITH RECURSIVE r(n) AS (
+      SELECT dst FROM absp_e WHERE src = 1
+    UNION
+      SELECT x.dst FROM r LEFT JOIN absp_e x ON x.src = r.n)
+  SELECT n, get_gate_type(provenance()) AS root_type,
+         round(probability_evaluate(provenance())::numeric, 6) AS prob,
+         provenance() AS tok
+  FROM r;
+SELECT remove_provenance('absp_r');
+SELECT n, root_type, prob FROM absp_r ORDER BY n NULLS LAST;
 DO $$
+DECLARE r record; c text;
 BEGIN
-  PERFORM n FROM (
-    WITH RECURSIVE r(n) AS (
-        SELECT dst FROM absp_e WHERE src = 1
-      UNION
-        SELECT x.dst FROM r LEFT JOIN absp_e x ON x.src = r.n)
-    SELECT n FROM r) s;
-  RAISE EXCEPTION 'expected the semiring class to refuse a self-derivation';
-EXCEPTION WHEN feature_not_supported THEN
-  RAISE NOTICE 'semiring class refuses the self-derivation';
+  FOR r IN SELECT n, tok FROM absp_r ORDER BY n NULLS LAST LOOP
+    BEGIN
+      c := sr_counting(r.tok, 'absp_one')::text || ' derivation(s)';
+    EXCEPTION WHEN OTHERS THEN c := 'count refused';
+    END;
+    RAISE NOTICE 'n=%: %', coalesce(r.n::text, 'NULL'), c;
+  END LOOP;
 END $$;
+DROP TABLE absp_r, absp_one;
 SET provsql.provenance = 'absorptive';
 CREATE TABLE absp_r AS
   WITH RECURSIVE r(n) AS (
