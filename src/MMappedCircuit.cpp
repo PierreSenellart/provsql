@@ -1132,7 +1132,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     }
 
     if(type==gate_mulinput || type==gate_eq || type==gate_agg
-       || type==gate_cmp  || type==gate_arith) {
+       || type==gate_cmp  || type==gate_arith || type==gate_fixpoint) {
       auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
     } else if(type==gate_plus || type==gate_times || type==gate_assumed) {

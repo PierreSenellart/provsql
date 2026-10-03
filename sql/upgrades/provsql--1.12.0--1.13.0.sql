@@ -42,6 +42,11 @@ SET search_path TO provsql;
 ALTER TYPE query_type_enum ADD VALUE IF NOT EXISTS 'TRANSACTION' AFTER 'UNDO';
 ALTER TYPE query_type_enum ADD VALUE IF NOT EXISTS 'REPLACE' AFTER 'TRANSACTION';
 
+-- The gates of a recursive query read as an equation system.
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'fixvar';
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'fixsystem';
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'fixpoint';
+
 -- ----------------------------------------------------------------------
 -- 2. Per-relation metadata in the heap.
 --

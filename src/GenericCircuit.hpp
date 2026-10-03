@@ -38,6 +38,9 @@
  */
 #include "GenericCircuit.h"
 
+#include <deque>
+#include <functional>
+
 extern "C" {
 #include "utils/lsyscache.h"
 #include "miscadmin.h"        // check_stack_depth
@@ -58,6 +61,9 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
    * gate), so shared sub-DAGs are evaluated once and gate-creating
    * semirings (BoolExpr, formula) preserve the sharing structurally. */
   std::vector<gate_t> stack{g};
+  /* Equation systems already solved in this evaluation, one value per
+   * unknown: every gate_fixpoint over the same system reads from it. */
+  std::unordered_map<gate_t, std::vector<typename S::value_type> > systems;
 
   while(!stack.empty()) {
     const gate_t u = stack.back();
@@ -216,6 +222,31 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
                   "Unknown assumption marker '" + assumption + "'");
       }
       break;
+    case gate_fixpoint: {
+      /* A component of the least solution of an equation system: solved
+       * once per evaluation, for the whole system, without visiting the
+       * system's wires as an ordinary sub-circuit (its unknowns have no
+       * value of their own). */
+      const auto &w = getWires(u);
+      if(w.size() != 1 || getGateType(w[0]) != gate_fixsystem)
+        throw CircuitException(
+                "gate_fixpoint must have exactly one child, a gate_fixsystem");
+      auto it = systems.find(w[0]);
+      if(it == systems.end())
+        it = systems.emplace(
+          w[0], solveFixSystem(w[0], provenance_mapping, semiring)).first;
+      const unsigned idx = getInfos(u).first;
+      if(idx < 1 || idx > it->second.size())
+        throw CircuitException("gate_fixpoint index out of range");
+      provenance_mapping.emplace(u, it->second[idx-1]);
+      stack.pop_back();
+      continue;
+    }
+    case gate_fixvar:
+    case gate_fixsystem:
+      throw CircuitException(
+              "An equation system or one of its unknowns has no value of "
+              "its own; it is read through a gate_fixpoint");
     case gate_cmp:
     {
       bool ok;
@@ -453,4 +484,268 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   }
 
   return provenance_mapping.at(g);
+}
+
+template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
+std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
+{
+  using V = typename S::value_type;
+
+  const auto &w = getWires(sys);
+  if(w.size() % 2)
+    throw CircuitException("gate_fixsystem must have an even number of wires");
+  const std::size_t n = w.size() / 2;
+
+  std::unordered_map<gate_t, std::size_t> unknown;
+  for(std::size_t i = 0; i < n; ++i) {
+    if(getGateType(w[i]) != gate_fixvar)
+      throw CircuitException(
+              "The first half of a gate_fixsystem's wires must be its "
+              "gate_fixvar unknowns");
+    unknown.emplace(w[i], i);
+  }
+
+  const V zero = semiring.zero(), one = semiring.one();
+  const auto plus2 = [&](const V &a, const V &b) -> V {
+                       if(a == zero) return b;
+                       if(b == zero) return a;
+                       return semiring.plus(std::vector<V>{a, b});
+                     };
+  const auto times2 = [&](const V &a, const V &b) -> V {
+                        if(a == zero || b == zero) return zero;
+                        if(a == one) return b;
+                        if(b == one) return a;
+                        return semiring.times(std::vector<V>{a, b});
+                      };
+
+  /* Which gates depend on an unknown: an iterative post-order, since the
+   * sub-circuits that do not (the input tokens' own provenance) can be as
+   * deep as the data.  Another system's gate_fixpoint is a constant here;
+   * an unknown of another system cannot occur. */
+  std::unordered_map<gate_t, bool> dep;
+  {
+    std::vector<gate_t> st;
+    for(std::size_t i = n; i < w.size(); ++i)
+      st.push_back(w[i]);
+    while(!st.empty()) {
+      const gate_t u = st.back();
+      if(dep.count(u)) { st.pop_back(); continue; }
+      const auto t = getGateType(u);
+      if(t == gate_fixvar) {
+        if(!unknown.count(u))
+          throw CircuitException(
+                  "An unknown of another equation system occurs in this one");
+        dep.emplace(u, true);
+        st.pop_back();
+        continue;
+      }
+      if(t == gate_fixpoint) {
+        dep.emplace(u, false);
+        st.pop_back();
+        continue;
+      }
+      bool ready = true;
+      for(const auto &c : getWires(u))
+        if(!dep.count(c)) { st.push_back(c); ready = false; }
+      if(!ready) continue;
+      bool d = false;
+      for(const auto &c : getWires(u))
+        d = d || dep.at(c);
+      dep.emplace(u, d);
+      st.pop_back();
+    }
+  }
+
+  /* Linear form b ⊕ ⨁_j a_j ⊗ x_j of a gate that depends on the unknowns.
+   * Only the gates between an equation's root and its unknowns are visited
+   * here, a part of the circuit as shallow as the recursive term itself, so
+   * the recursion is bounded by the query, not the data. */
+  struct Lin {
+    V c;
+    std::vector<std::pair<std::size_t, V> > terms;
+  };
+  std::unordered_map<gate_t, Lin> lin;
+  std::function<const Lin &(gate_t)> linear = [&](gate_t u) -> const Lin & {
+    auto it = lin.find(u);
+    if(it != lin.end())
+      return it->second;
+
+    if(isBooleanAssumed(u) && !semiring.compatibleWithBooleanRewrite())
+      throw CircuitException(
+              "The requested semiring does not admit a homomorphism from "
+              "Boolean functions; a gate of this recursion's equations was "
+              "rewritten under a Boolean-only rule");
+    if(isAbsorptiveAssumed(u) && !semiring.absorptive()
+       && !semiring.compatibleWithBooleanRewrite())
+      throw CircuitException(
+              "The requested semiring is not absorptive; a gate of this "
+              "recursion's equations was rewritten under an absorptive rule");
+
+    Lin r{zero, {}};
+    const auto t = getGateType(u);
+    switch(t) {
+    case gate_fixvar:
+      r.terms.emplace_back(unknown.at(u), one);
+      break;
+
+    case gate_plus:
+      for(const auto &c : getWires(u)) {
+        if(dep.at(c)) {
+          const Lin &l = linear(c);
+          r.c = plus2(r.c, l.c);
+          r.terms.insert(r.terms.end(), l.terms.begin(), l.terms.end());
+        } else
+          r.c = plus2(r.c, evaluate(c, provenance_mapping, semiring));
+      }
+      break;
+
+    case gate_times: {
+      V k = one;
+      gate_t var = u;
+      for(const auto &c : getWires(u)) {
+        if(dep.at(c)) {
+          if(var != u)
+            throw CircuitException(
+                    "This recursion's equations are not linear: a product "
+                    "has two factors depending on the recursive relation");
+          var = c;
+        } else
+          k = times2(k, evaluate(c, provenance_mapping, semiring));
+      }
+      const Lin &l = linear(var);
+      if(!(k == zero)) {
+        r.c = times2(l.c, k);
+        for(const auto &[j, a] : l.terms)
+          r.terms.emplace_back(j, times2(a, k));
+      }
+      break;
+    }
+
+    case gate_assumed: {
+      const std::string assumption = getExtra(u);
+      if((assumption.empty() || assumption == "boolean")
+         && !semiring.compatibleWithBooleanRewrite())
+        throw CircuitException(
+                "The requested semiring does not admit a homomorphism from "
+                "Boolean functions; part of this recursion's equations was "
+                "computed under a Boolean-provenance assumption");
+      if(assumption == "absorptive" && !semiring.absorptive())
+        throw CircuitException(
+                "The requested semiring is not absorptive; part of this "
+                "recursion's equations was computed under an absorptive "
+                "assumption");
+      r = linear(getWires(u)[0]);
+      break;
+    }
+
+    case gate_project:
+    case gate_eq:
+    case gate_annotation:
+      r = linear(getWires(u)[0]);
+      break;
+
+    default:
+      throw CircuitException(
+              std::string("This recursion's equations are not linear "
+                          "semiring expressions in the recursive relation "
+                          "(gate of type ") + gate_type_name[t] +
+              " over it)");
+    }
+    return lin.emplace(u, std::move(r)).first->second;
+  };
+
+  /* x_i = b[i] ⊕ ⨁ a ⊗ x_j over in[i] = {(j, a)}. */
+  std::vector<V> b(n, zero);
+  std::vector<std::vector<std::pair<std::size_t, V> > > in(n), out(n);
+  for(std::size_t i = 0; i < n; ++i) {
+    const gate_t f = w[n + i];
+    if(dep.at(f)) {
+      const Lin &l = linear(f);
+      b[i] = l.c;
+      for(const auto &[j, a] : l.terms)
+        if(!(a == zero)) {
+          in[i].emplace_back(j, a);
+          out[j].emplace_back(i, a);
+        }
+    } else
+      b[i] = evaluate(f, provenance_mapping, semiring);
+  }
+
+  /* Topological order of the dependency graph j -> i (Kahn). */
+  std::vector<std::size_t> indeg(n, 0), order;
+  for(std::size_t i = 0; i < n; ++i)
+    indeg[i] = in[i].size();
+  for(std::size_t i = 0; i < n; ++i)
+    if(indeg[i] == 0)
+      order.push_back(i);
+  for(std::size_t k = 0; k < order.size(); ++k)
+    for(const auto &e : out[order[k]])
+      if(--indeg[e.first] == 0)
+        order.push_back(e.first);
+
+  std::vector<V> x(n, zero);
+
+  if(order.size() == n) {
+    /* Acyclic: every derivation is finite, and the topological order
+     * evaluates each equation once its right-hand side is known.  Exact
+     * in every semiring. */
+    for(const auto i : order) {
+      V v = b[i];
+      for(const auto &[j, a] : in[i])
+        v = plus2(v, times2(a, x[j]));
+      x[i] = v;
+    }
+    return x;
+  }
+
+  if(!semiring.absorptive())
+    throw CircuitException(
+            "This recursion's equations are cyclic (a tuple is derived "
+            "through itself) and the requested semiring is not absorptive: "
+            "the least solution is an infinite sum, which counting or "
+            "why-provenance cannot give a value to.  Use an absorptive "
+            "semiring (boolean, nonnegative tropical, Viterbi, ...).");
+
+  /* Cyclic, absorptive: value iteration from b with a work list (Mohri's
+   * generic single-source algorithm, the residual being superfluous in an
+   * idempotent semiring).  A value only changes towards the solution, and
+   * absorption cuts every derivation repeating a tuple, so the iteration
+   * converges; the bound below only guards against a semiring declaring
+   * absorption it does not have. */
+  std::size_t nedges = 0;
+  for(std::size_t i = 0; i < n; ++i)
+    nedges += in[i].size();
+  const std::size_t bound = (n + 1) * (nedges + 1);
+  std::size_t steps = 0;
+
+  std::vector<char> queued(n, 0);
+  std::deque<std::size_t> queue;
+  for(std::size_t i = 0; i < n; ++i) {
+    x[i] = b[i];
+    if(!(x[i] == zero)) {
+      queue.push_back(i);
+      queued[i] = 1;
+    }
+  }
+  while(!queue.empty()) {
+    provsql_poll_interrupt();
+    const std::size_t j = queue.front();
+    queue.pop_front();
+    queued[j] = 0;
+    for(const auto &[i, a] : out[j]) {
+      if(++steps > bound)
+        throw CircuitException(
+                "Value iteration over this recursion's equations does not "
+                "converge; the semiring does not behave absorptively");
+      const V v = plus2(x[i], times2(a, x[j]));
+      if(!(v == x[i])) {
+        x[i] = v;
+        if(!queued[i]) {
+          queue.push_back(i);
+          queued[i] = 1;
+        }
+      }
+    }
+  }
+  return x;
 }

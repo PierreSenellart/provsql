@@ -77,6 +77,9 @@ const char *gate_type_name[] = {
   "mobius",
   "case",
   "observe",
+  "fixvar",
+  "fixsystem",
+  "fixpoint",
   "invalid"
 };
 
@@ -807,6 +810,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(mobius);
   GET_GATE_TYPE_OID_OPTIONAL(case);
   GET_GATE_TYPE_OID_OPTIONAL(observe);
+  GET_GATE_TYPE_OID_OPTIONAL(fixvar);
+  GET_GATE_TYPE_OID_OPTIONAL(fixsystem);
+  GET_GATE_TYPE_OID_OPTIONAL(fixpoint);
 
   constants.ok=true;
 

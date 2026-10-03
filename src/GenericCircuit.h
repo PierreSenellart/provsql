@@ -734,6 +734,30 @@ friend class boost::serialization::access;
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
 typename S::value_type evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
 
+/**
+ * @brief Least solution of the equation system of a @c gate_fixsystem.
+ *
+ * The system, x_i = f_i(x), is linear (PostgreSQL forbids a recursive
+ * reference appearing twice in the recursive term): each f_i is read as
+ * b_i ⊕ ⨁_j a_ij ⊗ x_j, where b_i and the a_ij are evaluated in
+ * @p semiring like any other sub-circuit, which makes x the path
+ * provenance, from a virtual source, of the graph with an edge j → i of
+ * weight a_ij.  An acyclic system is solved in topological order, exactly
+ * in every semiring; a cyclic one by value iteration when @p semiring is
+ * absorptive (a derivation repeating a tuple is absorbed by a shorter
+ * one, so the iteration converges), and refused otherwise, its least
+ * solution being an infinite sum.
+ *
+ * @param sys                 The @c gate_fixsystem gate.
+ * @param provenance_mapping  As in @c evaluate, for the sub-circuits that
+ *                            do not depend on the unknowns.
+ * @param semiring            Semiring instance.
+ * @return                    The solution, one value per unknown, in wire
+ *                            order.
+ */
+template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
+std::vector<typename S::value_type> solveFixSystem(gate_t sys, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
+
 };
 
 #endif /* GENERIC_CIRCUIT_H */

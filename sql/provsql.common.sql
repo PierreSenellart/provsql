@@ -86,7 +86,7 @@ CREATE TYPE provenance_gate AS
                       -- Backs a CASE expression over random variables (and
                       -- abs / clamp / ReLU as sugar).  RV/measure-carrier;
                       -- refused by every general sr_* semiring.
-    'observe'         -- Latent-variable observation (likelihood-weighting
+    'observe',        -- Latent-variable observation (likelihood-weighting
                       -- evidence): one wire -> an observed bare gate_rv
                       -- leaf, the datum in extra.  Contributes a
                       -- continuous density factor (the leaf's pdf at the
@@ -95,6 +95,16 @@ CREATE TYPE provenance_gate AS
                       -- exactly like a conditioning event.  Evaluated only
                       -- by the importance-sampling weight walk; refused by
                       -- every Boolean / semiring evaluator.
+    'fixvar',         -- Unknown of an equation system: a leaf standing for
+                      -- the solution of one equation, meaningful only
+                      -- inside the 'fixsystem' gate that lists it.
+    'fixsystem',      -- Linear equation system x_i = f_i(x) of a recursive
+                      -- query, one equation per derived tuple: wires
+                      -- [x_1, ..., x_n, f_1, ..., f_n].  Read through
+                      -- 'fixpoint'.
+    'fixpoint'        -- Component of the least solution of an equation
+                      -- system: one wire to a 'fixsystem', the 1-based
+                      -- index in info1; solved per semiring at evaluation.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -1923,6 +1933,110 @@ BEGIN
       'UPDATE %I SET provsql = provsql.provenance_assume(provsql, ''absorptive'')',
       work_name);
   END IF;
+END
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+/**
+ * @brief Driver for provenance over recursive queries, as an equation
+ *        system solved at evaluation time (internal)
+ *
+ * Alternative to @c eval_recursive, selected by the
+ * @c provsql.recursion_equations GUC.  Instead of unrolling the fixpoint
+ * round after round, it records the recursion as one equation per derived
+ * tuple, x_t = f_t(x), and leaves its solution to evaluation time, where
+ * the semiring is known:
+ *
+ * 1. the derived tuples are computed by PostgreSQL's own recursion, with
+ *    provenance tracking off;
+ * 2. the working table is loaded with them, each carrying a fresh unknown
+ *    (a @c fixvar gate) as its token;
+ * 3. the CTE body is run once over that table, through ProvSQL's normal
+ *    rewriting: the token it gives a tuple is the right-hand side f_t of
+ *    its equation, an ordinary circuit over the input tokens and the
+ *    unknowns;
+ * 4. a @c fixsystem gate gathers the unknowns and the right-hand sides,
+ *    and each tuple's token becomes a @c fixpoint gate reading its
+ *    component of the least solution.
+ *
+ * The recursion thus costs plain SQL's rounds plus one, and the circuit
+ * one round of derivations, whatever the data's cycles; whether a cyclic
+ * system has a value is decided by the semiring evaluating it (see
+ * @c GenericCircuit::solveFixSystem).
+ *
+ * @param body_sql   the recursive CTE body (as for @c eval_recursive)
+ * @param work_name  the working relation name @p body_sql references
+ * @param colnames   comma-separated user columns
+ * @param coldef     column definitions for the working table
+ */
+CREATE OR REPLACE FUNCTION eval_recursive_system(
+  body_sql  text,
+  work_name text,
+  colnames  text,
+  coldef    text)
+  RETURNS void AS
+$$
+DECLARE
+  seed      uuid := public.uuid_generate_v4();
+  active    text := current_setting('provsql.active');
+  joincond  text;
+  xs        uuid[];
+  fs        uuid[];
+  sys       uuid;
+BEGIN
+  EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
+  DROP TABLE IF EXISTS provsql_rec_new;
+  DROP TABLE IF EXISTS provsql_rec_eq;
+
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid) ON COMMIT DROP',
+                 work_name, coldef);
+  PERFORM provsql.planted_scope(work_name);
+  EXECUTE format('CREATE TEMP TABLE provsql_rec_new (LIKE %I) ON COMMIT DROP',
+                 work_name);
+
+  -- 1-2. The derived tuples, by plain recursion, and one unknown each.
+  PERFORM set_config('provsql.active', 'off', true);
+  EXECUTE format(
+    'INSERT INTO %1$I(%2$s) WITH RECURSIVE %1$I(%2$s) AS (%3$s) '
+    'SELECT %2$s FROM %1$I',
+    work_name, colnames, body_sql);
+  EXECUTE format(
+    'CREATE TEMP TABLE provsql_rec_eq ON COMMIT DROP AS '
+    'SELECT ctid AS tid, i, public.uuid_generate_v5(%L, ''x'' || i) AS x '
+    'FROM (SELECT ctid, row_number() OVER () AS i FROM %I) t',
+    seed, work_name);
+  EXECUTE format(
+    'UPDATE %I w SET provsql = e.x FROM provsql_rec_eq e WHERE w.ctid = e.tid',
+    work_name);
+  PERFORM provsql.create_gate(x, 'fixvar') FROM provsql_rec_eq;
+  PERFORM set_config('provsql.active', active, true);
+
+  -- 3. One round over the unknowns: each tuple's right-hand side.
+  EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, body_sql);
+
+  -- 4. The system, and each tuple's component of its solution.
+  PERFORM set_config('provsql.active', 'off', true);
+  SELECT string_agg(format('n.%1$s IS NOT DISTINCT FROM w.%1$s', trim(c)),
+                    ' AND ')
+    INTO joincond
+    FROM unnest(string_to_array(colnames, ',')) AS c;
+  EXECUTE format(
+    'SELECT array_agg(e.x ORDER BY e.i), '
+    'array_agg(coalesce(n.provsql, provsql.gate_zero()) ORDER BY e.i) '
+    'FROM provsql_rec_eq e JOIN %I w ON w.provsql = e.x '
+    'LEFT JOIN provsql_rec_new n ON %s',
+    work_name, joincond) INTO xs, fs;
+  IF xs IS NOT NULL THEN
+    sys := public.uuid_generate_v5(seed, 'system');
+    PERFORM provsql.create_gate(sys, 'fixsystem', xs || fs);
+    PERFORM provsql.create_gate(public.uuid_generate_v5(seed, 'p' || i),
+                                'fixpoint', ARRAY[sys], i::int, 0, NULL)
+      FROM provsql_rec_eq;
+    EXECUTE format(
+      'UPDATE %I w SET provsql = public.uuid_generate_v5(%L, ''p'' || e.i) '
+      'FROM provsql_rec_eq e WHERE w.provsql = e.x',
+      work_name, seed);
+  END IF;
+  PERFORM set_config('provsql.active', active, true);
 END
 $$ LANGUAGE plpgsql SET client_min_messages = warning;
 
