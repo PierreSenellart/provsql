@@ -363,8 +363,8 @@ workflow graphs…).
 The interface is an ordinary recursive reachability query, under
 ``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the result is
 the exact Boolean provenance, but only the *absorptive quotient* of the
-infinite recursive semiring provenance, as for recursion on cyclic
-data; see :ref:`provsql-provenance-class`):
+infinite recursive semiring provenance; see
+:ref:`provsql-provenance-class`):
 
 .. code-block:: postgresql
 

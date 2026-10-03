@@ -33,9 +33,10 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``'semiring'``
         Universal semiring provenance (the default): circuits are valid
         for every commutative (m-)semiring. A recursive query in which a
-        tuple is derived through itself is rejected: cyclic data does
-        that, and so does a null-padded row that re-derives itself, or a
-        projection onto constants, on acyclic data.
+        tuple is derived through itself (over cyclic data, or through a
+        null-padded row that re-derives itself on acyclic data) has its
+        provenance recorded as equations, whose value the evaluating
+        semiring decides (see :doc:`querying`).
 
     ``'absorptive'``
         Circuits may additionally be valid only for *absorptive*
@@ -43,13 +44,6 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
         Boolean, min-plus over nonnegative costs, Viterbi…).
         Concretely:
 
-        * a recursive query in which a tuple is derived through itself
-          (over **cyclic** data, or through a null-padded row that
-          re-derives itself on acyclic data) stops once every minimal,
-          tuple-repetition-free derivation is covered, instead of
-          failing; non-absorptive evaluations (counting,
-          why-provenance) refuse the resulting tokens, following
-          :cite:`DBLP:conf/icdt/DeutchMRT14`;
         * **recursive reachability on bounded-treewidth data** is
           compiled so that it evaluates exactly for probability and for
           every absorptive semiring, e.g., min-cost reachability through

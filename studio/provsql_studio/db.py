@@ -1034,12 +1034,12 @@ _INTERVAL_KERNELS = {
 # test will fail and this dict must be updated.
 #
 # `absorptive`: mirrors the C++ `semiring::*::absorptive()` predicate.
-# A persistent `gate_assumed` wrapper labelled 'absorptive' (a cyclic
-# recursive query truncated at the absorptive value fixpoint) is only
+# A persistent `gate_assumed` wrapper labelled 'absorptive' (a root
+# compiled by the bounded-treewidth reachability route) is only
 # sound for absorptive semirings; the in-memory absorptive-fold marker
 # additionally tolerates Boolean-rewrite-compatible semirings (the
 # folds preserve the Boolean function).  Same drift rule:
-# `test/sql/absorptive_recursion.sql` pins the refusals.
+# `test/sql/btw_tropical.sql` pins the refusals.
 _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Boolean & symbolic.
     "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None,
@@ -1063,9 +1063,10 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                     "boolean_rewrite_compatible": False,
                     "absorptive": False},
     # Min-plus restricted to nonnegative costs: absorptive, so it
-    # accepts truncated cyclic-recursion tokens (exact min-cost
-    # reachability on cyclic data); negative costs are rejected by the
-    # kernel.  Dispatches to sr_tropical(..., nonnegative => true).
+    # accepts the reachability route's tokens and solves the cycles of a
+    # recursive query by Dijkstra's algorithm; negative costs are
+    # rejected by the kernel.  Dispatches to sr_tropical(...,
+    # nonnegative => true).
     "tropical-nonneg": {"func": "sr_tropical", "types": _NUMERIC_TYPES,
                         "nonneg": True,
                         "boolean_rewrite_compatible": False,

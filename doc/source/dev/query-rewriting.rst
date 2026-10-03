@@ -267,16 +267,30 @@ This converts ``RTE_CTE`` entries to ``RTE_SUBQUERY`` so that the
 subsequent recursive processing can track provenance through them.
 Recursive CTEs (``UNION`` recursion, PostgreSQL 15 or later) are handled
 by ``lower_recursive_cte`` (inside :cfunc:`inline_ctes`), in every
-provenance class, through the generic fixpoint ``eval_recursive``: on
-acyclic data it reaches a structural fixpoint, and the circuit is sound
-for any semiring.  The provenance class matters in two places only.
-Under ``'boolean'`` or ``'absorptive'``, recognised reachability shapes
-are driven through the bounded-treewidth compiler instead (see
-:ref:`recursive-lowering` below), and on cyclic data the fixpoint stops
-at the value-fixpoint bound and marks its tokens with the
-``'absorptive'`` assumption; under the other classes, cyclic data ends
-in the iteration-bound error of ``eval_recursive``.  A ``UNION ALL``
-recursion, or a term with a set-returning function in its target list,
+provenance class, through ``eval_recursive_system``, which records the
+recursion as one equation per derived row:
+
+1. the rows are computed by PostgreSQL's own recursion, with provenance
+   tracking off;
+2. each row is given a fresh unknown (a ``gate_fixvar``) as its token;
+3. the CTE body is run once over these rows through ProvSQL's own
+   rewriting, which gives each row the right-hand side of its equation
+   (the recursive join's ``times``, the untracked base branch's
+   ``gate_one``, the ``UNION``'s ``plus`` merge);
+4. ``resolve_fix_system`` (:cfile:`fix_system.cpp`) walks the strongly
+   connected components of the equations' dependency graph in solving
+   order: a row derived through no cycle gets its right-hand side
+   rebuilt over the tokens of the rows it reads, with the rewriter's own
+   gate builders, so that its token is the content-addressed circuit a
+   fixpoint iteration would reach; the rows of a cycle get a
+   ``gate_fixpoint`` each, over a ``gate_fixsystem`` of their own.
+
+The rows' values on a cycle are left to the evaluating semiring (see
+:doc:`semiring-evaluation`).  Under ``'boolean'`` or ``'absorptive'``,
+recognised reachability shapes are driven through the bounded-treewidth
+compiler instead (see :ref:`recursive-lowering` below).  A ``UNION ALL``
+recursion has its own driver, ``eval_recursive_all``, one round per bag of
+derivations; a term with a set-returning function in its target list
 raises an error in every class.
 
 Before any of this, :cfunc:`normalize_distinct_into_group_by` turns a
@@ -1154,7 +1168,7 @@ reachable vertices along a tree decomposition of the data graph
 (:cfile:`ReachabilityCompiler.cpp`), materialise the certified
 circuits, and fill the working table.  Any failure (treewidth cap,
 non-input tokens, unrecognised shape) falls back to the generic
-fixpoint ``eval_recursive`` with a verbosity-gated notice.
+driver ``eval_recursive_system`` with a verbosity-gated notice.
 
 Above the CTE, ``detect_reach_aggregations`` recognises
 ``GROUP BY`` / ``DISTINCT`` aggregations over ``reach JOIN members``

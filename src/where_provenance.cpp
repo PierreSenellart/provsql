@@ -143,6 +143,8 @@ static string where_provenance_internal
           c.setGateEquality(f, v[0].first, v[0].second);
         } else if(type == "monusr" || type == "monusl" || type == "monus") {
           provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "where-non-monotone", "Where-provenance of non-monotone query not supported");
+        } else if(type == "fixpoint" || type == "fixsystem" || type == "fixvar") {
+          provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "where-recursive-cycle", "Where-provenance of a tuple derived through a cycle of a recursive query not supported");
         } else {
           provsql_error("Where-provenance does not support gates of type %s", type.c_str());
         }

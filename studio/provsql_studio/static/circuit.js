@@ -49,6 +49,16 @@
     observe:  'Observe gate (=): point-observation evidence that a '
             + 'random-variable leaf took the datum value (leaf = datum), '
             + 'weighted by its density (likelihood weighting).',
+    fixpoint: 'Fixpoint (lfp): one unknown of the least solution of a '
+            + 'recursive query\'s equations, for a tuple derived through a '
+            + 'cycle; the edge names the unknown.  Solved by the semiring '
+            + 'evaluating it, or refused where that semiring has no value '
+            + 'for it.',
+    fixsystem: 'Equation system (≡): the equations of a cycle of a recursive '
+            + 'query, one per tuple; its first wires are the unknowns '
+            + 'x₁…xₙ, the next ones their right-hand sides "xᵢ =".',
+    fixvar:   'Unknown (x) of an equation system: stands for the value of '
+            + 'one tuple of the cycle inside the right-hand sides.',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
@@ -496,8 +506,9 @@
         g.appendChild(badgeGroup);
       }
       // Absorptive marker : either an elided persistent
-      // 'absorptive'-labelled gate_assumed wrapper (cyclic-recursion
-      // truncation; only absorptive semirings are sound) or the
+      // 'absorptive'-labelled gate_assumed wrapper (a root compiled by the
+      // bounded-treewidth reachability route; only absorptive semirings
+      // are sound) or the
       // in-memory absorptive-fold flag (absorptive or
       // Boolean-compatible semirings are sound).  Amber dashed ring +
       // "A" badge, concentric outside the Boolean ring when both
@@ -514,12 +525,12 @@
         const aGroup = svgEl('g', { class: 'absorptive-assumed-marker' });
         const tip = svgEl('title');
         tip.textContent = n.absorptive_assumed
-          ? ('Absorptive-truncation root: this subcircuit is a cyclic '
-             + 'recursive query stopped at the absorptive value '
-             + 'fixpoint. Only absorptive semirings (probability, '
-             + 'Boolean, nonnegative min-plus, Viterbi, ...) are sound '
-             + 'to evaluate here ; counting and why-provenance are '
-             + 'genuinely infinite and refuse.')
+          ? ('Absorptive root: this subcircuit was compiled by the '
+             + 'bounded-treewidth reachability route, and represents a '
+             + 'recursive query\u2019s provenance only up to absorption. '
+             + 'Only absorptive semirings (probability, Boolean, '
+             + 'nonnegative min-plus, Viterbi, ...) are sound to evaluate '
+             + 'here ; counting and why-provenance refuse.')
           : ('Absorptive fold: this gate\u2019s wires were simplified '
              + 'under rules sound in every absorptive semiring '
              + '(plus-idempotence, plus-with-one, plus-absorbs-times). '
@@ -1646,7 +1657,7 @@
                      booleanCompatible: false, absorptive: false, aggCompatible: false },
     'tropical-nonneg': { label: 'Tropical (min-plus, nonnegative)', group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES,
-                     hint: 'Expects nonnegative cost values; absorptive, so it accepts truncated cyclic-recursion tokens (min-cost reachability).',
+                     hint: 'Expects nonnegative cost values; absorptive, so it accepts the bounded-treewidth reachability route\u2019s tokens, and solves the cycles of a recursive query fastest (min-cost reachability).',
                      booleanCompatible: false, absorptive: true, aggCompatible: false },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',

@@ -105,7 +105,9 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
     ss << "  </prov:entity>\n";
 
     bool first=true;
-    for(auto h: c.getWires(g)) {
+    const auto &wires = c.getWires(g);
+    std::size_t pos = 0;
+    for(auto h: wires) {
       ss << "  <prov:wasDerivedFrom>\n";
       ss << "    <prov:generatedEntity prov:ref='provsql:" + uuid + "' />\n";
       ss << "    <prov:usedEntity prov:ref='provsql:" + c.getUUID(h) + "' />\n";
@@ -114,7 +116,18 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
           ss << "    <prov:label>left</prov:label>\n";
         else
           ss << "    <prov:label>right</prov:label>\n";
+      } else if(type == gate_fixsystem) {
+        /* Unknown i is defined by equation i: the first half of the wires
+         * are the unknowns, the second their right-hand sides. */
+        const std::size_t n = wires.size() / 2;
+        if(pos < n)
+          ss << "    <prov:label>unknown " + std::to_string(pos + 1) + "</prov:label>\n";
+        else
+          ss << "    <prov:label>equation " + std::to_string(pos - n + 1) + "</prov:label>\n";
+      } else if(type == gate_fixpoint) {
+        ss << "    <prov:label>component " + std::to_string(c.getInfos(g).first) + "</prov:label>\n";
       }
+      ++pos;
 
       ss << "  </prov:wasDerivedFrom>\n";
 

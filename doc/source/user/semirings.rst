@@ -124,6 +124,10 @@ under bag semantics):
     FROM suspects;
 
 The mapping should assign integer values (typically ``1``) to leaf tokens.
+A result of a recursive query derived through a cycle has infinitely
+many derivations, a count the integer result cannot hold: the evaluation
+raises an error for it.  A count beyond the integer range is an error as
+well.
 
 Why-Provenance
 ---------------
@@ -140,7 +144,9 @@ Leaf values may be bare labels (e.g., ``Alice``, treated as the singleton
 witness ``{{Alice}}``) or already-structured why-provenance values
 (``{}`` for zero, ``{{}}`` for one, ``{{a},{b,c}}`` for a multi-witness
 set), which lets the output of one ``sr_why`` query be reused as input
-to another.
+to another.  The why-provenance of a result of a recursive query is
+finite even on cyclic data, there being finitely many sets of input
+tuples: going around a cycle again adds no new witness.
 
 How-Provenance
 ---------------
@@ -213,18 +219,17 @@ The mapping should assign ``float8`` cost values to leaf tokens; use
 for shortest-path or least-cost provenance, where ``plus`` selects the
 cheaper alternative and ``times`` accumulates cost along a derivation.
 
-With the optional third argument ``nonnegative => true``, input costs
-are checked nonnegative and the semiring becomes *absorptive*
-(:math:`\min(0, a) = 0` for :math:`a \ge 0`): evaluation then also
-accepts circuits carrying the ``'absorptive'`` assumption marker --
-notably recursive queries evaluated under
-``provsql.provenance = 'absorptive'`` (see
-:ref:`provsql-provenance-class`), giving exact min-cost reachability
-on cyclic graphs:
+Over a recursive query on a cyclic graph, the min cost is that of the
+cheapest path, and ``-Infinity`` for a vertex reached through a cycle of
+negative cost.  With the optional third argument ``nonnegative => true``,
+input costs are checked nonnegative and the semiring becomes *absorptive*
+(:math:`\min(0, a) = 0` for :math:`a \ge 0`), which a recursion on a
+cyclic graph evaluates faster, by Dijkstra's algorithm; evaluation then
+also accepts circuits carrying the ``'absorptive'`` assumption marker
+(see :ref:`provsql-provenance-class`):
 
 .. code-block:: postgresql
 
-    SET provsql.provenance = 'absorptive';
     WITH RECURSIVE reach(node) AS (
         SELECT 1
       UNION
@@ -234,7 +239,8 @@ on cyclic graphs:
                              nonnegative => true) AS min_cost
     FROM reach;
 
-On bounded-treewidth data this is also *fast*: the query compiles into
+Under ``provsql.provenance = 'absorptive'``, on bounded-treewidth data,
+the query compiles into
 a circuit of linear total size, which min-plus evaluation, like any
 absorptive-semiring evaluation, reads exactly in time linear in the
 circuit (see :doc:`probabilities`).

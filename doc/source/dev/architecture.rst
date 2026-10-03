@@ -442,8 +442,8 @@ defined in :cfile:`provsql_utils.h`:
      - Single-child marker wrapping a per-row root computed under a
        provenance-class assumption; the assumption kind is a label in
        ``extra`` (``'boolean'`` from the safe-query rewriter,
-       ``'absorptive'`` from cyclic-recursion truncation and the
-       reachability route). Identity for compatible evaluators, fatal
+       ``'absorptive'`` from the reachability route). Identity for
+       compatible evaluators, fatal
        error for the rest; see :doc:`semiring-evaluation`.
    * - ``gate_annotation``
      - Transparent single-child marker carrying an ``extra`` payload
@@ -486,11 +486,27 @@ defined in :cfile:`provsql_utils.h`:
        weight walk (``Sampler::evalWeight``); refused by every Boolean /
        semiring evaluator (a density factor is not a semiring
        operation). See :doc:`continuous-distributions`.
+   * - ``gate_fixpoint``
+     - One unknown of the least solution of a recursive query's
+       equations, for a row derived through a cycle: one wire to a
+       ``gate_fixsystem``, the 1-based index of the unknown in
+       ``info1``. Solved by the evaluating semiring; see
+       :doc:`semiring-evaluation`.
+   * - ``gate_fixsystem``
+     - The equations of one cycle (strongly connected component) of a
+       recursive query: wires ``[x_1, ..., x_n, f_1, ..., f_n]``, the
+       unknowns then their right-hand sides, ordinary circuits over
+       input tokens, the unknowns and the tokens of earlier components.
+   * - ``gate_fixvar``
+     - An unknown of a ``gate_fixsystem``, a leaf meaningful only inside
+       the right-hand sides of the system that lists it.
 
 The random-variable gate types (``gate_rv``, ``gate_arith``,
 ``gate_mixture``, ``gate_case``), the marker gates (``gate_assumed``,
 ``gate_annotation``), the measure-only gates (``gate_conditioned``,
-``gate_mobius``) and the evidence gate (``gate_observe``) are appended
+``gate_mobius``), the evidence gate (``gate_observe``) and the
+equation-system gates (``gate_fixvar``, ``gate_fixsystem``,
+``gate_fixpoint``) are appended
 to the enum before ``gate_invalid``, with no renumbering of older
 values. See
 :doc:`continuous-distributions` for the full architecture of the

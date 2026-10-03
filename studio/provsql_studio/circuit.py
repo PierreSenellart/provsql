@@ -57,6 +57,13 @@ _GATE_LABEL = {
     # inspector.  A real gate_cmp `=` falls through to the bare "=" too, so the
     # two spellings of the same event look alike.
     "observe":  "=",
+    # The equation system of a recursive query's cyclic part: a fixpoint
+    # reads one unknown of the least solution of its system, whose wires are
+    # the unknowns x_i and then their right-hand sides (edges labelled by
+    # circuit-vocab.js).
+    "fixpoint":  "lfp",
+    "fixsystem": "≡",
+    "fixvar":    "x",
 }
 
 # PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The

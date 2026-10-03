@@ -1074,9 +1074,9 @@
       }));
       addBadge(16, -18, 7, '#b45309', '#78350f', 'A', 9,
         n.absorptive_assumed
-          ? ('Absorptive-truncation root: cyclic recursive query stopped '
-             + 'at the absorptive value fixpoint; only absorptive '
-             + 'semirings are sound here.')
+          ? ('Absorptive root: compiled by the bounded-treewidth '
+             + 'reachability route, exact only up to absorption; only '
+             + 'absorptive semirings are sound here.')
           : ('Absorptive fold: wires simplified under rules sound in every '
              + 'absorptive semiring; absorptive and Boolean-compatible '
              + 'semirings are sound here.'));
@@ -1358,7 +1358,7 @@
   // Hide the eval-strip semirings the C++ evaluator would refuse on a
   // token whose root is assumed Boolean / absorptive, mirroring Circuit
   // mode's syncDropdownVisibility: strictly (absorptive only) for a
-  // truncated cyclic-recursion root, leniently (absorptive OR Boolean-
+  // reachability-route root, leniently (absorptive OR Boolean-
   // compatible) for a fold-marked one, and Boolean-compatible only for a
   // Boolean root. Options absent from the flag table (probability) always
   // stay. Bumps a now-hidden selection to the first visible option.

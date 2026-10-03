@@ -51,14 +51,23 @@ The following SQL constructs are supported with full provenance tracking:
   read another CTE over provenance-tracked relations
 * Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) or
   ``UNION ALL`` (bag semantics) over
-  provenance-tracked relations, on PostgreSQL 15+: the recursive CTE is
-  evaluated to a fixpoint and the result carries provenance like any other
-  query (e.g., the provenance of s--t reachability is the disjunction over the
-  s--t paths).  On **acyclic** data this works for any semiring.  On
-  **cyclic** data it requires an absorptive provenance class
-  (``provsql.provenance = 'absorptive'`` or ``'boolean'``), under which the
-  value converges; the resulting circuit is then sound only for absorptive
-  evaluation (probability, Boolean), not for multiplicity-counting semirings.
+  provenance-tracked relations, on PostgreSQL 15+: the result carries
+  provenance like any other query (e.g., the provenance of s--t
+  reachability is the disjunction over the s--t paths).  A row derived
+  through no cycle of the data has the ordinary provenance of its
+  derivations, in every semiring.  A row derived through a cycle has
+  infinitely many derivations: its provenance is recorded as equations
+  between the rows of the cycle, and the semiring evaluating it decides its
+  value.  Absorptive semirings (probability, Boolean, nonnegative tropical,
+  Viterbi, temporal, …) give it, as do min-plus with arbitrary costs
+  (``-Infinity`` downstream of a cycle of negative cost) and why- and
+  which-provenance; counting refuses it with an integer mapping (the count
+  is infinite), and so does how-provenance.  :sqlfunc:`sr_formula` prints the
+  equations::
+
+    x₂ where x₁ = a ⊗ x₂, x₂ = 𝟙 ⊕ (c ⊗ x₃), x₃ = b ⊗ x₁
+
+  Where-provenance of a row derived through a cycle is not supported.
   ``SELECT *`` over a tracked relation in the terms gives the answer the
   columns written out give.  A term that reads the ``provsql`` column of the
   CTE itself (the token of a row derived so far, as data) is refused.  Since
@@ -211,8 +220,7 @@ The constructs themselves:
   larger expression (``1 + (SELECT …)``, an argument of a function such
   as ``generate_series(1, (SELECT n FROM t))``) is not tracked, and
   ProvSQL emits a ``WARNING``
-* **Recursive CTEs** (``WITH RECURSIVE``) over cyclic data *without* an
-  absorptive provenance class, or on PostgreSQL versions before 15
+* **Recursive CTEs** (``WITH RECURSIVE``) on PostgreSQL versions before 15
 * ``EXCEPT ALL`` over provenance-tracked relations: SQL removes as many
   copies of a row as the right-hand side has, without saying which, so
   the copies it keeps have no provenance of their own. Use ``EXCEPT``,

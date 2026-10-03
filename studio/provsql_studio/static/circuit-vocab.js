@@ -13,10 +13,12 @@
 
   // Gates whose child order matters, so their wires get positional labels.
   // cmp's lhs/rhs, monus's minuend/subtrahend, agg (order-sensitive fns),
-  // arith (MINUS/DIV), mixture, conditioned, mobius, case, and a parametric
-  // rv's parameter wires.
+  // arith (MINUS/DIV), mixture, conditioned, mobius, case, a parametric
+  // rv's parameter wires, and an equation system's unknowns and right-hand
+  // sides, with the unknown a fixpoint reads.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'mobius', 'case', 'rv']);
+                                 'conditioned', 'mobius', 'case', 'rv',
+                                 'fixsystem', 'fixpoint']);
   // = and <> are commutative; lhs/rhs digits add noise for those, as they
   // would for SUM/COUNT/etc.  The strict comparators keep the digits.
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
@@ -75,6 +77,28 @@
   // gate_conditioned wires: the target A and the evidence B, plus -- for
   // discrete (uuid|uuid) conditioning -- their joint A/\B (so the circuit shows
   // P(A|B) = P(A/\B)/P(B)).  The rv|uuid / agg|uuid forms have just the two.
+  // x₁, x₂, ...: the name of the i-th unknown of an equation system.
+  function unknownName(i) {
+    return 'x' + String(i).replace(/[0-9]/g, d => '₀₁₂₃₄₅₆₇₈₉'[d]);
+  }
+
+  // gate_fixsystem wires: the unknowns x_1..x_n, then the right-hand side
+  // of each, in the same order ("x_i =").  Half the wires are unknowns; a
+  // rendered system has all its wires in the scene.
+  function fixsystemEdgeLabel(parent, child_pos, scene) {
+    const n = scene && scene.edges
+      ? scene.edges.filter(e => e.from === parent.id).length / 2 : 0;
+    if (!(n >= 1)) return String(child_pos);
+    return child_pos <= n ? unknownName(child_pos)
+                          : unknownName(child_pos - n) + ' =';
+  }
+
+  // gate_fixpoint's one wire, to its system: the unknown it reads (info1).
+  function fixpointEdgeLabel(parent) {
+    const i = parent.info1 == null ? null : Number(parent.info1);
+    return Number.isFinite(i) ? unknownName(i) : null;
+  }
+
   function conditionedEdgeLabel(parent, child_pos) {
     return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[child_pos] ?? null;
   }
@@ -148,6 +172,8 @@
       case 'mobius':      return mobiusEdgeLabel(parent, child_pos, scene);
       case 'case':        return caseEdgeLabel(parent, child_pos, scene);
       case 'rv':          return rvEdgeLabel(parent, child_pos, scene);
+      case 'fixsystem':   return fixsystemEdgeLabel(parent, child_pos, scene);
+      case 'fixpoint':    return fixpointEdgeLabel(parent);
       default:            return String(child_pos);
     }
   }

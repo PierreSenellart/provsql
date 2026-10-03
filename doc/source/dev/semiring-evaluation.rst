@@ -282,8 +282,8 @@ in a ``gate_assumed`` marker labelled ``'boolean'`` (created by
 :sqlfunc:`provenance_assume`), signalling that the rewrite
 preserves only Boolean semantics, not arbitrary semiring
 semantics.  An ``'absorptive'`` label plays the same role for the
-constructions sound in every absorptive semiring (cyclic-recursion
-truncation, the reachability route).  Each semiring declares its
+construction sound in every absorptive semiring (the reachability
+route).  Each semiring declares its
 compatibility by overriding virtual predicates inherited from
 :cfunc:`Semiring`:
 
@@ -380,6 +380,75 @@ exponential-sized DNFs to single-OR forms ; with the joint fixpoint
 this also covers cross-product / high-degree self-join lineages
 (e.g. ``SELECT DISTINCT 1 FROM e a, e b``), whose ``Theta(|I|)``-treewidth
 sum-of-products collapses to a single OR of treewidth 1.
+
+
+Recursive Queries: Equation Systems
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A row of a recursive query derived through a cycle of the data has
+infinitely many derivations.  Its token is a ``gate_fixpoint``: one
+unknown of the least solution of the equations
+:math:`x_i = f_i(x)` of its cycle, gathered in a ``gate_fixsystem``
+(see :doc:`query-rewriting` for how the lowering builds them).
+PostgreSQL forbids a recursive reference appearing twice in a recursive
+term, so the equations are *linear*:
+:math:`f_i = b_i \oplus \bigoplus_j a_{ij} \otimes x_j`, which
+``GenericCircuit::solveFixSystem`` (:cfile:`GenericCircuit.hpp`) reads
+off the right-hand sides, :math:`b_i` and the :math:`a_{ij}` being
+ordinary sub-circuits evaluated in the semiring.  The least solution is
+then the path provenance, from a virtual source, of the graph with an
+edge :math:`j \to i` of weight :math:`a_{ij}`
+:cite:`DBLP:conf/edbt/RamusatMS21`.  Each strongly connected component
+of that graph is solved in topological order, by a method the
+semiring's declared properties select:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Semiring
+     - Solver
+   * - ``symbolic()`` (``Formula``)
+     - the unknowns are named, and the equations recorded and rendered
+       (``x₁ where x₁ = …``)
+   * - absorptive, ``selective()``, exact equality
+     - Dijkstra's algorithm generalised to semirings
+   * - absorptive, exact equality
+     - value iteration with a work list (Mohri's algorithm)
+   * - absorptive, no exact equality (``BoolExpr``, whose values are
+       gates of a Boolean circuit)
+     - :math:`k - 1` rounds for a component of :math:`k` rows: a
+       derivation repeating a row is absorbed by a shorter one
+   * - not absorptive, ``has_star()``
+     - Gaussian elimination with ``star()`` (node elimination),
+       eliminating first the unknown that adds the fewest coefficients
+   * - none of these
+     - refused
+
+The properties are virtual methods of :cfunc:`Semiring`:
+
+* ``selective()``: :math:`a \oplus b \in \{a, b\}`, the precondition,
+  with absorption, of Dijkstra's algorithm (``Boolean``, both tropical
+  semirings, ``Viterbi``, ``Lukasiewicz``, ``MinMax``);
+* ``exact_equality()`` and ``equal(a, b)``: whether equality of values
+  can be decided, by ``equal`` (``==`` by default, multirange equality
+  for ``IntervalUnion``); false for ``BoolExpr`` and ``Formula``;
+* ``has_star()`` and ``star(a)``: :math:`a^* = \mathbb{1} \oplus a
+  \oplus a^2 \oplus \cdots`.  The default iterates
+  :math:`s \leftarrow \mathbb{1} \oplus a \otimes s` for an idempotent
+  semiring with exact equality (why- and which-provenance, whose partial
+  sums are finitely many); ``Counting`` has an infinite count
+  (:math:`a^* = \infty` for :math:`a > 0`), refused when converted to an
+  integer result, and ``Tropical`` gives :math:`-\infty` for a cycle of
+  negative cost;
+* ``symbolic()``, ``symbolic_unknown()`` and ``define()``: a rendering
+  semiring names unknowns and records their equations instead of
+  solving them.
+
+A system is solved once per evaluation, and
+:cfile:`provenance_evaluate_compiled.cpp` caches the solution of every
+component, by semiring, mapping and command, for the other rows of the
+same result; ``plain_truth``, which the rewriter calls on every row an
+aggregate reads, memoises the truth of every component the same way.
 
 
 Example: The Boolean Semiring
