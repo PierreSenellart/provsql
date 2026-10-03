@@ -35489,7 +35489,8 @@ static List *output_types(Query *q) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te->resjunk)
       continue;
-    res = lappend_oid(res, exprType((Node *)te->expr));
+    /* One integer list of pairs, the type and its typmod. */
+    res = lappend_int(res, (int)exprType((Node *)te->expr));
     res = lappend_int(res, exprTypmod((Node *)te->expr));
   }
   return res;
@@ -35540,7 +35541,7 @@ static void finish_matview_fill(Query *q, List *types) {
     Node *coerced;
     if (te->resjunk || i >= n)
       continue;
-    want = list_nth_oid(types, 2 * i);
+    want = (Oid)list_nth_int(types, 2 * i);
     typmod = list_nth_int(types, 2 * i + 1);
     ++i;
     have = exprType((Node *)te->expr);
