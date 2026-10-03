@@ -432,6 +432,80 @@ virtual bool selective() const {
 }
 
 /**
+ * @brief Return @c true if @c star computes
+ *        @f$a^* = \mathbb{1} \oplus a \oplus a^2 \oplus \cdots@f$.
+ *
+ * With a star, a cyclic linear equation system has its least solution
+ * computed by Gaussian elimination (node elimination; Ramusat, Maniu &
+ * Senellart, EDBT 2021, after Lehmann 1977), in a semiring that is not
+ * absorptive: counting extended with @f$\infty@f$, min-plus with
+ * @f$-\infty@f$, why- and which-provenance.
+ *
+ * The default holds for an idempotent semiring with exact equality, whose
+ * star the default @c star iterates to, the partial sums only growing;
+ * they stop where the carrier has finitely many elements above
+ * @f$\mathbb{1}@f$ reachable from @f$a@f$ (sets of sets of input
+ * tuples, ...).
+ */
+virtual bool has_star() const {
+  return idempotent() && exact_equality();
+}
+
+/**
+ * @brief @f$a^*@f$, the sum of the powers of @p a.
+ *
+ * By default, iterates @f$s \leftarrow \mathbb{1} \oplus a \otimes s@f$
+ * from @f$\mathbb{1}@f$ until it stops changing, which an idempotent
+ * semiring with finitely many partial sums ensures.
+ */
+virtual value_type star(const value_type &a) const {
+  value_type s = one();
+  for(int k = 0; k < 1000000; ++k) {
+    value_type t = plus(std::vector<value_type>{one(), times(std::vector<value_type>{a, s})});
+    if(equal(t, s))
+      return s;
+    s = t;
+  }
+  throw SemiringException("The star of a value does not converge.");
+}
+
+/**
+ * @brief Return @c true if the semiring can name an unknown and record an
+ *        equation over it (@c symbolic_unknown, @c define).
+ *
+ * A symbolic semiring renders the provenance rather than evaluating it;
+ * where a recursion derives a tuple through itself, the least solution of
+ * its equations is an infinite sum, which such a semiring renders as the
+ * equations themselves (see @c GenericCircuit::solveFixSystem).
+ *
+ * @return @c false by default; override, with the two methods below.
+ */
+virtual bool symbolic() const {
+  return false;
+}
+
+/**
+ * @brief A fresh unknown, as a value.
+ *
+ * @return the unknown; throws by default.
+ */
+virtual value_type symbolic_unknown() const {
+  throw SemiringException("This semiring has no symbolic unknowns.");
+}
+
+/**
+ * @brief Record the equation @p unknown = @p rhs.
+ *
+ * @param unknown  A value returned by @c symbolic_unknown.
+ * @param rhs      Its right-hand side, over unknowns of the same kind.
+ */
+virtual void define(const value_type &unknown, const value_type &rhs) const {
+  (void) unknown;
+  (void) rhs;
+  throw SemiringException("This semiring has no symbolic unknowns.");
+}
+
+/**
  * @brief Equality of the semiring elements two values denote.
  *
  * @c == on @c value_type by default; overridden where a value is a handle

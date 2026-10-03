@@ -40,6 +40,8 @@
 #include "FixSystemGraph.h"
 
 #include <deque>
+#include <map>
+#include <set>
 #include <functional>
 #include <queue>
 
@@ -726,13 +728,103 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       continue;
     }
 
-    if(!semiring.absorptive())
-      throw CircuitException(
-              "This recursion's equations are cyclic (a tuple is derived "
-              "through itself) and the requested semiring is not absorptive: "
-              "the least solution is an infinite sum, which counting or "
-              "why-provenance cannot give a value to.  Use an absorptive "
-              "semiring (boolean, nonnegative tropical, Viterbi, ...).");
+    if(semiring.symbolic()) {
+      /* A rendering semiring: the component's tuples become named unknowns,
+       * and their equations are recorded with them. */
+      for(const auto i : comp)
+        x[i] = semiring.symbolic_unknown();
+      for(std::size_t k = 0; k < comp.size(); ++k) {
+        V v = entry[k];
+        for(const auto &[j, a] : in[comp[k]])
+          if(comp_of[j] == ci)
+            v = plus2(v, times2(a, x[j]));
+        semiring.define(x[comp[k]], v);
+      }
+      continue;
+    }
+
+    if(!semiring.absorptive()) {
+      if(!semiring.has_star())
+        throw CircuitException(
+                "This recursion's equations are cyclic (a tuple is derived "
+                "through itself), and the requested semiring is neither "
+                "absorptive nor gives the sum of the powers of a value: the "
+                "least solution is an infinite sum it has no value for.");
+
+      /* Gaussian elimination with star (node elimination; Ramusat, Maniu &
+       * Senellart, EDBT 2021, after Lehmann 1977): x_v = a_vv* ⊗ (⨁ a_vj
+       * x_j ⊕ e_v) is substituted into the equations reading x_v, one
+       * unknown at a time, then the unknowns are read back in reverse
+       * order.  Each step eliminates the unknown adding the fewest new
+       * coefficients, which follows the component's width where it is
+       * small. */
+      const std::size_t k = comp.size();
+      std::unordered_map<std::size_t, std::size_t> at;
+      for(std::size_t p = 0; p < k; ++p)
+        at.emplace(comp[p], p);
+      std::vector<std::map<std::size_t, V> > row(k);
+      std::vector<std::set<std::size_t> > col(k);
+      std::vector<V> e(entry);
+      for(std::size_t p = 0; p < k; ++p)
+        for(const auto &[j, a] : in[comp[p]]) {
+          if(comp_of[j] != ci)
+            continue;
+          const std::size_t q = at.at(j);
+          auto it = row[p].find(q);
+          row[p][q] = it == row[p].end() ? a : plus2(it->second, a);
+          col[q].insert(p);
+        }
+
+      std::vector<char> gone(k, 0);
+      std::vector<std::size_t> order;
+      for(std::size_t step = 0; step < k; ++step) {
+        provsql_poll_interrupt();
+        std::size_t v = k, best = 0;
+        for(std::size_t p = 0; p < k; ++p) {
+          if(gone[p])
+            continue;
+          const std::size_t cost = row[p].size() * col[p].size();
+          if(v == k || cost < best) {
+            v = p;
+            best = cost;
+          }
+        }
+        V loop = zero;
+        auto self = row[v].find(v);
+        if(self != row[v].end()) {
+          loop = self->second;
+          row[v].erase(self);
+          col[v].erase(v);
+        }
+        const V s = semiring.star(loop);
+        for(auto &[j, b] : row[v])
+          b = times2(s, b);
+        e[v] = times2(s, e[v]);
+        for(const auto p : std::vector<std::size_t>(col[v].begin(), col[v].end())) {
+          if(gone[p] || p == v)
+            continue;
+          const V c = row[p].at(v);
+          row[p].erase(v);
+          for(const auto &[j, b] : row[v]) {
+            auto it = row[p].find(j);
+            const V t = times2(c, b);
+            row[p][j] = it == row[p].end() ? t : plus2(it->second, t);
+            col[j].insert(p);
+          }
+          e[p] = plus2(e[p], times2(c, e[v]));
+        }
+        gone[v] = 1;
+        order.push_back(v);
+      }
+      for(std::size_t r = order.size(); r-- > 0; ) {
+        const std::size_t v = order[r];
+        V val = e[v];
+        for(const auto &[j, b] : row[v])
+          val = plus2(val, times2(b, x[comp[j]]));
+        x[comp[v]] = val;
+      }
+      continue;
+    }
 
     std::unordered_map<std::size_t, std::size_t> pos;
     for(std::size_t k = 0; k < comp.size(); ++k) {

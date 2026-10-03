@@ -25,6 +25,7 @@
 #define COUNTING_H
 
 #include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <vector>
 #include <stdexcept>
@@ -41,6 +42,11 @@ namespace semiring {
 class Counting : public semiring::Semiring<unsigned>
 {
 public:
+/** @brief @f$\infty@f$: the count of a tuple derived through a cycle.
+ *  @f$0 \cdot \infty = 0@f$, and @f$\infty@f$ absorbs every other sum
+ *  and product.  A finite count reaching it is an overflow, refused. */
+static constexpr value_type INFINITE = std::numeric_limits<value_type>::max();
+
 virtual value_type zero() const override {
   return 0;
 }
@@ -48,14 +54,47 @@ virtual value_type one() const override {
   return 1;
 }
 virtual value_type plus(const std::vector<value_type> &v) const override {
-  return std::accumulate(v.begin(), v.end(), 0);
+  value_type r = 0;
+  for(const auto x : v) {
+    if(x == INFINITE || r == INFINITE) {
+      r = INFINITE;
+      continue;
+    }
+    if(x >= INFINITE - r)
+      throw SemiringException("The number of derivations exceeds the counting range.");
+    r += x;
+  }
+  return r;
 }
 virtual value_type times(const std::vector<value_type> &v) const override {
-  return std::accumulate(v.begin(), v.end(), 1, std::multiplies<value_type>());
+  value_type r = 1;
+  bool infinite = false;
+  for(const auto x : v) {
+    if(x == 0)
+      return 0;
+    if(x == INFINITE) {
+      infinite = true;
+      continue;
+    }
+    if(!infinite && r > (INFINITE - 1) / x)
+      throw SemiringException("The number of derivations exceeds the counting range.");
+    if(!infinite)
+      r *= x;
+  }
+  return infinite ? INFINITE : r;
 }
 virtual value_type monus(value_type x, value_type y) const override
 {
+  if(x == INFINITE)
+    return y == INFINITE ? 0 : INFINITE;
   return x<=y ? 0 : x-y;
+}
+/** @brief @f$0^* = 1@f$; any other count repeats without end. */
+virtual bool has_star() const override {
+  return true;
+}
+virtual value_type star(const value_type &a) const override {
+  return a == 0 ? 1 : INFINITE;
 }
 virtual value_type delta(value_type x) const override
 {

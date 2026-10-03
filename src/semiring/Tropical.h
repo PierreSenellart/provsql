@@ -66,6 +66,15 @@ virtual value_type plus(const std::vector<value_type> &v) const override {
 virtual bool selective() const override {
   return true;
 }
+/** @brief A cycle of nonnegative cost adds nothing to the best derivation
+ *  (@f$a^* = 0@f$), one of negative cost makes it unbounded
+ *  (@f$a^* = -\infty@f$). */
+virtual bool has_star() const override {
+  return true;
+}
+virtual value_type star(const value_type &a) const override {
+  return a >= 0 ? 0.0 : -std::numeric_limits<double>::infinity();
+}
 virtual value_type times(const std::vector<value_type> &v) const override {
   return std::accumulate(v.begin(), v.end(), 0.0);
 }

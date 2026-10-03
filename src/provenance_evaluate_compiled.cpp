@@ -89,7 +89,14 @@ Datum text_datum(const std::string &s) {
 
 // to_datum overloads: encode a semiring's evaluation result as a Postgres Datum.
 Datum to_datum(const semiring::Boolean &, bool v)         { return BoolGetDatum(v); }
-Datum to_datum(const semiring::Counting &, unsigned v)    { return Int32GetDatum(static_cast<int32>(v)); }
+Datum to_datum(const semiring::Counting &, unsigned v) {
+  if(v == semiring::Counting::INFINITE)
+    throw CircuitException(
+            "This tuple has infinitely many derivations (it is derived "
+            "through a cycle of its recursive query), which an integer "
+            "count cannot represent.");
+  return Int32GetDatum(static_cast<int32>(v));
+}
 Datum to_datum(const semiring::Tropical &, double v)      { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Viterbi &, double v)       { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Lukasiewicz &, double v)   { return Float8GetDatum(v); }

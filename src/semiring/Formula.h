@@ -43,6 +43,8 @@
 #include <sstream>
 #include <iomanip>
 #include <iterator>
+#include <map>
+#include <memory>
 
 #include "Semiring.h"
 
@@ -138,7 +140,61 @@ namespace semiring {
  */
 class Formula : public semiring::Semiring<std::string>
 {
+/** The unknowns named and the equations recorded during one evaluation,
+ *  shared by the copies of the semiring that evaluation makes. */
+struct Equations {
+  std::vector<std::string> names;      ///< x₁, x₂, ..., in order
+  std::vector<std::string> rhs;        ///< Right-hand side of each
+  std::map<std::string, std::size_t> index;
+};
+std::shared_ptr<Equations> equations = std::make_shared<Equations>();
+
+/** @brief @p n in Unicode subscript digits. */
+static std::string subscript(std::size_t n) {
+  static const char *digits[] = {"₀", "₁", "₂", "₃", "₄",
+                                 "₅", "₆", "₇", "₈", "₉"};
+  std::string d = std::to_string(n), r;
+  for(char ch : d)
+    r += digits[ch - '0'];
+  return r;
+}
+
+/** @brief The indices of the unknowns occurring in @p s: a name counts
+ *  where no further subscript digit follows it (x₁ is not in x₁₂). */
+std::vector<std::size_t> unknowns_in(const std::string &s) const {
+  std::vector<std::size_t> r;
+  for(std::size_t k = 0; k < equations->names.size(); ++k) {
+    const std::string &nm = equations->names[k];
+    for(std::size_t p = s.find(nm); p != std::string::npos;
+        p = s.find(nm, p + 1)) {
+      const std::size_t e = p + nm.size();
+      const bool more = e + 2 < s.size()
+                        && (unsigned char) s[e] == 0xE2
+                        && (unsigned char) s[e + 1] == 0x82
+                        && ((unsigned char) s[e + 2] & 0xF0) == 0x80;
+      if(!more) {
+        r.push_back(k);
+        break;
+      }
+    }
+  }
+  return r;
+}
+
 public:
+virtual bool symbolic() const override {
+  return true;
+}
+virtual value_type symbolic_unknown() const override {
+  const std::string nm = "x" + subscript(equations->names.size() + 1);
+  equations->index.emplace(nm, equations->names.size());
+  equations->names.push_back(nm);
+  equations->rhs.emplace_back();
+  return nm;
+}
+virtual void define(const value_type &unknown, const value_type &rhs) const override {
+  equations->rhs[equations->index.at(unknown)] = rhs;
+}
 /** @brief Values are renderings: two of them may denote the same element. */
 virtual bool exact_equality() const override {
   return false;
@@ -493,6 +549,31 @@ virtual bool compatibleWithBooleanRewrite() const override {
  * outer parens carry no disambiguation value.
  */
 std::string to_text(const value_type &s) const {
+  std::string r = strip_outer(s);
+  /* The equations of the unknowns @p s reads, directly or through other
+   * equations, in the order they were named. */
+  std::vector<bool> needed(equations->names.size(), false);
+  std::vector<std::size_t> todo = unknowns_in(s);
+  while(!todo.empty()) {
+    const std::size_t k = todo.back();
+    todo.pop_back();
+    if(needed[k])
+      continue;
+    needed[k] = true;
+    for(const auto j : unknowns_in(equations->rhs[k]))
+      todo.push_back(j);
+  }
+  std::string eqs;
+  for(std::size_t k = 0; k < needed.size(); ++k)
+    if(needed[k])
+      eqs += (eqs.empty() ? " where " : ", ") + equations->names[k] + " = " +
+             strip_outer(equations->rhs[k]);
+  return r + eqs;
+}
+
+private:
+/** @brief @p s without the cosmetic outer paren pair. */
+static std::string strip_outer(const std::string &s) {
   if(s.size() < 2 || s.front() != '(' || s.back() != ')')
     return s;
   int depth = 0;
@@ -505,6 +586,7 @@ std::string to_text(const value_type &s) const {
   }
   return s.substr(1, s.size() - 2);
 }
+public:
 };
 }
 
