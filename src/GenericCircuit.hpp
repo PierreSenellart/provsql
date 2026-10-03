@@ -40,6 +40,7 @@
 
 #include <deque>
 #include <functional>
+#include <queue>
 
 extern "C" {
 #include "utils/lsyscache.h"
@@ -232,9 +233,12 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
         throw CircuitException(
                 "gate_fixpoint must have exactly one child, a gate_fixsystem");
       auto it = systems.find(w[0]);
-      if(it == systems.end())
+      if(it == systems.end()) {
         it = systems.emplace(
           w[0], solveFixSystem(w[0], provenance_mapping, semiring)).first;
+        solved_systems.emplace_back(
+          w[0], std::make_shared<std::vector<typename S::value_type> >(it->second));
+      }
       const unsigned idx = getInfos(u).first;
       if(idx < 1 || idx > it->second.size())
         throw CircuitException("gate_fixpoint index out of range");
@@ -507,14 +511,14 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
 
   const V zero = semiring.zero(), one = semiring.one();
   const auto plus2 = [&](const V &a, const V &b) -> V {
-                       if(a == zero) return b;
-                       if(b == zero) return a;
+                       if(semiring.equal(a, zero)) return b;
+                       if(semiring.equal(b, zero)) return a;
                        return semiring.plus(std::vector<V>{a, b});
                      };
   const auto times2 = [&](const V &a, const V &b) -> V {
-                        if(a == zero || b == zero) return zero;
-                        if(a == one) return b;
-                        if(b == one) return a;
+                        if(semiring.equal(a, zero) || semiring.equal(b, zero)) return zero;
+                        if(semiring.equal(a, one)) return b;
+                        if(semiring.equal(b, one)) return a;
                         return semiring.times(std::vector<V>{a, b});
                       };
 
@@ -613,7 +617,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
           k = times2(k, evaluate(c, provenance_mapping, semiring));
       }
       const Lin &l = linear(var);
-      if(!(k == zero)) {
+      if(!semiring.equal(k, zero)) {
         r.c = times2(l.c, k);
         for(const auto &[j, a] : l.terms)
           r.terms.emplace_back(j, times2(a, k));
@@ -663,7 +667,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       const Lin &l = linear(f);
       b[i] = l.c;
       for(const auto &[j, a] : l.terms)
-        if(!(a == zero)) {
+        if(!semiring.equal(a, zero)) {
           in[i].emplace_back(j, a);
           out[j].emplace_back(i, a);
         }
@@ -671,79 +675,200 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       b[i] = evaluate(f, provenance_mapping, semiring);
   }
 
-  /* Topological order of the dependency graph j -> i (Kahn). */
-  std::vector<std::size_t> indeg(n, 0), order;
-  for(std::size_t i = 0; i < n; ++i)
-    indeg[i] = in[i].size();
-  for(std::size_t i = 0; i < n; ++i)
-    if(indeg[i] == 0)
-      order.push_back(i);
-  for(std::size_t k = 0; k < order.size(); ++k)
-    for(const auto &e : out[order[k]])
-      if(--indeg[e.first] == 0)
-        order.push_back(e.first);
+  /* Strongly connected components of the dependency graph j -> i
+   * (iterative Tarjan).  A component is emitted once every component
+   * depending on it has been, so the emission order is the reverse of the
+   * order in which the equations can be solved. */
+  std::vector<std::vector<std::size_t> > comps;
+  {
+    const std::size_t UNSEEN = static_cast<std::size_t>(-1);
+    std::vector<std::size_t> index(n, UNSEEN), low(n, 0);
+    std::vector<char> on_stack(n, 0);
+    std::vector<std::size_t> tstack;
+    std::size_t counter = 0;
+    for(std::size_t root = 0; root < n; ++root) {
+      if(index[root] != UNSEEN)
+        continue;
+      std::vector<std::pair<std::size_t, std::size_t> > call{{root, 0}};
+      index[root] = low[root] = counter++;
+      tstack.push_back(root);
+      on_stack[root] = 1;
+      while(!call.empty()) {
+        auto &[v, k] = call.back();
+        if(k < out[v].size()) {
+          const std::size_t u = out[v][k++].first;
+          if(index[u] == UNSEEN) {
+            index[u] = low[u] = counter++;
+            tstack.push_back(u);
+            on_stack[u] = 1;
+            call.emplace_back(u, 0);
+          } else if(on_stack[u])
+            low[v] = std::min(low[v], index[u]);
+          continue;
+        }
+        if(low[v] == index[v]) {
+          std::vector<std::size_t> comp;
+          std::size_t u;
+          do {
+            u = tstack.back();
+            tstack.pop_back();
+            on_stack[u] = 0;
+            comp.push_back(u);
+          } while(u != v);
+          comps.push_back(std::move(comp));
+        }
+        const std::size_t done = v;
+        call.pop_back();
+        if(!call.empty())
+          low[call.back().first] = std::min(low[call.back().first], low[done]);
+      }
+    }
+  }
 
   std::vector<V> x(n, zero);
+  std::vector<std::size_t> comp_of(n);
+  for(std::size_t c = 0; c < comps.size(); ++c)
+    for(const auto v : comps[c])
+      comp_of[v] = c;
 
-  if(order.size() == n) {
-    /* Acyclic: every derivation is finite, and the topological order
-     * evaluates each equation once its right-hand side is known.  Exact
-     * in every semiring. */
-    for(const auto i : order) {
-      V v = b[i];
-      for(const auto &[j, a] : in[i])
-        v = plus2(v, times2(a, x[j]));
-      x[i] = v;
-    }
-    return x;
-  }
+  /* Better-than in the natural order of an absorptive, totally ordered
+   * semiring: a ⊕ b = a, with a ≠ b. */
+  const auto better = [&](const V &a, const V &b) -> bool {
+                        return !semiring.equal(a, b) && semiring.equal(plus2(a, b), a);
+                      };
 
-  if(!semiring.absorptive())
-    throw CircuitException(
-            "This recursion's equations are cyclic (a tuple is derived "
-            "through itself) and the requested semiring is not absorptive: "
-            "the least solution is an infinite sum, which counting or "
-            "why-provenance cannot give a value to.  Use an absorptive "
-            "semiring (boolean, nonnegative tropical, Viterbi, ...).");
-
-  /* Cyclic, absorptive: value iteration from b with a work list (Mohri's
-   * generic single-source algorithm, the residual being superfluous in an
-   * idempotent semiring).  A value only changes towards the solution, and
-   * absorption cuts every derivation repeating a tuple, so the iteration
-   * converges; the bound below only guards against a semiring declaring
-   * absorption it does not have. */
-  std::size_t nedges = 0;
-  for(std::size_t i = 0; i < n; ++i)
-    nedges += in[i].size();
-  const std::size_t bound = (n + 1) * (nedges + 1);
-  std::size_t steps = 0;
-
-  std::vector<char> queued(n, 0);
-  std::deque<std::size_t> queue;
-  for(std::size_t i = 0; i < n; ++i) {
-    x[i] = b[i];
-    if(!(x[i] == zero)) {
-      queue.push_back(i);
-      queued[i] = 1;
-    }
-  }
-  while(!queue.empty()) {
+  for(std::size_t ci = comps.size(); ci-- > 0; ) {
     provsql_poll_interrupt();
-    const std::size_t j = queue.front();
-    queue.pop_front();
-    queued[j] = 0;
-    for(const auto &[i, a] : out[j]) {
-      if(++steps > bound)
-        throw CircuitException(
-                "Value iteration over this recursion's equations does not "
-                "converge; the semiring does not behave absorptively");
-      const V v = plus2(x[i], times2(a, x[j]));
-      if(!(v == x[i])) {
-        x[i] = v;
-        if(!queued[i]) {
-          queue.push_back(i);
-          queued[i] = 1;
+    const auto &comp = comps[ci];
+
+    /* What flows into the component: b, and the components already
+     * solved. */
+    std::vector<V> entry;
+    entry.reserve(comp.size());
+    bool cyclic = comp.size() > 1;
+    for(const auto i : comp) {
+      V v = b[i];
+      for(const auto &[j, a] : in[i]) {
+        if(comp_of[j] != ci)
+          v = plus2(v, times2(a, x[j]));
+        else
+          cyclic = true;    // a self-loop makes a singleton cyclic too
+      }
+      entry.push_back(v);
+    }
+
+    if(!cyclic) {
+      /* A tuple not derived through itself: its equation is its value,
+       * exact in every semiring. */
+      x[comp[0]] = entry[0];
+      continue;
+    }
+
+    if(!semiring.absorptive())
+      throw CircuitException(
+              "This recursion's equations are cyclic (a tuple is derived "
+              "through itself) and the requested semiring is not absorptive: "
+              "the least solution is an infinite sum, which counting or "
+              "why-provenance cannot give a value to.  Use an absorptive "
+              "semiring (boolean, nonnegative tropical, Viterbi, ...).");
+
+    std::unordered_map<std::size_t, std::size_t> pos;
+    for(std::size_t k = 0; k < comp.size(); ++k) {
+      pos.emplace(comp[k], k);
+      x[comp[k]] = entry[k];
+    }
+
+    if(semiring.totally_ordered() && semiring.exact_equality()) {
+      /* Dijkstra from the entry values: in an absorptive semiring
+       * extending a derivation never improves it, so with a total order
+       * the best unsettled value is final (Ramusat, Maniu & Senellart,
+       * EDBT 2021). */
+      const auto worse = [&](const std::pair<V, std::size_t> &p,
+                             const std::pair<V, std::size_t> &q) {
+                           return better(q.first, p.first);
+                         };
+      std::priority_queue<std::pair<V, std::size_t>,
+                          std::vector<std::pair<V, std::size_t> >,
+                          decltype(worse)> heap(worse);
+      std::vector<char> settled(comp.size(), 0);
+      for(const auto i : comp)
+        if(!semiring.equal(x[i], zero))
+          heap.emplace(x[i], i);
+      while(!heap.empty()) {
+        auto [v, j] = heap.top();
+        heap.pop();
+        const std::size_t pj = pos.at(j);
+        if(settled[pj] || !semiring.equal(v, x[j]))
+          continue;
+        settled[pj] = 1;
+        for(const auto &[i, a] : out[j]) {
+          if(comp_of[i] != ci || settled[pos.at(i)])
+            continue;
+          const V w = plus2(x[i], times2(a, x[j]));
+          if(!semiring.equal(w, x[i])) {
+            x[i] = w;
+            heap.emplace(w, i);
+          }
         }
+      }
+    } else if(semiring.exact_equality()) {
+      /* Value iteration with a work list (Mohri's generic single-source
+       * algorithm, the residual being superfluous in an idempotent
+       * semiring): a value only moves towards the solution, and
+       * absorption cuts every derivation repeating a tuple, so the
+       * iteration converges.  The bound only guards against a semiring
+       * declaring absorption it does not have. */
+      std::size_t nedges = 0;
+      for(const auto i : comp)
+        nedges += in[i].size();
+      const std::size_t bound = (comp.size() + 1) * (nedges + 1);
+      std::size_t steps = 0;
+      std::vector<char> queued(comp.size(), 0);
+      std::deque<std::size_t> queue;
+      for(const auto i : comp)
+        if(!semiring.equal(x[i], zero)) {
+          queue.push_back(i);
+          queued[pos.at(i)] = 1;
+        }
+      while(!queue.empty()) {
+        provsql_poll_interrupt();
+        const std::size_t j = queue.front();
+        queue.pop_front();
+        queued[pos.at(j)] = 0;
+        for(const auto &[i, a] : out[j]) {
+          if(comp_of[i] != ci)
+            continue;
+          if(++steps > bound)
+            throw CircuitException(
+                    "Value iteration over this recursion's equations does "
+                    "not converge; the semiring does not behave "
+                    "absorptively");
+          const V w = plus2(x[i], times2(a, x[j]));
+          if(!semiring.equal(w, x[i])) {
+            x[i] = w;
+            if(!queued[pos.at(i)]) {
+              queue.push_back(i);
+              queued[pos.at(i)] = 1;
+            }
+          }
+        }
+      }
+    } else {
+      /* Values whose equality cannot be tested (gates of a circuit being
+       * built, ...): run the rounds absorption guarantees to suffice.
+       * Round r covers the derivations entering the component and taking
+       * at most r steps inside it; one repeating a tuple is absorbed by
+       * the shorter one skipping the repetition, and a step-wise
+       * repetition-free one takes at most |comp| - 1 steps. */
+      for(std::size_t r = 1; r < comp.size(); ++r) {
+        provsql_poll_interrupt();
+        std::vector<V> next(entry);
+        for(std::size_t k = 0; k < comp.size(); ++k)
+          for(const auto &[j, a] : in[comp[k]])
+            if(comp_of[j] == ci)
+              next[k] = plus2(next[k], times2(a, x[j]));
+        for(std::size_t k = 0; k < comp.size(); ++k)
+          x[comp[k]] = next[k];
       }
     }
   }

@@ -412,6 +412,51 @@ virtual bool idempotent() const {
 }
 
 /**
+ * @brief Return @c true if the natural order of the semiring is total
+ *        (for all @f$a, b@f$, @f$a \oplus b \in \{a, b\}@f$).
+ *
+ * In an absorptive semiring with a total order, the least solution of a
+ * cyclic equation system (a recursive query, see
+ * @c GenericCircuit::solveFixSystem) is found by Dijkstra's algorithm,
+ * generalised to semirings (Ramusat, Maniu & Senellart, EDBT 2021):
+ * absorption makes extending a derivation never improve it, and the total
+ * order lets the best unsettled value be final.
+ *
+ * @return @c false by default; override to return @c true.
+ */
+virtual bool totally_ordered() const {
+  return false;
+}
+
+/**
+ * @brief Equality of the semiring elements two values denote.
+ *
+ * @c == on @c value_type by default; overridden where a value is a handle
+ * on the element, not the element itself (a multirange @c Datum passed by
+ * reference, compared by its contents).
+ */
+virtual bool equal(const value_type &a, const value_type &b) const {
+  return a == b;
+}
+
+/**
+ * @brief Return @c true if @c equal decides equality of semiring elements.
+ *
+ * False for a carrier that is a handle on a structure built during
+ * evaluation (a gate of the Boolean circuit @c BoolExpr builds, whose
+ * equivalence with another is intractable to decide) or a syntactic
+ * rendering (@c Formula): two equal elements may then compare unequal.
+ * The equation-system solver iterates to a fixpoint only where it can
+ * tell that one is reached, and otherwise runs the number of rounds
+ * absorption guarantees to suffice.
+ *
+ * @return @c true by default; override to return @c false.
+ */
+virtual bool exact_equality() const {
+  return true;
+}
+
+/**
  * @brief Return @c true if the semiring is exclusive:
  *        @f$a \otimes (\mathbb{1} \ominus a) = \mathbb{0}@f$.
  *

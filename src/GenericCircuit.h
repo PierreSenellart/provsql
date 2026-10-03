@@ -24,6 +24,7 @@
 #define GENERIC_CIRCUIT_H
 
 #include <map>
+#include <memory>
 #include <type_traits>
 
 #include <boost/archive/binary_oarchive.hpp>
@@ -54,6 +55,18 @@ std::set<gate_t> inputs;                               ///< Set of input (leaf) 
 std::vector<double> prob;                              ///< Per-gate probability values
 std::set<gate_t> boolean_assumed_gates;                ///< Side-band Boolean-assumption marker set by the Boolean-only fold rules ; an evaluator visiting a gate in this set refuses to proceed under a semiring that does not admit a homomorphism from Boolean functions.  In-memory only ; never persisted to mmap.  Distinct from the @c gate_assumed enum (used by the safe-query rewriter to encode the same restriction at the persistent layer).
 std::set<gate_t> absorptive_assumed_gates;             ///< Side-band absorptive-assumption marker set by the absorptive fold rules (plus-idempotence, plus-with-one absorber, plus-absorbs-times -- sound in every absorptive semiring) ; an evaluator visiting a gate in this set refuses unless the semiring is absorptive or tolerates the (stronger) Boolean rewrite.  In-memory only.
+
+public:
+/**
+ * @brief Equation systems solved by @c evaluate, with their solutions.
+ *
+ * Each entry pairs a @c gate_fixsystem with a @c std::vector of the
+ * evaluated semiring's values, type-erased: the caller that instantiated
+ * @c evaluate knows the type and reads it back, to cache the solution of
+ * every component at once (see @c provenance_evaluate_compiled).
+ * In-memory only.
+ */
+mutable std::vector<std::pair<gate_t, std::shared_ptr<void> > > solved_systems;
 
 public:
 /**

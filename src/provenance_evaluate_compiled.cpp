@@ -40,6 +40,9 @@ extern "C" {
 #include "utils/uuid.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
+#include "utils/datum.h"
+#include "access/xact.h"
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
 
@@ -52,6 +55,7 @@ PG_FUNCTION_INFO_V1(plain_truth);
 #include <unordered_map>
 #include <algorithm>
 
+#include "CertifiedDDMaterialize.h"
 #include "Expectation.h"
 #include "having_semantics.hpp"
 #include "provenance_evaluate_compiled.hpp"
@@ -98,6 +102,78 @@ Datum to_datum(const semiring::IntervalUnion &, Datum v)  { return v; }
 #endif
 Datum to_datum(const semiring::MinMax &, Datum v)         { return v; }
 
+namespace {
+
+/* Solutions of equation systems (recursive queries lowered by
+ * eval_recursive_system), one Datum per component, under the key
+ * "<context>|<fixpoint token>".  The context names the semiring, the
+ * mapping and the result type, and the current command, so that a change
+ * to the mapping in the same transaction is never served a stale value;
+ * the cache lives until the end of the transaction.  A query evaluating
+ * every row of a recursive result solves its system once, not once per
+ * row. */
+std::unordered_map<std::string, Datum> fixpoint_cache;
+MemoryContext fixpoint_cache_cxt = nullptr;
+bool fixpoint_cache_callback = false;
+constexpr size_t fixpoint_cache_max = 4000000;
+
+/* Context of the evaluation in progress, empty when not cacheable. */
+std::string fixpoint_cache_ctx;
+int16 fixpoint_cache_typlen;
+bool fixpoint_cache_typbyval;
+
+void fixpoint_cache_clear()
+{
+  fixpoint_cache.clear();
+  if(fixpoint_cache_cxt)
+    MemoryContextReset(fixpoint_cache_cxt);
+}
+
+void fixpoint_cache_xact_callback(XactEvent event, void *)
+{
+  if(event == XACT_EVENT_COMMIT || event == XACT_EVENT_ABORT
+     || event == XACT_EVENT_PARALLEL_COMMIT
+     || event == XACT_EVENT_PARALLEL_ABORT
+     || event == XACT_EVENT_PREPARE)
+    fixpoint_cache_clear();
+}
+
+/* Store the solution of every system @p c solved, under the context set
+ * by the caller. */
+template <typename Sem>
+void fixpoint_cache_store(const GenericCircuit &c, const Sem &sr)
+{
+  if(fixpoint_cache_ctx.empty() || c.solved_systems.empty())
+    return;
+  if(!fixpoint_cache_cxt) {
+    fixpoint_cache_cxt = AllocSetContextCreate(TopMemoryContext,
+                                               "ProvSQL fixpoint cache",
+                                               ALLOCSET_DEFAULT_SIZES);
+  }
+  if(!fixpoint_cache_callback) {
+    RegisterXactCallback(fixpoint_cache_xact_callback, nullptr);
+    fixpoint_cache_callback = true;
+  }
+  using V = typename Sem::value_type;
+  for(const auto &[sys, p] : c.solved_systems) {
+    const auto &vec = *static_cast<const std::vector<V> *>(p.get());
+    if(fixpoint_cache.size() + vec.size() > fixpoint_cache_max)
+      fixpoint_cache_clear();
+    const std::string prefix = "fixpoint:" + c.getUUID(sys) + ":";
+    for(std::size_t i = 0; i < vec.size(); ++i) {
+      const std::string tok =
+        uuid2string(provsqlUuidV5(prefix + std::to_string(i + 1)));
+      Datum d = to_datum(sr, vec[i]);
+      MemoryContext old = MemoryContextSwitchTo(fixpoint_cache_cxt);
+      d = datumCopy(d, fixpoint_cache_typbyval, fixpoint_cache_typlen);
+      MemoryContextSwitchTo(old);
+      fixpoint_cache.emplace(fixpoint_cache_ctx + "|" + tok, d);
+    }
+  }
+}
+
+}
+
 /**
  * @brief Run the four-step compiled-evaluation pipeline for a semiring.
  *
@@ -130,6 +206,7 @@ Datum pec(
 
   provsql_having(c, g, mapping, sr);
   V out = c.evaluate<Sem>(g, mapping, sr);
+  fixpoint_cache_store(c, sr);
   return to_datum(sr, std::move(out));
 }
 
@@ -286,6 +363,19 @@ static Datum provenance_evaluate_compiled_internal
     GenericCircuit gc = getGenericCircuit(token);
     auto root = gc.getGate(uuid2string(token));
     return Float8GetDatum(provsql::compute_expectation(gc, root));
+  }
+
+  /* A component of an equation system solved earlier in this command,
+   * under the same semiring and mapping: no circuit to load. */
+  fixpoint_cache_ctx = semiring + "|" + std::to_string(table) + "|" +
+                       std::to_string(type) + "|" +
+                       std::to_string(GetCurrentCommandId(false));
+  get_typlenbyval(type, &fixpoint_cache_typlen, &fixpoint_cache_typbyval);
+  {
+    auto it = fixpoint_cache.find(fixpoint_cache_ctx + "|" + uuid2string(token));
+    if(it != fixpoint_cache.end())
+      return datumCopy(it->second, fixpoint_cache_typbyval,
+                       fixpoint_cache_typlen);
   }
 
   GenericCircuit c = getGenericCircuit(token);
@@ -551,6 +641,19 @@ Datum plain_truth(PG_FUNCTION_ARGS)
     std::unordered_map<gate_t, bool> mapping;
     provsql_having(c, g, mapping, sr);
     res = c.evaluate<semiring::Boolean>(g, mapping, sr);
+    /* An equation system met on the way was solved whole: record the
+     * truth of each of its components, so that the other rows of the same
+     * recursive result, which the rewriter checks one by one, do not load
+     * and solve it again. */
+    for(const auto &[sys, p] : c.solved_systems) {
+      const auto &vec = *static_cast<const std::vector<bool> *>(p.get());
+      if(plain_truth_memo.size() + vec.size() >= plain_truth_memo_max)
+        plain_truth_memo.clear();
+      const std::string prefix = "fixpoint:" + c.getUUID(sys) + ":";
+      for(std::size_t i = 0; i < vec.size(); ++i)
+        plain_truth_memo.emplace(
+          uuid2string(provsqlUuidV5(prefix + std::to_string(i + 1))), vec[i]);
+    }
   } catch(const std::exception &) {
     provsql_cancel_if_interrupted();
     res = true;

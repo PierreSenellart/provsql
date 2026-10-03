@@ -130,6 +130,9 @@ virtual bool mul_idempotent() const override {
 virtual bool absorptive() const override {
   return true;
 }
+virtual bool exact_equality() const override {
+  return false;
+}
 /**
  * @brief @f$\otimes@f$ distributes over @f$\ominus@f$ in the free
  *        Boolean-function algebra the circuit denotes, so the HAVING

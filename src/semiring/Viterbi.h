@@ -73,6 +73,9 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+virtual bool totally_ordered() const override {
+  return true;
+}
 /**
  * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
  *        @c MIN / @c MAX comparisons take the single-scan closed form.

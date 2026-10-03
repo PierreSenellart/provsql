@@ -165,6 +165,9 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+virtual bool totally_ordered() const override {
+  return true;
+}
 /**
  * @brief No semiring homomorphism @c BoolFunc(Y) →+* MinMax exists
  *        (the enum-min / enum-max structure cannot model the

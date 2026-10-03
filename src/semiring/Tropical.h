@@ -124,6 +124,9 @@ public:
 virtual bool absorptive() const override {
   return true;
 }
+virtual bool totally_ordered() const override {
+  return true;
+}
 value_type parse_leaf(const char *v) const {
   const value_type x = atof(v);
   if (x < 0)

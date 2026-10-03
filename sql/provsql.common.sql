@@ -1937,6 +1937,20 @@ END
 $$ LANGUAGE plpgsql SET client_min_messages = warning;
 
 /**
+ * @brief Address of the @c fixpoint gate reading component @p i of the
+ *        equation system @p sys (internal)
+ *
+ * Content-addressed like every other gate, from the system and the
+ * index, so that evaluation, having solved a system, can name each of its
+ * components (see @c provenance_evaluate_compiled's solution cache).
+ */
+CREATE OR REPLACE FUNCTION fixpoint_token(sys uuid, i int) RETURNS uuid AS
+$$
+  SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),
+                                 'fixpoint:' || sys::text || ':' || i::text);
+$$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief Driver for provenance over recursive queries, as an equation
  *        system solved at evaluation time (internal)
  *
@@ -2015,8 +2029,12 @@ BEGIN
 
   -- 4. The system, and each tuple's component of its solution.
   PERFORM set_config('provsql.active', 'off', true);
-  SELECT string_agg(format('n.%1$s IS NOT DISTINCT FROM w.%1$s', trim(c)),
-                    ' AND ')
+  -- Match the two tables on the text form of the user columns: null-safe
+  -- like IS NOT DISTINCT FROM, but hashable, which a column-wise
+  -- IS NOT DISTINCT FROM is not (it would make this a nested loop).
+  SELECT format('ROW(%s)::text = ROW(%s)::text',
+                string_agg('n.' || trim(c), ', '),
+                string_agg('w.' || trim(c), ', '))
     INTO joincond
     FROM unnest(string_to_array(colnames, ',')) AS c;
   EXECUTE format(
@@ -2028,13 +2046,15 @@ BEGIN
   IF xs IS NOT NULL THEN
     sys := public.uuid_generate_v5(seed, 'system');
     PERFORM provsql.create_gate(sys, 'fixsystem', xs || fs);
-    PERFORM provsql.create_gate(public.uuid_generate_v5(seed, 'p' || i),
+    -- A component's address is a function of its system and index, so
+    -- that evaluation can name every component of a system it solves.
+    PERFORM provsql.create_gate(provsql.fixpoint_token(sys, i::int),
                                 'fixpoint', ARRAY[sys], i::int, 0, NULL)
       FROM provsql_rec_eq;
     EXECUTE format(
-      'UPDATE %I w SET provsql = public.uuid_generate_v5(%L, ''p'' || e.i) '
+      'UPDATE %I w SET provsql = provsql.fixpoint_token(%L, e.i::int) '
       'FROM provsql_rec_eq e WHERE w.provsql = e.x',
-      work_name, seed);
+      work_name, sys);
   END IF;
   PERFORM set_config('provsql.active', active, true);
 END

@@ -139,6 +139,10 @@ namespace semiring {
 class Formula : public semiring::Semiring<std::string>
 {
 public:
+/** @brief Values are renderings: two of them may denote the same element. */
+virtual bool exact_equality() const override {
+  return false;
+}
 virtual value_type zero() const override {
   return "𝟘";
 }

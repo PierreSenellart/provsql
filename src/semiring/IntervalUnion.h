@@ -137,6 +137,10 @@ virtual bool mul_idempotent() const override {
 virtual bool absorptive() const override {
   return true;
 }
+/** @brief Equality of the multiranges, not of the Datum pointers. */
+virtual bool equal(const value_type &a, const value_type &b) const override {
+  return a == b || DatumGetBool(OidFunctionCall2(F_MULTIRANGE_EQ, a, b));
+}
 /**
  * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
  *        @c MIN / @c MAX comparisons take the single-scan closed form.
