@@ -12708,10 +12708,21 @@ remove_provenance_attribute_groupref(Query *q,
  * @param removed  Boolean array (from @c remove_provenance_attributes_select)
  *                 indicating which columns were removed.
  */
-static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
-  SetOperationStmt *so = (SetOperationStmt *)q->setOperations;
-  List **lists[3] = {&so->colTypes, &so->colTypmods, &so->colCollations};
+static void remove_provenance_attribute_setop_node(Node *node,
+                                                  bool *removed) {
+  SetOperationStmt *so;
+  List **lists[3];
   int i = 0;
+
+  if (!IsA(node, SetOperationStmt))
+    return;
+  so = (SetOperationStmt *)node;
+  /* Every node of the tree has the columns of the whole operation. */
+  remove_provenance_attribute_setop_node(so->larg, removed);
+  remove_provenance_attribute_setop_node(so->rarg, removed);
+  lists[0] = &so->colTypes;
+  lists[1] = &so->colTypmods;
+  lists[2] = &so->colCollations;
 
   for (i = 0; i < 3; ++i) {
     ListCell *cell, *prev;
@@ -12730,6 +12741,49 @@ static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
         prev = cell;
         cell = my_lnext(*lists[i], cell);
       }
+    }
+  }
+}
+
+static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
+  remove_provenance_attribute_setop_node(q->setOperations, removed);
+}
+
+/**
+ * @brief Give the arms of a set operation the column names of the operation.
+ *
+ * The columns of a set operation are matched by position, and named after
+ * its first arm; the names an arm gives them mean nothing.  The rewriting of
+ * each arm, however, recognises the provenance column by its name: an arm
+ * that reads a tracked relation's @c provsql column under that name hands it
+ * over as the provenance, one that renames it keeps it as a value.  Named
+ * after the operation, every arm makes the same choice as the operation
+ * itself, and the arms keep the same number of columns.
+ *
+ * @param q     Query containing @c setOperations.
+ * @param node  Node of the set operation tree.
+ * @param names Names of the first arm's visible columns, in order.
+ */
+static void name_setop_arms(Query *q, Node *node, List *names) {
+  if (IsA(node, SetOperationStmt)) {
+    name_setop_arms(q, ((SetOperationStmt *)node)->larg, names);
+    name_setop_arms(q, ((SetOperationStmt *)node)->rarg, names);
+  } else if (IsA(node, RangeTblRef)) {
+    RangeTblEntry *rte =
+      rt_fetch(((RangeTblRef *)node)->rtindex, q->rtable);
+    ListCell *lc, *ln = list_head(names);
+
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+      return;
+    foreach (lc, rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk)
+        continue;
+      if (ln == NULL)
+        break;
+      if (lfirst(ln) != NULL)
+        te->resname = pstrdup((char *)lfirst(ln));
+      ln = my_lnext(names, ln);
     }
   }
 }
@@ -33698,6 +33752,28 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
     Bitmapset *removed_sortgrouprefs = NULL;
 
     if (q->targetList) {
+      if (q->setOperations) {
+        /* The names are the first arm's, as in SQL: the operation's own
+         * select list may already have lost the provenance column (a
+         * non-ALL UNION wrapped in its GROUP BY). */
+        Node *first = q->setOperations;
+        RangeTblEntry *rte;
+
+        while (IsA(first, SetOperationStmt))
+          first = ((SetOperationStmt *)first)->larg;
+        rte = rt_fetch(((RangeTblRef *)first)->rtindex, q->rtable);
+        if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
+          List *names = NIL;
+          ListCell *lc;
+          foreach (lc, rte->subquery->targetList) {
+            TargetEntry *te = (TargetEntry *)lfirst(lc);
+            if (!te->resjunk)
+              names = lappend(names, te->resname);
+          }
+          name_setop_arms(q, q->setOperations, names);
+          list_free(names);
+        }
+      }
       removed_sortgrouprefs =
         remove_provenance_attributes_select(constants, q, removed);
       if (removed_sortgrouprefs != NULL)

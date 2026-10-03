@@ -223,3 +223,11 @@ LEFT JOIN, padded side over a CTE|2|9|1|0.0400
 LEFT JOIN, padded side over a CTE|5||1|0.5000
 LEFT JOIN, padded side over a CTE|7||1|0.5000
 (6 rows)
+remove_provenance
+
+(1 row)
+q|value|n|own
+provsql as a value|1|5|t
+provsql as a value|2|4|t
+provsql as a value|3|2|t
+(3 rows)

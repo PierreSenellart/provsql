@@ -202,7 +202,24 @@ SELECT remove_provenance('sn_c4');
 SELECT 'LEFT JOIN, padded side over a CTE' AS q, a, b, c, p FROM sn_c4
 ORDER BY a, b NULLS FIRST, c;
 
+-- ---------------------------------------------------------------------------
+-- A provenance column read as a value in a set operation
+-- ---------------------------------------------------------------------------
+
+-- The columns of a set operation are those of its first arm: renamed there,
+-- each arm's provsql column is a value, whatever the other arms call it (the
+-- second arm here did not rename it, and had one column fewer).  The value is
+-- the token of the row read, here the row's own provenance.
+CREATE TABLE sn_v1 AS
+  SELECT value, provenance = provenance() AS own
+  FROM (SELECT 1 AS value, provsql AS provenance FROM sn_r
+        UNION ALL SELECT 2, provsql FROM sn_s
+        UNION ALL SELECT 3, provsql FROM sn_w) t;
+SELECT remove_provenance('sn_v1');
+SELECT 'provsql as a value' AS q, value, count(*) AS n, bool_and(own) AS own
+FROM sn_v1 GROUP BY value ORDER BY value;
+
 DROP FUNCTION sn_c(uuid); DROP FUNCTION sn_p(uuid);
 DROP TABLE sn_r, sn_s, sn_w, sn_one, sn_t1, sn_t2, sn_t3, sn_t4, sn_t5, sn_t6,
   sn_t7, sn_t8, sn_t9, sn_t10, sn_t11, sn_o1, sn_o2, sn_o3, sn_o4, sn_o5, sn_o6,
-  sn_o7, sn_o8, sn_c1, sn_c2, sn_c3, sn_c4;
+  sn_o7, sn_o8, sn_c1, sn_c2, sn_c3, sn_c4, sn_v1;
