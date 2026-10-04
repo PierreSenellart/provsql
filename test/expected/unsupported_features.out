@@ -12,10 +12,21 @@ ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be match
 DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; mark it plain() to group by its plain value
 DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
-ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
-ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
-ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
-ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
+ERROR:  ProvSQL: an output column named "provsql" collides with the provenance column ProvSQL adds
+DETAIL:  provsql-reason: provsql-column-name; scope: deliberate
+HINT:  Give the column another name with AS; a cast of the provsql column is named after it.
+ERROR:  ProvSQL: an output column named "provsql" collides with the provenance column ProvSQL adds
+DETAIL:  provsql-reason: provsql-column-name; scope: deliberate
+HINT:  Give the column another name with AS; a cast of the provsql column is named after it.
+ERROR:  ProvSQL: an output column named "provsql" collides with the provenance column ProvSQL adds
+DETAIL:  provsql-reason: provsql-column-name; scope: deliberate
+HINT:  Give the column another name with AS; a cast of the provsql column is named after it.
+ERROR:  ProvSQL: an output column named "provsql" collides with the provenance column ProvSQL adds
+DETAIL:  provsql-reason: provsql-column-name; scope: deliberate
+HINT:  Give the column another name with AS; a cast of the provsql column is named after it.
+ERROR:  ProvSQL: an output column named "provsql" collides with the provenance column ProvSQL adds
+DETAIL:  provsql-reason: provsql-column-name; scope: deliberate
+HINT:  Give the column another name with AS; a cast of the provsql column is named after it.
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 DETAIL:  provsql-reason: except-all; scope: deliberate
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.

@@ -47,6 +47,9 @@ SELECT name AS provsql FROM personnel;
 -- Hand-made provsql column from another uuid column
 SELECT u AS provsql FROM (SELECT public.uuid_generate_v4() AS u, name FROM personnel) s;
 
+-- A provsql column named by PostgreSQL: a cast takes the column's name
+SELECT provsql::text FROM personnel;
+
 -- Hand-made provsql column inside a set-operation arm
 SELECT name, provenance() AS provsql FROM personnel
 UNION ALL

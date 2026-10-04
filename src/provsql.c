@@ -35081,6 +35081,23 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
   return expression_tree_walker(node, query_defines_handmade_provsql, cx);
 }
 
+/**
+ * @brief Refuse a query whose output has a column named @c provsql.
+ *
+ * Its name is that of the provenance column ProvSQL adds, whether the query
+ * writes it (@c "expr AS provsql") or PostgreSQL derives it (a cast of the
+ * @c provsql column, @c "provsql::text", takes the column's name).
+ */
+static void refuse_handmade_provsql(void) {
+  provsql_unsupported_hint(
+    PROVSQL_DELIBERATE, "provsql-column-name",
+    "Give the column another name with AS; a cast of the provsql column is "
+    "named after it.",
+    "an output column named \"%s\" collides with the provenance column "
+    "ProvSQL adds",
+    PROVSQL_COLUMN_NAME);
+}
+
 
 
 /** @brief Context of @c reads_provsql_walker: the level whose range table
@@ -35766,9 +35783,7 @@ static PlannedStmt *provsql_planner(Query *q,
     if (lifted_q != NULL) {
       if (provsql_active &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
-        provsql_error("a query may not define a column named \"%s\" by hand; "
-                      "ProvSQL manages the provenance column itself",
-                      PROVSQL_COLUMN_NAME);
+        refuse_handmade_provsql();
       q = lifted_q;
       sublinks_lifted = true;
     }
@@ -35789,9 +35804,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_active && !sublinks_lifted && !from_wrapped &&
           !matview_fill &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
-        provsql_error("a query may not define a column named \"%s\" by hand; "
-                      "ProvSQL manages the provenance column itself",
-                      PROVSQL_COLUMN_NAME);
+        refuse_handmade_provsql();
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
