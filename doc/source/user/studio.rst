@@ -246,14 +246,13 @@ query box selects the provenance class the next batch runs under:
   eval-strip semiring picker hides the others.
 * :guilabel:`Absorptive`: sets ``provsql.provenance = 'absorptive'``,
   allowing constructions sound only for absorptive semirings, chiefly
-  stopping a cyclic recursive query at its fixpoint (the minimal-paths
-  semantics; see :ref:`network-reliability-btw`). Only absorptive (and
+  the exact reachability route over graphs of bounded treewidth (see
+  :ref:`network-reliability-btw`). Only absorptive (and
   Boolean-compatible) semirings then evaluate the circuit.
 
 The switch is free in Circuit and Notebook modes. Where mode locks it
 to :guilabel:`Where`; **Contributions** and **Temporal** modes lock it
-to :guilabel:`Boolean`, since they read the circuit as a Boolean
-function, so the provenance class cannot change their result.
+to :guilabel:`Boolean`.
 
 The selected scheme persists across batches. An
 ``update_provenance`` (``provsql.update_provenance``) checkbox next to
@@ -310,40 +309,21 @@ the row a fresh input gate with :sqlfunc:`replace_input`, as the
 cell's tooltip recalls. Circuits already built over the old gate keep
 the old value.
 
-Some gates are drawn as badges on their child instead of as separate
-nodes:
+Some gates carry a badge:
 
-* A ``gate_assumed`` wrapper labelled ``'boolean'`` (added under the
-  ``'boolean'`` provenance class) shows as a small :sc:`B` badge; gates
-  simplified under Boolean-only rules carry the same badge.
-* A wrapper labelled ``'absorptive'`` (a recursive query truncated at
-  its fixpoint, or a result of the bounded-treewidth reachability
-  route), and gates simplified under absorptive rules, show an amber
-  :sc:`A` badge.
+* :sc:`B`: built under the ``'boolean'`` provenance class, or
+  simplified under Boolean-only rules;
+* :sc:`A` (amber): built under the ``'absorptive'`` class (e.g., a
+  reachability query answered by the bounded-treewidth route), or
+  simplified under absorptive rules;
+* :sc:`D` (green): a d-DNNF certificate, on which
+  :sqlfunc:`probability_evaluate` is linear and exact; the inspector
+  states which property is certified;
+* :sc:`IF` (teal): an inversion-free certificate (see
+  :doc:`probabilities`); the inspector shows its variable order.
 
-Either badge narrows the evaluation strip's semiring menu to the
-options that are sound on the marked gate: only absorptive semirings
-for a recursion root (including ``Tropical (min-plus, nonnegative)``,
-which computes exact min-cost reachability there), absorptive or
-Boolean-compatible ones for the other marked gates.
-
-A ``plus`` / ``times`` gate carrying a **d-DNNF certificate**
-(deterministic alternatives / decomposable conjunction by
-construction, produced by the bounded-treewidth reachability route
-and the certified HAVING enumerations, see :doc:`probabilities`) is
-stamped with a green :sc:`D` badge; its inspector states which
-property is certified. On these subcircuits,
-:sqlfunc:`probability_evaluate` uses the linear exact ``independent``
-method.
-
-The inversion-free certificate (a ``gate_annotation`` wrapper on a
-certified result root, see :doc:`probabilities`) shows as a teal
-:sc:`IF` badge on its child, with its dashed ring drawn outside the
-:sc:`B` ring when a gate carries both. Pinning that root shows the
-certificate header (atom / class counts) and the variable-block
-order in the inspector. Pinning a certified leaf shows its per-input
-order key (root value, secondary value, factor -- or the shared
-self-join *guard*) and its rank within the shown scene.
+A :sc:`B` or :sc:`A` badge narrows the evaluation strip's semiring
+menu to the semirings that are sound on the marked gate.
 
 .. _studio-circuit-eval-strip:
 
@@ -358,33 +338,14 @@ custom and “Other” entries below:
 * **Compiled semirings**
 
   * *Boolean*: ``boolexpr``, ``boolean``.
-  * *Lineage*: ``formula``, ``how``, ``why``, ``which``. ``formula``
-    pretty-prints the provenance circuit as a symbolic expression
-    :cite:`DBLP:conf/pods/GreenKT07`; ``how`` is the same algebra in
-    canonical :math:`\mathbb{N}[X]` sum-of-products form, so two
-    semantically-equal circuits give identical strings, which suits
-    provenance-aware equivalence checks. ``why`` and
-    ``which`` are the set-valued projections.
+  * *Lineage*: ``formula``, ``how``, ``why``, ``which``.
   * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
-    ``lukasiewicz``. Łukasiewicz is the continuous-valued fuzzy logic
-    on numeric values in :math:`[0, 1]`; for the discrete fuzzy /
-    trust shape on a user-defined enum lattice, see ``maxmin`` under
-    *User-enum* below.
-  * *Intervals*: ``interval-union``. One UI option covering
-    :sqlfunc:`sr_temporal`, :sqlfunc:`sr_interval_num` and
-    :sqlfunc:`sr_interval_int`: the strip picks the right one
-    from the selected mapping's multirange type
-    (``tstzmultirange`` / ``nummultirange`` / ``int4multirange``);
-    requires PostgreSQL 14+. See :doc:`temporal` for the
-    interval-union algebra.
-  * *User-enum*: ``minmax`` and ``maxmin``. One UI option per shape,
-    polymorphic over any user-defined PostgreSQL enum carrier (the
-    bottom and top of the lattice come from
-    :literal:`pg_enum.enumsortorder`). ``minmax`` is the security shape
-    (alternatives combine to enum-min, joins to enum-max); ``maxmin``
-    is the discrete fuzzy / availability / trust shape (alternatives
-    to enum-max, joins to enum-min). Backed by :sqlfunc:`sr_minmax`
-    and :sqlfunc:`sr_maxmin` respectively.
+    ``lukasiewicz``.
+  * *Intervals*: ``interval-union``, i.e., :sqlfunc:`sr_temporal`,
+    :sqlfunc:`sr_interval_num` or :sqlfunc:`sr_interval_int` according
+    to the mapping's multirange type (PostgreSQL 14+).
+  * *User-enum*: ``minmax`` (:sqlfunc:`sr_minmax`) and ``maxmin``
+    (:sqlfunc:`sr_maxmin`), over any user-defined enum.
 
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema.
@@ -399,24 +360,11 @@ custom and “Other” entries below:
   Möbius (μ) root. PROV-XML export uses :sqlfunc:`to_provxml`; see
   :doc:`export`.
 
-The mapping picker filters on the selected semiring's expected value
-type: only ``boolean``-typed mappings appear under ``boolean``, only
-the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
-``numeric`` / ``real`` / ``double precision``) under the numeric
-group, only multirange-typed mappings under ``interval-union``, and
-only mappings whose ``value`` column is a user-defined enum under
-``minmax`` / ``maxmin``.
-Polymorphic entries (``boolexpr``, ``formula``, ``how``, ``why``,
-``which``) accept any mapping. ``boolexpr``, ``formula`` and ``PROV-XML
-export`` accept the mapping as *optional*: with one, leaves are
-labelled by the mapping's ``value`` column; without one, leaves carry
-their gate UUID (``PROV-XML``), a bare ``x<id>`` placeholder
-(``boolexpr``) or the same abbreviated UUID the circuit's nodes show
-(``formula``). A partial mapping is fine for those three: what it
-covers is labelled, the rest identified. Custom-semiring entries
-filter to mappings whose value type matches the wrapper's return
-type. When no mapping fits, the picker shows
-``(no compatible mappings : expected …)``.
+The mapping picker lists only the mappings whose ``value`` type suits
+the selected semiring (``(no compatible mappings : expected …)`` when
+none does). ``boolexpr``, ``formula`` and ``PROV-XML export`` take an
+optional, possibly partial mapping: leaves it does not cover are
+identified by their gate UUID or an ``x<id>`` placeholder.
 
 :fa:`play` :guilabel:`Run` reports the result inline along with the
 runtime. For an approximate method the strip also shows the
@@ -429,17 +377,12 @@ runtime. For an approximate method the strip also shows the
   `<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
   ``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``.
 
-The sample-based methods also report the actual sample count
-(informative on the adaptive ``(ε, δ)`` path, where ProvSQL derives
-it), e.g., ``…, 2,120 samples``. :fa:`eraser` :guilabel:`Clear` wipes
-the result so a verbose Why or Formula output does not obscure the
-canvas; :fa:`clipboard` :guilabel:`Copy` copies the result to the
-clipboard, with full precision for a probability whatever the rounded
-display.
-
-The probability cell click-toggles between rounded (per the panel's
-:guilabel:`Probability decimals` setting) and full double-precision; copies
-always carry the full-precision form.
+The sample-based methods also report the sample count, e.g.,
+``…, 2,120 samples``. :fa:`eraser` :guilabel:`Clear` wipes the result;
+:fa:`clipboard` :guilabel:`Copy` copies it, with full precision for a
+probability. Clicking a probability toggles between the rounded
+display (:guilabel:`Probability decimals` in `Configuration`_) and full
+precision.
 
 The same evaluation picker also exposes the **knowledge-compilation
 pipeline** as standalone entries: a *Knowledge compilation* group
@@ -472,15 +415,10 @@ See :doc:`knowledge-compilation` for the full pipeline.
 The d-DNNF and tree-decomposition canvases pin and inspect like the
 provenance circuit, with two refinements specific to those views:
 
-* In the **tree-decomposition** canvas, each bag is coloured by its
-  index in the elimination order and clicking the bag focuses the
-  inspector on its members. The inspector resolves each member's
-  source row (provenance UUID → table / row), showing which tuple a
-  given variable came from.
-* When a tree-decomposition bag or an internal d-DNNF gate
-  (:guilabel:`AND` / :guilabel:`OR` / :guilabel:`NOT`) is pinned, the
-  evaluation strip is hidden: these nodes are intermediate results of
-  the compilation, not roots of a provenance sub-circuit.
+* In the **tree-decomposition** canvas, pinning a bag lists its
+  members in the inspector, each resolved to its source row.
+* Pinning a bag or an internal d-DNNF gate (:guilabel:`AND` /
+  :guilabel:`OR` / :guilabel:`NOT`) hides the evaluation strip.
 
 When the pinned node is instead an ``agg_token`` or ``semimod`` gate
 over random variables, the strip offers the moment, distribution
@@ -515,57 +453,23 @@ omitted. The eval strip (above) still works on the unrendered root.
 Distribution profile panel
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For nodes whose underlying gate is a scalar random-variable root
-(``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
-``gate_mixture``), the eval strip exposes a *Distribution profile*
-entry under the *Distribution* group. Running it returns
-header stats (mean :math:`\mu`, variance :math:`\sigma^2`, and,
-where :sqlfunc:`entropy` can compute it, the entropy :math:`H` in
-nats, Shannon for a discrete root and differential for a continuous
-one), a histogram of the sub-circuit's distribution (computed by
-:sqlfunc:`rv_histogram`), a PDF/CDF toggle, per-bar tooltips with
-:math:`\sigma` markers, and wheel-zoom on the value axis. The sample
-count comes from ``provsql.rv_mc_samples`` and the seed from
-``provsql.monte_carlo_seed`` (both in the Config panel).
+For a scalar random-variable node, the eval strip offers a
+*Distribution profile* entry under the *Distribution* group. It shows
+the mean :math:`\mu`, the variance :math:`\sigma^2` and, where
+:sqlfunc:`entropy` can compute it, the entropy :math:`H` in nats, with
+a histogram of the distribution (:sqlfunc:`rv_histogram`) and a
+PDF/CDF toggle. The sample count comes from ``provsql.rv_mc_samples``
+and the seed from ``provsql.monte_carlo_seed`` (both in the Config
+panel).
 
-When the pinned node resolves to a recognised closed-form shape,
-the panel overlays the analytical PDF (or CDF, depending on the
-toggle) on the histogram as a smooth terracotta curve, and
-point masses as vertical stems capped by a small disc. For instance,
-``2 * Exp(0.4)`` simplifies to ``Exp(0.2)``, and the panel draws the
-exact exponential curve over the sampled bars.
-
-The recognised shapes are:
-
-* a bare ``gate_rv`` of any registered family (Normal / Uniform / Exponential / Erlang / Gamma / Log-normal / Weibull / Pareto / Beta),
-  optionally with a one-interval conditioning event -- smooth
-  curve;
-* a Dirac (``provsql.as_random(c)``) -- single stem at ``c``;
-* a categorical (``provsql.categorical``) -- one stem per
-  outcome, height proportional to its probability mass;
-* a Bernoulli mixture (``provsql.mixture(p, X, Y)``) over any
-  recursively-matched shape -- weighted sum of the per-arm
-  curves, with Dirac / categorical arms contributing stems
-  whose mass propagates through the Bernoulli weight.
-
-Conditioning (a ``WHERE`` predicate, or any conditioning
-provenance UUID) applies to every shape: bare-RV curves clip
-to the conditioning interval and renormalise; mixture arms
-truncate individually and the Bernoulli weight rebalances by
-the ratio of arm masses; categorical outcomes outside the
-interval are dropped and surviving masses renormalise to 1;
-Diracs survive iff their value sits in the interval. An
-infeasible event raises a “conditioning event is infeasible” error.
-
-The curve is computed by :sqlfunc:`rv_analytical_curves`; other
-shapes (``gate_arith`` composites of independent RVs that do not
-simplify, non-integer Erlang shapes) show the histogram only.
-
-For pure-discrete shapes (a Dirac, a categorical, or a nested
-mixture whose every arm is one of those) the CDF mode draws a
-true staircase: horizontal flats joined by vertical jumps at
-each outcome, running from 0 at the chart's left edge to 1 on
-the right.
+When the node has a closed form (:sqlfunc:`rv_analytical_curves`),
+the exact PDF or CDF is drawn over the histogram, with point masses as
+stems: a distribution of a registered family, a constant
+(``provsql.as_random(c)``), a ``provsql.categorical``, or a
+``provsql.mixture`` of these, also under conditioning. For instance,
+``2 * Exp(0.4)`` simplifies to ``Exp(0.2)`` and gets the exact
+exponential curve. Other nodes show the histogram only. An infeasible
+conditioning event raises a “conditioning event is infeasible” error.
 
 .. figure:: /_static/studio/distribution-profile.png
    :alt: The eval-strip Distribution profile panel showing the
@@ -1114,10 +1018,7 @@ value. The panel's sections are:
   every batch, which stops a long evaluation too.
 * **Evaluation**: ``provsql.monte_carlo_seed``, ``provsql.rv_mc_samples``
   and ``provsql.simplify_on_load``.
-* **Messages**: ``provsql.verbose_level``, offered up to 20, the level at
-  which the query before and after rewriting is shown in Where mode (higher
-  levels are for debugging ProvSQL). The evaluation strip always runs at 5
-  at least, to report the guarantees of approximate methods.
+* **Messages**: ``provsql.verbose_level``.
 * **Advanced**, folded: the parameters rarely changed, which tune the
   evaluation routes (``provsql.ess_warn_fraction``,
   ``provsql.gate_cache_size``, ``provsql.joint_max_states``,
@@ -1233,15 +1134,12 @@ cell's SQL); it is re-run only if you just ran it, so unrun drafts
 and plain reloads never execute automatically (which matters for
 side-effecting statements like :sqlfunc:`add_provenance`).
 
-In Where mode, every result row gets a :fa:`project-diagram`
-:guilabel:`Circuit` button that
-switches to Circuit mode and pre-loads the circuit for that row's
-provenance UUID, so a hover-and-trace exploration can cross over to
-the DAG without retyping the query. In Notebook mode, the per-cell
-:fa:`project-diagram` :guilabel:`open in Circuit mode` action and the
-circuit cells' :fa:`external-link-alt` :guilabel:`Circuit mode` button
-do the same; switching back returns
-to the same notebook, selection and scroll position included.
+Where mode's per-row :fa:`project-diagram` :guilabel:`Circuit` button,
+and in Notebook mode the per-cell :fa:`project-diagram` :guilabel:`open
+in Circuit mode` action and the circuit cells' :fa:`external-link-alt`
+:guilabel:`Circuit mode` button, open Circuit mode on that token;
+switching back returns to the same notebook, selection and scroll
+position included.
 
 Limitations
 -----------

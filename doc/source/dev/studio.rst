@@ -302,10 +302,8 @@ the user's SQL, ``exec_batch`` issues a ``SET LOCAL`` for each
 GUC the panel and per-query toggles imply:
 
 - the panel's overrides of the ProvSQL parameters (``RUNTIME_GUCS``),
-  each in a savepoint of its own by ``apply_extra_gucs``, so a saved
-  value the server no longer accepts (a parameter renamed or removed, a
-  value out of range, a parameter this role may not set) is skipped
-  instead of failing the batch
+  each in a savepoint of its own (``apply_extra_gucs``), so a saved value
+  the server no longer accepts is skipped instead of failing the batch
 - ``provsql.tool_search_path``, a Studio option rather than an override
 - ``provsql.provenance`` -- the provenance-class enum, always set
   to one of ``'semiring'`` / ``'where'`` / ``'absorptive'`` /
@@ -327,25 +325,15 @@ cells need the underlying UUID exposed in text representation) is
 connection as a session default in ``configure_connection``
 (savepoint-guarded for older extensions).
 
-The parameters the panel offers are chosen in ``_PANEL_SETTINGS`` in
-``studio/provsql_studio/db.py``, each with its group (a section of the
-Config panel, the folded *Advanced* section, or the *Settings* of the
-Tools panel); everything else about them comes from ``pg_settings``.
-``describe_panel_settings`` returns, for ``GET /api/config``, each
-parameter's type, unit, bounds, choices, description, current value (the
-overrides applied) and whether the role may set it (from its context,
-``is_superuser`` and, on PostgreSQL 15+, ``has_parameter_privilege``);
-``app.js`` builds a widget from that, except for
-``provsql.fallback_compiler``, whose choice list is the live registry's
-available compilers. ``POST /api/config`` has ``validate_panel_guc`` set
-the value in a transaction rolled back at once, so PostgreSQL checks it
-and reports its canonical form, which is what is stored.
+The parameters the panel offers are listed, with their group, in
+``_PANEL_SETTINGS`` in ``studio/provsql_studio/db.py``; everything else
+about them (type, bounds, description, whether the role may set them)
+comes from ``pg_settings`` through ``describe_panel_settings``, and
+``validate_panel_guc`` lets PostgreSQL itself check a new value.
 ``provsql.simplify_on_load`` additionally clears ``layout_cache`` so the
 next ``/api/circuit`` re-renders a circuit whose folded shape may have
-changed. Left out of the panel: the per-query toggles, the parameters
-Studio sets itself, the output ``provsql.last_eval_method``, and the
-debugging aids (``provsql.trace_rewrite``, ``provsql.verify_rewrite``,
-the switches hidden from ``pg_settings``).
+changed.  Left out of the panel: the per-query toggles, the parameters
+Studio sets itself, and the debugging aids.
 
 ``SET LOCAL`` scopes the change to the transaction so a parallel
 request on the same connection cannot see the override.

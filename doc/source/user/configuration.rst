@@ -32,48 +32,28 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
     ``'semiring'``
         Universal semiring provenance (the default): circuits are valid
-        for every commutative (m-)semiring. A recursive query in which a
-        tuple is derived through itself (over cyclic data, or through a
-        null-padded row that re-derives itself on acyclic data) has its
-        provenance recorded as equations, whose value the evaluating
-        semiring decides (see :doc:`querying`).
+        for every commutative (m-)semiring, recursive queries over cyclic
+        data included (see :doc:`querying`).
 
     ``'absorptive'``
         Circuits may additionally be valid only for *absorptive*
         semirings (those where :math:`1 \oplus a = 1`: probability,
-        Boolean, min-plus over nonnegative costs, Viterbi…).
-        Concretely:
-
-        * **recursive reachability on bounded-treewidth data** is
-          compiled so that it evaluates exactly for probability and for
-          every absorptive semiring, e.g., min-cost reachability through
-          nonnegative min-plus (see :doc:`semirings` and
-          :doc:`probabilities`);
-        * circuits are simplified with the identities of absorptive
-          semirings (:math:`a \oplus a = a`, :math:`1 \oplus a = 1`,
-          :math:`a \oplus a \otimes b = a`).
+        Boolean, min-plus over nonnegative costs, Viterbi…). Recursive
+        reachability on bounded-treewidth data is then compiled so that
+        it evaluates exactly under all of them, e.g., min-cost
+        reachability (see :doc:`semirings` and :doc:`probabilities`),
+        and circuits are simplified accordingly.
 
     ``'boolean'``
         Implies ``'absorptive'``, and additionally enables every
         optimisation sound only when provenance is interpreted as a
-        Boolean function:
-
-        * **Safe-query rewriting.** Self-join-free hierarchical
-          conjunctive queries (and UCQs of such queries) over TID / BID
-          base tables are rewritten so that their probability is computed
-          in linear time. Other queries are unchanged.
-
-        * **Boolean circuit simplification**, with the identities
-          :math:`a \otimes a = a` and :math:`a \otimes (a \oplus b) = a`,
-          independently of
-          :ref:`provsql.simplify_on_load <provsql-simplify-on-load>`.
-
-        Semirings that are not Boolean-faithful refuse to evaluate the
-        resulting circuits; see :doc:`probabilities` and the
-        :ref:`compatibility note <semiring-boolean-compat>` in
-        :doc:`semirings`. Not the default because the rewriting changes
-        the multiset of result rows, so it is unsuitable for per-row
-        provenance and for non-Boolean-faithful semirings.
+        Boolean function, chiefly the safe-query rewriting, which
+        computes in linear time the probability of self-join-free
+        hierarchical queries over TID / BID tables. Semirings that are
+        not Boolean-faithful refuse to evaluate the resulting circuits
+        (see :doc:`probabilities` and the :ref:`compatibility note
+        <semiring-boolean-compat>` in :doc:`semirings`), and the
+        multiplicity of result rows may change.
 
 ``provsql.update_provenance`` (default: ``off``)
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
@@ -82,14 +62,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-implicit-freeze:
 
 ``provsql.implicit_freeze`` (default: ``'warn'``)
-    What a part of a query whose provenance is not tracked (see
-    :ref:`plain-sql`) does when the rest of the statement tracks the same
-    relations. ``'warn'`` emits a
-    ``WARNING`` naming such a relation; ``'error'`` refuses the query
-    (SQLSTATE ``0A000``, ``feature_not_supported``). A
-    part that reads only relations the rest does not track, that is
-    marked with :sqlfunc:`plain`, or an aggregate result read through an
-    explicit cast (``count(*)::numeric``), is never refused.
+    What happens when part of a query cannot be tracked (see
+    :ref:`plain-sql`) while the rest of the statement tracks the same
+    relations: ``'warn'`` runs it with a ``WARNING``; ``'error'``
+    refuses the query (SQLSTATE ``0A000``). A part marked with
+    :sqlfunc:`plain`, or an aggregate read through an explicit cast
+    (``count(*)::numeric``), is never refused.
 
 .. _provsql-classify-top-level:
 
@@ -105,15 +83,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
         NOTICE:  ProvSQL: query result is OPAQUE
         NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
 
-    The source list is reported for ``TID`` and ``BID`` results
-    (including the explicit ``no provenance-tracked sources`` marker
-    for the deterministic case) but omitted for ``OPAQUE`` results,
-    where it could be incomplete. Only the outermost statement is
-    reported.
-
-    ProvSQL Studio enables this GUC automatically and renders the
-    certified kind on the result-table provenance pill; see
-    :doc:`studio`.
+    ProvSQL Studio enables it automatically (see :doc:`studio`).
 
 .. _provsql-verbose-level:
 
@@ -144,23 +114,18 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
       probability method chooser.
 
 ``provsql.verify_rewrite`` (default: ``off``)
-    A debugging aid for developers: checks the query tree after every
-    step of the rewriting, and raises an error naming the step after which
-    a column reference, the numbering of the result columns, an aggregate
-    or a permission index became inconsistent.
+    Developer debugging aid: checks the query tree after each step of the
+    rewriting, and raises an error naming the step that broke it.
 
 ``provsql.trace_rewrite`` (default: ``off``)
-    A debugging aid for developers: a ``NOTICE`` for each step of the
-    rewriting that changed the query, with the nesting level it ran at.
+    Developer debugging aid: a ``NOTICE`` for each step of the rewriting
+    that changed the query.
 
 ``provsql.aggtoken_text_as_uuid`` (default: ``off``)
-    Controls how an ``agg_token`` cell renders as text. By default it
-    renders as ``"value (*)"``, where *value* is the aggregate value.
-    When set to ``on``, it renders as the underlying provenance UUID
-    instead (ProvSQL Studio sets this per session); the display string
-    of such a UUID is obtained with :sqlfunc:`agg_token_value_text`. Has
-    no effect on ``EXPLAIN`` output, on storage, or on numeric / casting
-    behaviour of ``agg_token``.
+    When ``on``, an ``agg_token`` cell renders as its provenance UUID
+    instead of ``"value (*)"`` (ProvSQL Studio sets this per session);
+    :sqlfunc:`agg_token_value_text` gives the display string of such a
+    UUID. Only the text output changes.
 
 .. _provsql-monte-carlo-seed:
 
@@ -174,97 +139,74 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-rv-mc-samples:
 
 ``provsql.rv_mc_samples`` (default: ``10000``)
-    Default sample count when :sqlfunc:`expected`, :sqlfunc:`variance`,
+    Sample count when :sqlfunc:`expected`, :sqlfunc:`variance`,
     :sqlfunc:`moment`, :sqlfunc:`rv_sample` or :sqlfunc:`rv_histogram`
-    cannot compute a result analytically and falls back to sampling.
-    :sqlfunc:`expected`, :sqlfunc:`variance` and :sqlfunc:`moment` first
-    compute the result exactly, by enumerating possible worlds, when it
-    involves no continuous random variable and at most 20 input tuples.
-    Set to ``0`` to disable sampling: these functions then raise an
-    error instead, which is useful when only exact answers are
-    acceptable. Unrelated to
-    ``probability_evaluate(..., 'monte-carlo', 'n')`` where the sample
-    count is an explicit argument.
+    cannot compute a result exactly and falls back to sampling. Set to
+    ``0`` to get an error instead, when only exact answers are
+    acceptable. Does not affect ``probability_evaluate(...,
+    'monte-carlo', 'n')``, whose sample count is an argument.
 
 .. _provsql-ess-warn-fraction:
 
 ``provsql.ess_warn_fraction`` (default: ``0.1``)
-    Effective-sample-size warning threshold for posterior inference over
-    latent variables (likelihood weighting). When the effective sample
-    size falls below this fraction of the accepted draws, a warning is
-    emitted: the estimate is unreliable (raise
-    ``provsql.rv_mc_samples``, or the model has many observations per
-    latent variable). Set to ``0`` to silence the warning.
+    Posterior inference over latent variables warns that its estimate is
+    unreliable when the effective sample size falls below this fraction
+    of the accepted draws; raise ``provsql.rv_mc_samples`` then. ``0``
+    silences the warning.
 
 .. _provsql-simplify-on-load:
 
 ``provsql.simplify_on_load`` (default: ``on``)
-    Simplify provenance circuits when they are loaded for evaluation:
-    comparisons decidable from the supports of their operands become
-    constant (probability ``0`` or ``1``), deterministic arithmetic is
-    folded, and semiring identities are applied. The result is the same
-    for every consumer (semiring evaluation, Monte Carlo,
-    :sqlfunc:`view_circuit`, PROV-XML export, ProvSQL Studio). Set to
-    ``off`` to inspect the raw circuit structure. See
+    Simplify provenance circuits when they are loaded for evaluation
+    (e.g., comparisons decidable from the supports of their operands
+    become constants), for every consumer, :sqlfunc:`view_circuit` and
+    Studio included. Set to ``off`` to inspect the raw circuit. See
     :doc:`continuous-distributions`.
 
 .. _provsql-gate-cache-size:
 
 ``provsql.gate_cache_size`` (default: ``64MB``)
-    Size of the per-backend cache of circuit gates the session created or
-    read. Gates beyond it are read back from the store when needed, which
-    is slower. Raise it for queries that create many gates before reading
-    them back (a hash aggregate over a large table); count roughly 100
-    bytes per gate.
+    Per-session cache of circuit gates. Raise it for queries that create
+    many gates before reading them back (a hash aggregate over a large
+    table); count roughly 100 bytes per gate.
 
 .. _provsql-max-memory:
 
 ``provsql.max_memory`` (default: ``0``, no limit)
-    Memory the evaluations of a statement (a semiring, a probability, a
-    moment, a sample, Shapley values...) may add to the backend: once its
-    resident memory has grown by more than this since the statement's
-    first evaluation, the evaluation stops with a
-    ``program_limit_exceeded`` error (SQLSTATE ``54000``, tagged
-    ``provsql-reason: memory-limit``). An external tool it runs (``d4``,
-    ``c2d``...), with the processes the tool forks, is counted with that
-    growth, and stopped once the two together exceed the budget. The
-    check is periodic, so the budget can be exceeded by what is allocated
-    between two checks. Available on Linux, macOS and FreeBSD; elsewhere
-    the setting has no effect. Example: ``SET provsql.max_memory = '1GB'``.
+    Memory the evaluations of a statement (semiring, probability,
+    Shapley values…), external tools included, may add to the backend;
+    beyond it, the evaluation stops with a ``program_limit_exceeded``
+    error (SQLSTATE ``54000``, ``provsql-reason: memory-limit``). The
+    check is periodic, so the limit is approximate. Linux, macOS and
+    FreeBSD only. Example: ``SET provsql.max_memory = '1GB'``.
 
 .. _provsql-max-worlds:
 
 ``provsql.max_worlds`` (default: ``1048576``, that is 2\ :sup:`20`)
-    Possible worlds of a group that a condition on its aggregate may have
-    enumerated. A condition with no closed form (a comparison on a ``SUM``,
-    on two aggregates, on an ``array_agg``...) is evaluated by enumerating
-    the worlds of the group, up to 2\ :sup:`n` for *n* rows, in time and
-    in memory: beyond this many, the evaluation stops with a
-    ``program_limit_exceeded`` error (SQLSTATE ``54000``, tagged
-    ``provsql-reason: world-limit``) rather than running out of memory.
-    ``0`` for no limit.
+    Maximum number of possible worlds of a group enumerated to evaluate a
+    condition on its aggregate that has no closed form (a comparison on
+    a ``SUM``, on two aggregates…; up to 2\ :sup:`n` worlds for *n*
+    rows). Beyond it, the evaluation stops with a
+    ``program_limit_exceeded`` error (SQLSTATE ``54000``,
+    ``provsql-reason: world-limit``). ``0`` for no limit.
 
 .. _provsql-store-synchronous-commit:
 
 ``provsql.store_synchronous_commit`` (default: ``off``)
-    Force the provenance circuit to stable storage before a transaction
-    that wrote to it commits. The circuit is not protected by
-    PostgreSQL's WAL (see :doc:`persistence`): on a power loss, gates of
-    recently committed transactions can be lost, and a lost gate silently
-    reads back as an independent input with probability 1. With ``off``,
-    the loss is bounded by the flush interval of the background worker,
-    as ``synchronous_commit = off`` bounds that of the table data; ``on``
-    removes it, at the price of one flush per transaction that writes to
-    the circuit. Provenance queries write to the circuit, reads included.
+    Flush the provenance circuit to stable storage before a transaction
+    that wrote to it commits, so that a machine crash cannot lose the
+    gates of recently committed transactions (see :doc:`persistence`).
+    Costs one flush per such transaction, and provenance queries write
+    to the circuit, reads included.
 
 .. _provsql-store-wal-logging:
 
 ``provsql.store_wal_logging`` (default: ``off``, PostgreSQL 15+)
     Write every modification of the circuit to the WAL, so that a
-    physical standby replays it and carries the provenance the primary
-    computed. Requires ``provsql.store_synchronous_commit``. With it on,
-    provenance queries do not run on a hot standby, which refuses to
-    write to the circuit. **Superuser only**. See :doc:`persistence`.
+    physical standby carries the provenance the primary computed.
+    Requires ``provsql.store_synchronous_commit``; provenance queries
+    then do not run on the standby. **Superuser only**. See
+    :doc:`persistence`.
 
 .. _provsql-tool-search-path:
 
@@ -284,12 +226,10 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.tool_search_path = '/opt/d4:/home/postgres/bin';
 
-    **Superuser only**, since it decides which executables run under the
-    server account: only a superuser (or, on PostgreSQL 15 and later, a
-    role explicitly granted ``SET`` on the parameter) may change it. A
-    non-superuser session uses whatever value an administrator pins for it
-    (for example with ``ALTER ROLE ... SET provsql.tool_search_path``) or
-    the server's default ``PATH``.
+    **Superuser only** (or, on PostgreSQL 15+, a role granted ``SET`` on
+    the parameter), since it decides which executables the server runs;
+    an administrator can pin it for other roles with ``ALTER ROLE ...
+    SET``.
 
 .. _provsql-fallback-compiler:
 
@@ -309,12 +249,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-last-eval-method:
 
 ``provsql.last_eval_method`` (default: empty)
-    Read-only report of the probability evaluation method(s) used by
-    the most recent :sqlfunc:`probability_evaluate` call (comma-separated
-    and deduplicated), to see which method the default automatic
-    selection chose. The safe-query rewriting, the joint-width UCQ
-    compiler and the reachability compiler report as ``sq-rewrite``,
-    ``bounded-jw`` and ``reachability``; see :ref:`route-methods`.
+    Read-only: the probability evaluation method(s) used by the most
+    recent :sqlfunc:`probability_evaluate` call, to see what the
+    automatic selection chose; see :ref:`route-methods`.
 
 .. _provsql-joint-max-treewidth:
 
@@ -328,8 +265,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 ``provsql.joint_max_states`` (default: ``65536``)
     Maximum number of dynamic-programming states per bag of the
     joint-width UCQ probability compiler; above it, evaluation falls back
-    to the other probability methods. This cap, more than the treewidth
-    bound above, limits the cost of the compiler.
+    to the other probability methods.
 
 .. _provsql-mobius-max-gates:
 
@@ -342,22 +278,19 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
 ``provsql.mobius_max_cnf`` (default: ``8``)
     Cap on the query cost of the safe-UCQ Möbius-inversion probability
-    route: the maximum number :math:`M` of conjuncts in the CNF of each
-    sentence, whose inclusion-exclusion lattice has :math:`2^M` elements.
-    Only a very large union, or a self-joining query, reaches it. ``0``
-    disables the cap.
+    route (the number of conjuncts in the CNF of each sentence, a cost
+    exponential in it). Only a very large union, or a self-joining query,
+    reaches it. ``0`` disables the cap.
 
 .. _provsql-kcmcp-server:
 
 ``provsql.kcmcp_server`` (default: empty)
     Launch command for a **managed** KCMCP knowledge-compiler server (see
     :doc:`the KCMCP server protocol </dev/kc-server-protocol>`). When
-    non-empty, ProvSQL runs this command to start a server, restarts it
-    if it exits, and a registry tool of ``kind = 'kcmcp'`` whose
-    ``endpoint`` is ``'managed'`` compiles over that server instead of
-    spawning a process per call. The literal ``{endpoint}`` is replaced
-    by a Unix-socket path (it already carries the ``unix:`` scheme).
-    Empty (default) launches no server. Example:
+    non-empty, ProvSQL keeps a server started with this command running,
+    and a registry tool of ``kind = 'kcmcp'`` whose ``endpoint`` is
+    ``'managed'`` compiles over it. ``{endpoint}`` is replaced by a
+    Unix-socket path (``unix:`` scheme included). Example:
 
     .. code-block:: postgresql
 
@@ -365,8 +298,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
         SELECT pg_reload_conf();
 
     Set in the configuration file or with ``ALTER SYSTEM``, and applied
-    on reload; not settable per session, since it runs an arbitrary
-    command as the PostgreSQL operating-system user.
+    on reload.
 
 All variables above **except** ``provsql.tool_search_path``,
 ``provsql.store_wal_logging`` and ``provsql.kcmcp_server`` can be changed by any
@@ -439,11 +371,7 @@ only advises, and ``setup_search_path()`` runs only when you call it.
 The Build in Use
 ----------------
 
-The extension's version, ``1.13.0-dev`` for instance, is the same for every
-build of a development cycle. ``provsql.build_id()`` tells the builds apart: it
-returns the commit the loaded library was built from, as
-``git describe --tags --always --dirty`` gives it (e.g.,
-``v1.12.0-431-g577cc730``, with ``-dirty`` for a build from uncommitted
-changes), or ``unknown`` for a build outside a git checkout. It is worth
-quoting in a bug report, or recording beside results that depend on the
-build.
+``provsql.build_id()`` returns the commit the loaded library was built
+from, as ``git describe`` gives it (e.g., ``v1.12.0-431-g577cc730``), or
+``unknown`` for a build outside a git checkout. Quote it in a bug report
+on a development version.

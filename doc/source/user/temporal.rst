@@ -61,22 +61,11 @@ associated with a query result via its provenance:
            sr_temporal(provenance(), 'interval_mapping')
     FROM temporal_table;
 
-:sqlfunc:`union_tstzintervals` is an alias for
-:sqlfunc:`sr_temporal`; new code should use :sqlfunc:`sr_temporal`. See :doc:`semirings` for a
-description of the underlying interval-union m-semiring.
-
-:sqlfunc:`sr_temporal` is the ``tstzmultirange`` specialisation of a
-more general interval-union m-semiring parameterised by the carrier
-type: union for ⊕, intersection for ⊗, and set difference for monus.
-ProvSQL ships two further instances:
-:sqlfunc:`sr_interval_num` over ``nummultirange`` (e.g.,
-measurement-validity ranges in scientific data integration) and
-:sqlfunc:`sr_interval_int` over ``int4multirange`` (e.g., page-range
-or line-range provenance in scholarly or source-code corpora). All
-three share the same algebra and differ only in the multirange
-type. ProvSQL Studio offers them as a single
-``Interval union (multirange)`` option in its evaluation strip, picking
-the instance from the chosen mapping's value type; see :doc:`studio`.
+:sqlfunc:`union_tstzintervals` is an alias of :sqlfunc:`sr_temporal`.
+The same interval-union m-semiring (see :doc:`semirings`) is also
+available over ``nummultirange`` (:sqlfunc:`sr_interval_num`) and
+``int4multirange`` (:sqlfunc:`sr_interval_int`), e.g., for
+measurement-validity or page ranges.
 
 The interval-union semiring is absorptive, so it also evaluates
 recursive queries under the ``'absorptive'`` provenance class (see

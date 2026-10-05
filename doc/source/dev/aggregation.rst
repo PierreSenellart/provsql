@@ -114,14 +114,10 @@ from three gate types in :cfunc:`gate_type`:
   The high bit of ``info2`` (``PROVSQL_AGG_SCALAR_FLAG``, in
   :cfile:`provsql_utils.h`) flags a *scalar* (no ``GROUP BY``)
   aggregation; consumers AND ``info2`` with
-  ``PROVSQL_AGG_TYPE_MASK`` to recover the result-type OID before
-  using it.  So ``info2`` of a ``count`` reads ``20`` (``int8``),
-  of a text aggregate ``25``, of a ``float8`` one ``701``, each
-  with the high bit set where there is no ``GROUP BY``.  This is
-  the only place the type of a value is recorded: an evaluator
-  that instead infers it from how the value's text looks will
-  read a text column of numerals as numbers, and order it
-  numerically where PostgreSQL orders it lexicographically.
+  ``PROVSQL_AGG_TYPE_MASK`` to recover the result-type OID.  This
+  is the only place the type of a value is recorded: evaluators
+  must not infer it from the value's text (a text column of
+  numerals would then be ordered numerically).
 
 Row-level provenance and the δ operator
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -164,51 +160,21 @@ ranges over the non-empty worlds of the same per-row tokens, so it
 already entails the group's existence, and conjoining both would
 count that factor twice in a non-idempotent semiring.
 
-For ``MIN`` / ``MAX`` against a constant in an absorptive semiring
-(``Semiring::absorptive()`` ``true``; see
-:ref:`semiring-optional-methods`), the enumeration is replaced by a
-single-scan closed form.  With :math:`L, L', G, G', E`
-the :math:`\oplus`-sums of the contributors whose value is
-:math:`<, \le, \ge, >, =` the constant, ``MIN < C`` is :math:`L`,
-``MIN <= C`` is :math:`L'`, ``MIN >= C`` is
-:math:`(\mathbf{1} \ominus L) \otimes G`, ``MIN > C`` is
-:math:`(\mathbf{1} \ominus L') \otimes G'`, ``MIN = C`` is
-:math:`(\mathbf{1} \ominus L) \otimes E` and ``MIN <> C`` is
-:math:`L \oplus (\mathbf{1} \ominus L') \otimes G'`; ``MAX`` is the
-mirror image with :math:`<` and :math:`>` exchanged.  The two
-monus-free forms are the *existential* comparisons: ``MIN < C``
-holds in exactly the worlds containing some contributor below
-:math:`C`, a family closed under supersets whose minimal elements are
-the singletons, and on such a family the monus cancels from the
-possible-world sum, so absorptivity alone makes the sum of the
-witnesses exact (Lean ``Having.sum_ann_meet`` and the
-``*_site_rewrite`` theorems of ``Provenance/HavingMonotone.lean``).
-The four other forms are proved only when :math:`\otimes` also
-distributes over :math:`\ominus` (``Semiring::mul_sub_left_distributive()``
-``true``; Lean ``Having.minScan_correct`` / ``Having.maxScan_correct``
-in ``Provenance/HavingMinMax.lean``), so in the security (min-max)
-semiring, absorptive but not distributive, only the existential
-comparisons take the scan and the others keep the enumeration.
-Whether distributivity is necessary for them is not settled: the
-five-element chain of ``Provenance/Semirings/ChainFive.lean``
-refutes the ``COUNT = 1`` and ``COUNT <= 1`` identities without it,
-but is not a counterexample to the ``MIN`` / ``MAX`` forms.  The same existential collapse serves
-``bool_or = true`` and ``bool_and = false``, whose valid worlds are
-those meeting the trigger class.  Short of absorptivity, idempotence
-(``Semiring::idempotent()``, true of why- and which-provenance)
-already cancels the monus from the possible-world sum over any
-family closed under supersets (Lean ``Having.witness_identity``):
-for those two conditions, and for ``MIN`` below and ``MAX`` above a
-constant, ``COUNT`` above one and ``SUM`` above one over non-negative
-values, an idempotent semiring keeps the exhaustive enumeration but
-annotates each valid world by the product of its present
-annotations alone.  The empty world
-never satisfies the comparison (``MIN`` / ``MAX`` of an empty group
-is NULL), so scalar aggregation needs no special case.  The certifying
-Boolean-circuit construction (``BoolExpr`` over independent base
-tuples) keeps the complete enumeration, whose mutually exclusive world
-terms its d-DNNF certificate needs; the closed form is what it builds
-when the contributors are derived sub-circuits (a join, a subquery).
+The possible-world enumeration has cheaper exact forms in some
+semirings, all in :cfile:`having_semantics.hpp`, where the formulas
+and their Lean proofs are given: ``MIN`` / ``MAX`` against a
+constant take a single-scan closed form in an absorptive semiring
+(``Semiring::absorptive()``, see :ref:`semiring-optional-methods`)
+for the existential comparisons (``MIN`` below, ``MAX`` above the
+constant), and for the others only when :math:`\otimes` also
+distributes over :math:`\ominus`
+(``Semiring::mul_sub_left_distributive()``); the existential
+``bool_or = true`` and ``bool_and = false`` collapse to a sum of
+witnesses in every absorptive semiring; and an idempotent semiring
+drops the monus factor of each world over a family closed under
+supersets.  The certifying Boolean-circuit construction (``BoolExpr``
+over independent base tuples) keeps the complete enumeration, whose
+mutually exclusive world terms its d-DNNF certificate needs.
 
 What the ``cmp`` supersedes is the compared group's δ, not the
 whole row token it sits in.  The distinction matters when the
@@ -301,40 +267,18 @@ result; it restores SQL's row set on such groups and spares their
 gates and evaluation, at a cost that does not show (a few ordinary
 aggregates, next to one :sqlfunc:`provenance_semimod` call per row).
 
-The ends used, for a comparison of the aggregate with an
-aggregate-free term (a constant, an expression over grouping keys):
+The ends are ordinary aggregates of the same group (the count, the
+sum of the positive or negative values, the ``min`` and ``max``);
+:cfunc:`having_possible` and its helpers document which comparisons
+and Boolean combinations are handled; any other group is left alone.
 
-- ``count``: at most the count itself;
-- ``sum``: at most the sum of the positive values (``sum(x) FILTER
-  (WHERE x > 0)``), or 0 without any, and symmetrically below; the
-  group must also have a non-``NULL`` value at all;
-- ``max``, ``min``, ``avg``: between the ``min`` and the ``max`` of the
-  values, the sibling aggregate being looked up on the exact argument
-  type.
-
-``>=`` needs the upper end to reach the term, ``<=`` the lower end,
-``=`` both; ``<>``, a comparison of two aggregates, any other
-aggregate, or an aggregate column coming from a subquery leave the
-group alone.  The Boolean structure follows the lift: ``NOT`` is
-pushed to the atoms, a conjunction keeps what is known of its parts, a
-disjunction is known only if every part is, and a regular atom is its
-own condition.  A ``NULL`` condition drops the group: the comparison is
-then unknown in every world.
-
-The check is a sufficient one -- ``sum(x) = 5`` over ``{2, 4}`` lies
-inside the range and is kept, to be evaluated to zero; telling such
-cases is NP-hard -- and it rests on an invariant of the rewriting: the
-rows PostgreSQL aggregates over are a superset of the rows present in
-any world.  A row that some world lacks is kept with a token that is
-zero in that world (monus for differences, antijoins and null-padded
-outer-join rows, comparison gates for lifted predicates), never
-filtered on the current instance.  The one construct that breaks it, a
-``LIMIT`` / ``OFFSET`` in a subquery, raises a warning of its own.  The
-same predicate written as a selection on the aggregate column of a
-subquery is not checked (no ``HAVING`` clause can carry the condition
-at that level); its zero rows stay visible, which is equivalent.  An
-evaluation-time counterpart exists in :cfile:`RangeCheck.cpp`, which
-resolves the comparisons that reach the evaluator.
+The check is only sufficient, and it rests on an invariant of the
+rewriting: the rows PostgreSQL aggregates over are a superset of the
+rows present in any world.  A row that some world lacks is kept with a
+token that is zero in that world, never filtered on the current
+instance; the one construct that breaks this, a ``LIMIT`` / ``OFFSET``
+in a subquery, raises a warning of its own.  An evaluation-time
+counterpart is :cfile:`RangeCheck.cpp`.
 
 
 The ``agg_token`` Type
@@ -403,16 +347,11 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 - the original ``Aggref`` itself, so PostgreSQL still computes
   the scalar value (this is what ends up inside the
   :cfunc:`agg_token`).  When a row reaching the aggregate may be
-  false in the database as it is (:cfunc:`plain_row_token`: its
-  token has a ``monus`` or a ``cmp``, or comes from a relation of
-  derived tokens), a ``FILTER (WHERE plain_truth(t))`` on the row
-  token ``t`` is added to it, so that the value is the one plain SQL
-  computes on the same data.  ``plain_truth`` is ``sr_boolean``
-  without a mapping, walking ``times`` / ``plus`` / ``monus`` / …
-  gates directly and evaluating a comparison over the Boolean
-  semiring.  The ``HAVING`` pruning bounds, which range over every
-  world, read the ``Aggref`` without that filter
-  (:cfunc:`aggref_over_all_rows`);
+  false in the database as it is (:cfunc:`plain_row_token`), a
+  ``FILTER (WHERE plain_truth(t))`` on the row token ``t`` is added,
+  so that the value is the one plain SQL computes on the same data
+  (the ``HAVING`` pruning bounds, which range over every world, read
+  it without, see :cfunc:`aggref_over_all_rows`);
 - an ``array_agg`` of per-tuple ``provenance_semimod(arg, t)``
   calls -- one ``semimod`` gate per input the aggregate reads,
   glueing the row's provenance ``t`` to the row's contributed value
@@ -435,73 +374,33 @@ Which rows are children of the ``agg`` gate
 The invariant is that the children of an ``agg`` gate are exactly
 the inputs the aggregate reads; the value-aware evaluators
 (``HAVING``, moments, sampling) rely on it.  Three cases, decided in
-:cfunc:`make_row_semimod`, which builds the contribution of a row for
-:cfunc:`make_aggregation_expression`:
+:cfunc:`make_row_semimod`:
 
 - **NULL-skipping aggregates** (``sum``, ``min``, ``max``, ``avg``,
   ``string_agg``, ``choose``, ...).  :sqlfunc:`provenance_semimod`
   returns ``NULL`` for a ``NULL`` value and
-  :sqlfunc:`provenance_aggregate` drops such entries, so a row with
-  a ``NULL`` argument is no child.  A ``FILTER (WHERE f)`` clause is
-  folded into the argument, as ``CASE WHEN f THEN arg END``, which
-  makes a row failing ``f`` indistinguishable from a row with a
-  ``NULL`` argument -- including for ``HAVING agg IS [NOT] NULL``,
-  which splits the group on that per-row value.
-- ``count``.  ``count(*)`` contributes the constant 1 and
-  ``count(e)`` the value ``CASE WHEN e IS NOT NULL THEN 1 ELSE 0
-  END``; with a ``FILTER`` the condition becomes ``f`` (respectively
-  ``f AND e IS NOT NULL``).  A row that does not count thus *stays* a
-  child, of value 0: it still witnesses its group, and a lifted
-  ``HAVING count(...) = 0`` replaces the group's δ, so dropping the
-  row would let the comparison hold in the world where the group is
-  empty.  The gate keeps the ``COUNT`` operator, which is what tells
-  evaluators that the empty input has value 0 and not ``NULL``.
-- **NULL-keeping aggregates** (``array_agg``, ``json_agg``,
-  ``jsonb_agg``, ``json_object_agg``, ``jsonb_object_agg``, and
+  :sqlfunc:`provenance_aggregate` drops such entries.  A ``FILTER
+  (WHERE f)`` is folded into the argument as ``CASE WHEN f THEN arg
+  END``.
+- ``count``.  A row that does not count *stays* a child, of value 0:
+  it still witnesses its group, and a lifted ``HAVING count(...) = 0``
+  replaces the group's δ, so dropping the row would let the comparison
+  hold in the world where the group is empty.
+- **NULL-keeping aggregates** (``array_agg``, the JSON aggregates, and
   user-defined aggregates with a non-strict transition function; see
   :cfunc:`aggregate_keeps_nulls`), whose result enumerates every
-  input.  They use :sqlfunc:`provenance_semimod_nullable`, which maps a
-  ``NULL`` value to a ``semimod`` gate over the constant value gate
-  :sqlfunc:`gate_null`; a ``FILTER`` is copied onto the token
-  ``array_agg``, removing children exactly as it removes inputs.  No
-  existence issue arises here: over an empty input these aggregates
-  are ``NULL``, and a comparison with ``NULL`` never holds.
-  ``HAVING agg IS [NOT] NULL`` accordingly splits the group on "passes
-  the filter", not on the value.
-
-For built-in aggregates the catalog cannot tell the first and last
-cases apart: a non-strict transition function says nothing
-(``sum(bigint)`` and ``string_agg`` have one and skip ``NULL``), hence
-the explicit list.  For a user-defined aggregate the transition
-function is all there is to go by: a strict one is never called on a
-``NULL`` input, so the aggregate is NULL-skipping; a non-strict one
-does receive ``NULL`` inputs, and the aggregate is treated as
-NULL-keeping, which loses nothing (a kept ``NULL`` input can still be
-ignored by an evaluator, a dropped one cannot be recovered).
-ProvSQL's own ``choose``, non-strict and NULL-skipping, is exempted.
-No user-defined aggregate has an evaluator, so this choice shows in
-the displayed circuit and in ``HAVING agg IS [NOT] NULL`` only.
-
-:sqlfunc:`gate_null` is a constant in the manner of
-:sqlfunc:`gate_zero` and :sqlfunc:`gate_one`, but of type ``value``, with ``NULL`` as its display
-text.  The |cpp| side knows it by its UUID (``GATE_NULL_UUID`` in
-:cfile:`having_semantics.hpp`), which is what distinguishes it from
-the value gate of the string ``'NULL'``: its seed, ``'null'``, is not
-of the form ``'value' || text`` that every actual value has.  The
-``array_agg`` comparison of :cfile:`having_semantics.hpp` maps it, and
-an unquoted ``NULL`` of the constant array, to one element that equals
-only itself, which is how PostgreSQL compares arrays.
+  input.  :sqlfunc:`provenance_semimod_nullable` maps a ``NULL`` value
+  to the constant value gate :sqlfunc:`gate_null` (known to the |cpp|
+  side by its UUID, ``GATE_NULL_UUID`` in
+  :cfile:`having_semantics.hpp`, and distinct from the value gate of
+  the string ``'NULL'``); a ``FILTER`` is copied onto the token
+  ``array_agg``, removing children exactly as it removes inputs.
 
 Aggregates over ``random_variable`` (next section but one) take a
-different route, and handle ``FILTER`` differently: the aggregates
-:cfunc:`make_rv_aggregate_expression` rebuilds simply carry the clause
-over, since their result is a ``random_variable`` built from the rows
-PostgreSQL feeds them.
-
-Constant arithmetic on an aggregate (``sum(x) * 2``) is pushed into
-the argument by :cfunc:`try_push_into_aggref` before all this, so it
-composes with ``FILTER``: the identities it uses hold over any multiset
-of rows.
+different route: :cfunc:`make_rv_aggregate_expression` simply carries
+the ``FILTER`` over.  Constant arithmetic on an aggregate (``sum(x) *
+2``) is pushed into the argument by :cfunc:`try_push_into_aggref`
+before all this, so it composes with ``FILTER``.
 
 The row-level side of the rewrite is much simpler.  It reuses the
 ordinary :cfunc:`get_provenance_attributes` collection, combines the
@@ -541,67 +440,45 @@ calls :cfunc:`make_window_aggregation_expression` on each
                          array_agg(provenance_semimod(x, k)) OVER w,
                          is_scalar)
 
-Both window calls reference the same ``WindowClause`` (the same
-``winref``), so the token array is collected over exactly the rows of
-the frame, and :cfunc:`make_row_semimod` builds each row's contribution
-as for a group. The row-level token is left as it is: a window function
-neither merges nor removes rows. For a whole-partition window, the gate
-of each row is the gate of the ``GROUP BY`` on the partition attributes,
-as the equivalence of a window aggregate with the join of each row to
-the grouped query predicts (Equivalence (4) of Lindner, Naumann and
-Lerner, `Window Function Optimization: Co-Evaluation and Other
-Techniques <https://www.vldb.org/pvldb/vol19/p3525-lindner.pdf>`_,
-PVLDB 19(11), 2026).
+Both window calls share the window, so the token array is collected
+over exactly the rows of the frame; the row-level token is left as it
+is, since a window function neither merges nor removes rows.  For a
+whole-partition window, the gate of each row is the gate of the
+``GROUP BY`` on the partition attributes, as the equivalence of a
+window aggregate with the join of each row to the grouped query
+predicts (Equivalence (4) of Lindner, Naumann and Lerner, `Window
+Function Optimization: Co-Evaluation and Other Techniques
+<https://www.vldb.org/pvldb/vol19/p3525-lindner.pdf>`_, PVLDB 19(11),
+2026).
 
 The frame of a window is only known in each possible world if it
-depends on the values of the rows, not on their positions: the previous
-row of a world is its previous *present* row.
-:cfunc:`window_frame_by_values` accepts a window without ``ORDER BY``,
-``RANGE`` frames, ``GROUPS`` frames without offsets and ``ROWS`` frames
-over the whole partition; any other window function is left as it is,
-and :cfunc:`process_query` emits its warning.  ``is_scalar`` is set when
-the frame may exclude the current row
-(:cfunc:`window_frame_has_current_row`): the frame may then be empty in
-a world where the row exists, and has the value of an aggregation over
-no row, for which :sqlfunc:`provenance_aggregate` builds an ``agg`` gate
-without children rather than :sqlfunc:`gate_zero`. When the frame always
-contains the current row, the grouped convention is kept, which is what
-makes whole-partition gates those of the ``GROUP BY``.
+depends on the values of the rows, not on their positions, since the
+previous row of a world is its previous *present* row
+(:cfunc:`window_frame_by_values`); any other window function is left
+as it is, and :cfunc:`process_query` emits its warning.  A frame that
+may exclude the current row (:cfunc:`window_frame_has_current_row`)
+may be empty in a world where the row exists, and gets the scalar
+convention.
 
-A sort key on a rewritten value is moved to a junk copy of the original
-window call, so ``ORDER BY`` sorts on the displayed value.
-
-The ranks are counts over a frame appended to the query
-(:cfunc:`make_rank_window`): a copy of the window of the rank with the
-frame ``RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE
-GROUP``, the rows strictly before the current one, which needs
-PostgreSQL 11.
-
-- ``rank()`` is ``1 + count(*)`` over that frame
-  (:cfunc:`make_rank_expression`).  The frame excludes the current row,
-  so the count does not read the token that multiplies the comparisons
-  on it, and the comparison evaluators, which fold the ``+ 1`` into
-  their threshold (see :doc:`probability-evaluation`), see independent
-  contributors.
-- ``dense_rank()`` counts the distinct ordering values of that frame
-  (:cfunc:`make_dense_rank_expression`). Window aggregates have no
-  ``DISTINCT``: two ``array_agg`` over the frame collect the ordering
-  values, as a row value, and the row tokens, and
-  ``window_distinct_tokens`` groups them by value into one
-  ``semimod(1, ⊕ tokens)`` per value, the children of a scalar ``COUNT``
-  gate whose value is ``dense_rank() - 1``.
-- ``row_number()`` is its rank wrapped in ``row_number_as_rank``,
-  which returns the rank and warns, once per statement, when PostgreSQL's
-  row number differs from it.
+The ranks are counts over a frame of the rows strictly before the
+current one, appended to the query (:cfunc:`make_rank_window`):
+``rank()`` is ``1 + count(*)`` over it
+(:cfunc:`make_rank_expression`), ``dense_rank()`` is one plus the
+number of distinct ordering values in it
+(:cfunc:`make_dense_rank_expression`), and
+``row_number()`` is tracked as its rank, with a warning when
+PostgreSQL's row number differs.  Excluding the current row keeps the
+count independent of the row's own token, which multiplies the
+comparisons on it.
 
 
 Currently Supported Aggregates
 ------------------------------
 
 The :cfunc:`AggregationOperator` enum in :cfile:`Aggregation.h`
-lists the operators recognised in |cpp|: ``COUNT`` (whose per-row
-values are 0 or 1, but which stays distinct from ``SUM`` because it is
-0, not ``NULL``, over an empty input), ``SUM``, ``MIN``, ``MAX``,
+lists the operators recognised in |cpp|: ``COUNT`` (distinct from
+``SUM`` because it is 0, not ``NULL``, over an empty input), ``SUM``,
+``MIN``, ``MAX``,
 ``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Only the
 aggregates the Monte-Carlo sampler and the subset enumerator
 evaluate *directly* get an :cfunc:`Aggregator` accumulator (the
@@ -610,13 +487,8 @@ numeric ones -- ``SUM`` / ``COUNT`` / ``MIN`` / ``MAX`` / ``AVG``
 ``bool_or`` / ``every``) and ``array_agg`` exist only as enum
 values for routing, because their ``HAVING`` comparisons are
 resolved entirely by the m-semiring rewrite in
-:cfile:`having_semantics.cpp` (a first-present-occurrence
-characterisation, a closed form in absorptive :math:`\otimes`-over-
-:math:`\ominus` distributive semirings, a sum of witnesses for the
-existential ``bool_or = true`` / ``bool_and = false`` in every
-absorptive semiring, and an exact enumeration
-elsewhere, and a possible-worlds enumeration respectively) and never
-reach the deterministic sampler.  Adding to the accumulator list is the
+:cfile:`having_semantics.cpp` and never reach the deterministic
+sampler.  Adding to the accumulator list is the
 topic of the next section.
 
 
@@ -640,11 +512,11 @@ The dispatch in :cfunc:`make_aggregation_expression` keys on
 ``X_i`` is wrapped in ``rv_aggregate_semimod``
 (a :sqlfunc:`mixture` over the row's provenance gate and
 the identity for the aggregate) *before* it reaches the SFUNC.
-The identity is dispatched per aggregate — ``0`` for
+The identity is dispatched per aggregate -- ``0`` for
 :sqlfunc:`sum`, and through the three-argument
 identity-parameterised form of ``rv_aggregate_semimod``, ``1``
 for :sqlfunc:`product`, ``-Infinity`` for :sqlfunc:`max`,
-``+Infinity`` for :sqlfunc:`min` — so a row absent in a world
+``+Infinity`` for :sqlfunc:`min` -- so a row absent in a world
 contributes the fold's identity rather than perturbing it.
 :sqlfunc:`avg` is rewritten at the same site into the
 "AVG = SUM / COUNT" identity (a numerator sum over the wrapped

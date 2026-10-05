@@ -153,12 +153,8 @@ types that appear:
 * ``agg`` – aggregation gate (for aggregate provenance).  ``info1`` is
   the OID of the aggregate function and ``info2`` the OID of its result
   type, with the high bit set when the aggregation has no ``GROUP BY``:
-  mask ``info2`` with ``0x7FFFFFFF`` to read the type.  It is the only
-  record of what a ``value`` gate below holds (``20`` for a ``count``,
-  ``25`` for text, ``701`` for ``double precision``); guessing the type
-  from the text of the value would read a text column of numerals as
-  numbers, and order them numerically where SQL orders them
-  lexicographically.
+  mask ``info2`` with ``0x7FFFFFFF`` to read the type, which tells how
+  to read the ``value`` gates below it.
 * ``semimod`` – semimodule scalar multiplication (for aggregate provenance)
 * ``value`` – scalar value (for aggregate provenance, or numeric
   constant lifted into a continuous random variable)

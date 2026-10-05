@@ -67,27 +67,15 @@ the transaction it belonged to.
 The Transaction's Gate
 ----------------------
 
-Where the transaction's gate lives is a ``SET LOCAL`` on the
-``provsql.transaction_token`` GUC, so it vanishes when the
-transaction ends whichever way it ends, and a rolled-back
-transaction leaves no ``update_provenance`` row for it either --
-that row is an ordinary heap insert.  This is what lets
-:sqlfunc:`undo` work at either granularity:
-:sqlfunc:`substitute_gate` walks a token's circuit replacing one gate
-by another and does not care whether that gate is the statement's
-or the transaction's, so undoing the transaction rewrites every
-``times(transaction, statement)`` at once.
-
-Its own validity is the universal range ``'{(,)}'``, the
-multiplicative identity of the temporal m-semiring: it is a factor
-of every effect of the transaction, so anything narrower would
-intersect itself into all of them.  The statements' validity is
-what carries the temporal meaning, and a deferred constraint
-trigger (:sqlfunc:`stamp_commit_time`) moves its lower bound to
-``clock_timestamp()`` at commit -- ``CURRENT_TIMESTAMP`` is the
-transaction's *start*, so two overlapping transactions could
-otherwise commit in the opposite order of the validity they
-recorded.
+The transaction's gate is kept in a ``SET LOCAL`` of the
+``provsql.transaction_token`` GUC, so it ends with the transaction.
+Since every effect of a statement is ``times(transaction, statement)``,
+:sqlfunc:`undo` works at either granularity: :sqlfunc:`substitute_gate`
+replaces whichever of the two gates it is given.  The transaction's own
+validity is the universal range ``'{(,)}'``, the multiplicative identity
+of the temporal m-semiring, so that the statements' validity alone
+carries the temporal meaning; :sqlfunc:`stamp_commit_time` moves the
+lower bound of a statement's validity to the commit time.
 
 
 The ``gate_update`` Gate Type

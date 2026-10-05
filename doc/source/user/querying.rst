@@ -19,20 +19,10 @@ table, ProvSQL rewrites it before execution:
    ``times`` for combined use of tuples such as in joins, ``monus`` for difference).
 3. Appends the resulting provenance token to the output as an extra column.
 
-The ``provsql`` column that ``*`` expands to over a tracked table takes
-that same last place: in ``SELECT *, a + 1 AS e FROM t`` the columns
-are those of ``t``, then ``e``, then ``provsql``.  A position in ``ORDER BY``
-counts the columns in that order, and so does the column list of a view or
-of a ``CREATE TABLE AS`` over ``SELECT *``.
-
-A whole row of a tracked table read as any row -- ``SELECT t FROM t``,
-``row_to_json(t)``, ``json_agg(t)``, ``t::text``, ``ROW(t.*)`` -- has its
-columns other than ``provsql``, as on the untracked table.  So do rows
-compared (``t = u``, ``t IN (SELECT u FROM u)``, ``t IS DISTINCT FROM u``,
-``CASE t WHEN u``, ``ROW(t.*) = ROW(u.*)``) or grouped (``GROUP BY t``): two
-rows equal on those columns are equal, whatever their tokens.  Where the
-table's own row type is needed (``ROW(t.*)::t``, a function declared on
-it, a column of a table created from the row), the row keeps it.
+The ``provsql`` column that ``*`` expands to over a tracked table also comes
+last: in ``SELECT *, a + 1 AS e FROM t``, after ``e``. A whole row of a
+tracked table (``SELECT t FROM t``, ``row_to_json(t)``, ``t::text``, ``t = u``,
+``GROUP BY t``) has only its columns other than ``provsql``.
 
 The provenance token in each output row is a UUID that identifies a gate
 in a *provenance circuit*, a DAG recording how that result was derived.
@@ -163,10 +153,9 @@ ORDER BY, LIMIT and OFFSET
 --------------------------
 
 Over provenance-tracked relations, ``ORDER BY … LIMIT k`` is read in
-every possible world: a row is kept when it is present and fewer than
-``k`` present rows come before it in the order. The result therefore
-has every row that may be among the first ``k``, each annotated with
-that condition, and not just the first ``k`` rows of the actual data:
+every possible world: a row is kept where it is among the first ``k``
+present rows. The result has every row that may be among the first ``k``,
+each annotated with that condition:
 
 .. code-block:: postgresql
 
@@ -177,31 +166,14 @@ that condition, and not just the first ``k`` rows of the actual data:
     ORDER BY salary DESC
     LIMIT 3;
 
-The rows ordered may be the groups of an aggregation, ranked on one of
-their aggregates (``GROUP BY tag ORDER BY count(*) DESC LIMIT 10``, the
-ten commonest tags): a group is then kept in the worlds where at most
-``k`` groups have a greater count (see :ref:`rank-over-aggregate`).
+The same holds for ``FETCH FIRST``, ``OFFSET``, ``DISTINCT ON`` (the first
+row of each group), groups ranked on an aggregate (see
+:ref:`rank-over-aggregate`), and in subqueries. Where the ``ORDER BY``
+leaves ties, ``LIMIT`` keeps all the tied rows, as ``FETCH … WITH TIES``
+does, and a ``WARNING`` says so.
 
-``FETCH FIRST k ROWS WITH TIES`` keeps a row when fewer than ``k``
-present rows come strictly before it, so that the rows tied with the
-``k``-th are kept as well (``rank()``). ``LIMIT k`` and
-``FETCH FIRST k ROWS ONLY`` number the rows (``row_number()``): when the
-``ORDER BY`` leaves ties, SQL does not say which of the tied rows are
-kept; ProvSQL then reads the clause as ``WITH TIES`` and emits a
-``WARNING``. ``OFFSET m`` requires, in addition, that at least ``m``
-present rows come before. The same holds in a subquery, in ``FROM``,
-``LATERAL``, a ``WITH`` clause, or an arm of a set operation: a
-``LATERAL`` subquery with ``ORDER BY … LIMIT k`` gives the first ``k``
-rows of each group, as a ``rank()`` compared with ``k`` does (see
-:ref:`window-aggregates`). So does ``SELECT DISTINCT ON (g) … ORDER BY
-g…``, with ``k`` = 1: in each world, it keeps the rows of each group
-that no present row of the group comes before, reading ties as
-``WITH TIES``, with a ``WARNING``.
-
-When the order of the rows is not in question, for instance to look at
-the first rows of a result, or when the tokens do not stand for the
-existence of the rows, the marker :sqlfunc:`plain` keeps the truncation of the
-actual result:
+To keep the truncation of the actual result instead, for instance to look
+at its first rows, write :sqlfunc:`plain`:
 
 .. code-block:: postgresql
 
@@ -210,26 +182,10 @@ actual result:
     ORDER BY salary DESC
     LIMIT plain(3);
 
-It applies to ``FETCH FIRST plain(k) ROWS`` and ``OFFSET plain(m)``
-too. The rows kept carry the provenance they have in the *full* result:
-that a row was among those kept is not recorded. At the top level of a
-statement, the statement shows some rows of the full result, each
-correctly annotated. In a subquery, the truncated result feeds further
-computation, whose provenance then misses that dependence, and ProvSQL
-emits a ``WARNING``. The same holds of an ``OFFSET`` with ``WITH TIES``
-and of an ``ORDER BY … LIMIT`` over an aggregation, a ``DISTINCT`` or a
-set operation, or on values that vary between worlds (an aggregate, a
-window function), which are not read in every world; for the latter,
-ProvSQL emits a ``WARNING`` at the top level of a statement too, unless
-the ``LIMIT`` is marked ``plain``.
-
-A ``LIMIT`` or ``OFFSET`` with no ``ORDER BY`` at all is reported at the
-top level too: SQL leaves open which rows it keeps, and with one of them
-absent another world would keep a row the answer does not have. Add an
-``ORDER BY`` to have the truncation read in every world, or use
-``plain(k)`` to say that the truncation of the actual result is meant.
-Whether a ``LIMIT`` truncates at all is not known before the query runs,
-so ``LIMIT 1000`` over ten rows is reported as well.
+The rows kept carry their provenance in the full result. A ``LIMIT`` with
+no ``ORDER BY``, or one ProvSQL cannot read in every world, is also kept
+as the truncation of the actual result, with a ``WARNING`` unless it is
+written with ``plain()``.
 
 .. _plain-sql:
 
@@ -237,10 +193,8 @@ Parts Whose Provenance Is Not Tracked
 -------------------------------------
 
 A few constructs are not tracked: their value is computed without regard
-to provenance, and need not be the one plain SQL gives, since correlations
-between that part and the rest of the query are ignored. The result is
-then the exact provenance of a slightly different query, in which that
-part is a constant; ProvSQL says which part in a ``WARNING``:
+to provenance, as if that part of the query were a constant, and ProvSQL
+says which part in a ``WARNING``:
 
 .. code-block:: text
 
@@ -250,43 +204,24 @@ part is a constant; ProvSQL says which part in a ``WARNING``:
 
 The parts not tracked are:
 
-* a window function other than those of :ref:`window-aggregates`;
-* a window partitioned by an aggregate result, or ordered by one other
-  than the tracked ranks (see :ref:`rank-over-aggregate`);
-* a subquery in a position no rewriting handles (a scalar subquery
-  nested in an expression; a subquery of a block with no tracked relation
-  of its own that ProvSQL cannot track, such as one reading the
-  ``provsql`` column);
-* an ``ORDER BY … LIMIT`` that is not read in every world (see
-  :ref:`limit`), and a ``LIMIT`` in a subquery;
-* an aggregate result read as a plain value by a function, an operator or
-  a comparison that ProvSQL does not track (``round(avg(x))``,
-  ``json_build_object('n', count(*))``, see :doc:`aggregation`).
+* a window function other than those of :ref:`window-aggregates`, and a
+  window partitioned by an aggregate result or ordered by one other than
+  the tracked ranks (see :ref:`rank-over-aggregate`);
+* a scalar subquery nested in an expression, and a subquery ProvSQL cannot
+  rewrite in a block with no tracked relation of its own;
+* a ``LIMIT`` not read in every world (see :ref:`limit`), and a ``LIMIT``
+  in a subquery;
+* an aggregate result read as a plain value by a function or operator
+  ProvSQL does not track (``round(avg(x))``, see :doc:`aggregation`).
 
-When the part reads only relations that the rest of the statement does
-not track, the result is the provenance of the statement with those
-relations untracked, a sound possible-world model. When it reads a
-relation the rest tracks, the same tuples are uncertain for the rest and
-not for that part: the warning names such a relation (``provenance not
-tracked, although the statement tracks t``), and
-setting :ref:`provsql.implicit_freeze <provsql-implicit-freeze>` to
-``'error'`` refuses the query instead.
+If that part reads a relation the rest of the statement tracks, the
+warning names it; setting :ref:`provsql.implicit_freeze
+<provsql-implicit-freeze>` to ``'error'`` then refuses the query instead.
 
-Marking the part with :sqlfunc:`plain` says that computing it without
-provenance is meant, and
-is the only way to silence the warning (a cast of an aggregate to a number
-is tracked, see :doc:`aggregation`): ``plain((SELECT max(x) FROM t))``,
-``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``:
-
-.. code-block:: postgresql
-
-    SELECT id, plain((SELECT count(*) FROM posts c WHERE c.parent = p.id))
-    FROM posts p;
-
-A whole table can be read without provenance too, in ``FROM``: ``plain`` of a
-value of its row type (the usual ``NULL::t``) stands for the table, its
-columns without the ``provsql`` one, and brings no provenance of its own
-(the rows of a join with it carry the provenance of the other side only):
+Wrapping the part in :sqlfunc:`plain` says that computing it without
+provenance is meant, and silences the warning: ``plain((SELECT max(x) FROM
+t))``, ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``. In
+``FROM``, ``plain(NULL::t)`` reads table ``t`` without its provenance:
 
 .. code-block:: postgresql
 
@@ -338,13 +273,11 @@ inserted rows:
 Each inserted row receives the provenance token computed by the source
 ``SELECT``, not a fresh independent token.
 
-If the target table does not have a ``provsql`` column, a warning is
-emitted indicating that source provenance is lost. The rows inserted are
-those of the tracked result, without their provenance: a ``LEFT JOIN``, for
-instance, also inserts the null-padded rows that are there only in other
-possible worlds, as :sqlfunc:`remove_provenance` would keep them. To keep
-the provenance, track the target first, or store the
-token explicitly with :sqlfunc:`provenance` (no warning is then emitted):
+If the target table does not have a ``provsql`` column, a warning says
+that the provenance is lost; the rows inserted are those of the tracked
+result (a ``LEFT JOIN`` also inserts its null-padded rows). To keep the
+provenance, track the target first, or store the token explicitly with
+:sqlfunc:`provenance` (no warning is then emitted):
 
 .. code-block:: sql
 
@@ -352,8 +285,7 @@ token explicitly with :sqlfunc:`provenance` (no warning is then emitted):
     INSERT INTO archive_tokens SELECT name, provenance() FROM employees;
 
 Selecting the ``provsql`` column of a tracked table for that purpose is
-refused: it is the token of that input table, which is the provenance of
-the query's rows only in the simplest queries.
+refused: use ``provenance()``.
 
 The ``provenance()`` Function
 ------------------------------

@@ -195,16 +195,9 @@ your checkout). To upgrade an existing installation:
 
        ALTER EXTENSION provsql UPDATE;
 
-   PostgreSQL finds the chain of upgrade scripts between your
-   current version and the newly installed one and applies them in
-   order, inside a single transaction. The provenance circuit, stored
-   in memory-mapped files, is kept: the new version reads the same
-   files.
-
-   A **major-version PostgreSQL upgrade** with ``pg_upgrade``, on the
-   other hand, does not carry the circuit. See :doc:`persistence` for
-   what has to be copied by hand, and for what ``pg_dump``, replication
-   and ``CREATE DATABASE ... TEMPLATE`` carry.
+   The provenance circuit is kept. A major-version PostgreSQL upgrade
+   with ``pg_upgrade``, on the other hand, does not carry it; see
+   :doc:`persistence`.
 
 .. note::
 
@@ -217,18 +210,12 @@ your checkout). To upgrade an existing installation:
 
 .. note::
 
-   In-place ``ALTER EXTENSION provsql UPDATE`` is not supported on
-   **PostgreSQL < 12** across any version boundary whose upgrade
-   script appends gate-type enum values (1.5.0 and several later
-   releases do): PostgreSQL 11 rejects the ``ALTER TYPE ... ADD VALUE``
-   statements of such scripts inside the upgrade transaction. Fresh
-   installs (``CREATE EXTENSION provsql``) work on every supported
-   PostgreSQL version. To move an existing database forward under
-   PostgreSQL 11, upgrade to PostgreSQL 12+ first -- copying the store
-   by hand, since ``pg_upgrade`` leaves it behind (see
-   :doc:`persistence`) -- and then run ``ALTER EXTENSION provsql
-   UPDATE``, or drop and recreate the extension (losing stored
-   provenance).
+   On **PostgreSQL 11**, ``ALTER EXTENSION provsql UPDATE`` fails
+   across a release that adds gate types (1.5.0 and several later
+   ones); fresh installs work.
+   Upgrade PostgreSQL first, carrying the circuit as described in
+   :doc:`persistence`, or drop and recreate the extension (losing
+   stored provenance).
 
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^

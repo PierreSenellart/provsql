@@ -156,8 +156,8 @@ Reference column links to Wikipedia.
 **Discrete parametric**
 
 These families are enumerated into a categorical distribution through
-:sqlfunc:`categorical_from_log_pmf` (computed in log space, stable at
-large parameters; also usable directly for a custom pmf). Moments,
+:sqlfunc:`categorical_from_log_pmf` (also usable directly for a custom
+pmf). Moments,
 quantiles, and comparisons -- including exact ``=`` / ``<>`` point
 masses -- are exact over the enumerated support; an infinite support is
 truncated at a ``1e-15`` relative-mass tail, and a support of more than
@@ -234,11 +234,8 @@ random_variable`` and ``double precision → random_variable``
 are installed. Writing ``WHERE reading > 2`` works without an
 explicit ``as_random(2)`` wrapper.
 
-The full list of registered parameterised families is introspectable
-with :sqlfunc:`rv_families`, which returns one row per family with its
-name token, parameter count, conventional parameter symbols, and a
-short display label (:doc:`ProvSQL Studio <studio>` reads it to display
-distributions).
+:sqlfunc:`rv_families` lists the parameterised families, one row per
+family with its name, parameter count and parameter symbols.
 
 Arithmetic on Random Variables
 ------------------------------
@@ -262,32 +259,17 @@ works through the implicit casts above:
 Beyond the operators, the nonlinear transforms :sqlfunc:`pow` /
 :sqlfunc:`power` (function spellings of the ``^`` operator),
 :sqlfunc:`ln`, :sqlfunc:`exp`, and :sqlfunc:`sqrt` (pure sugar for
-``^ 0.5``) apply per draw. They allow generative constructions of
-dependent joints (``2 * u ^ 0.25`` is the inverse-CDF recipe for a
-marginal of a triangular joint density) and log/exp transforms as in
-log-normal models. Two domain rules apply; a violating draw raises an
-error at evaluation time:
+``^ 0.5``) apply per draw. A draw outside their domain raises an error
+at evaluation time: a negative argument of ``ln`` (``0`` yields
+``-Infinity``), or a negative base under a non-integer exponent (write
+``pow(greatest(x, 0), p)``); integer exponents work for any base.
+Moments of a nonlinear transform are estimated by Monte Carlo, except
+for ``exp`` of a normal and ``ln`` of a lognormal, which are exact.
 
-- ``ln(x)`` requires the argument's support to be non-negative; a
-  negative draw raises (a draw of exactly ``0`` yields ``-Infinity``).
-- ``x ^ p`` with a **non-integer** exponent likewise requires a
-  non-negative base; a negative base draw raises, with the fix in the
-  message (``pow(greatest(x, 0), p)`` for the clamped branch). Integer
-  exponents are total: ``x ^ 2`` works for any ``x``.
-
-``expected`` / ``variance`` / ``quantile`` over a nonlinear transform
-are evaluated by Monte Carlo, except for ``exp`` of a normal (a
-lognormal) and ``ln`` of a lognormal (a normal), whose moments and
-quantiles are exact. Constant subexpressions are computed exactly, and
-:sqlfunc:`support` propagates sound intervals through ``^`` / ``ln`` /
-``exp``, so comparisons decided by the support stay exact.
-
-Arithmetic builds an expression without evaluating it. The value is
-computed only when queried, via :sqlfunc:`expected`,
-:sqlfunc:`variance`, :sqlfunc:`moment`, :sqlfunc:`probability`,
-:sqlfunc:`rv_sample`, or :sqlfunc:`rv_histogram`: exactly where the
-shape allows (such as a sum of independent normals), otherwise by
-Monte Carlo. See *Exact vs. Sampled Answers* below.
+Arithmetic builds an expression without evaluating it; the value is
+computed when queried (:sqlfunc:`expected`, :sqlfunc:`probability`,
+:sqlfunc:`rv_sample`…), exactly where the shape allows, otherwise by
+Monte Carlo (see *Exact vs. Sampled Answers* below).
 
 Comparison operators ``<``, ``<=``, ``=``, ``<>``, ``>=``, ``>``
 on ``(random_variable, random_variable)`` have type ``boolean``; in a
@@ -316,9 +298,7 @@ The SQL ``GREATEST`` / ``LEAST`` syntax accepts ``random_variable``
 arguments in queries ProvSQL rewrites; the functions
 ``provsql.greatest(variadic random_variable[])`` /
 ``provsql.least(...)`` do the same and also work outside such queries.
-``NULL`` arguments are ignored, as in the built-in. ``greatest(x, x, y)``
-is ``greatest(x, y)`` and ``greatest(x)`` is ``x``; two *independent*
-draws of the same distribution remain distinct variables.
+``NULL`` arguments are ignored, as in the built-in.
 
 The **aggregate** form extends ``min`` / ``max`` to random variables,
 like the ``sum`` / ``avg`` / ``product`` aggregates:
@@ -332,15 +312,11 @@ A row absent in a world contributes ``-inf`` to ``max`` and ``+inf``
 to ``min``, so it cannot perturb the extremum; an empty group itself
 is SQL ``NULL``, as standard SQL ``MIN`` / ``MAX`` report.
 
-Monte Carlo evaluation keeps operands that share random variables
-correlated. Where the operands are independent and identically
-distributed, the mean is **exact**:
-``E[max]`` of ``n`` i.i.d. ``U(a,b)`` is ``a + (b-a)·n/(n+1)``,
-``E[min]`` is ``a + (b-a)/(n+1)``; i.i.d. exponentials give
-``E[min] = 1/(nλ)`` and ``E[max] = H_n/λ``. Ordering or de-duplicating
-a ``random_variable`` directly (``ORDER BY rv``, ``DISTINCT rv``) is
-meaningless -- a random variable is a distribution, not a scalar -- and
-raises a clear error pointing at the order-statistic constructors.
+The mean of a maximum or minimum of independent distributions is
+computed without sampling (exactly for i.i.d. uniforms or
+exponentials); other shapes use Monte Carlo. Ordering or
+de-duplicating a ``random_variable`` directly (``ORDER BY rv``,
+``DISTINCT rv``) raises an error pointing at these constructors.
 
 CASE Over Random Variables
 --------------------------
@@ -367,31 +343,15 @@ holds, else the ``ELSE`` default:
 
 Numeric branches must be cast explicitly (``ELSE as_random(0)`` or
 ``ELSE 0::random_variable``): PostgreSQL does not apply the implicit
-numeric casts to ``CASE`` branches, although it does to operator
-arguments, so ``pm25 - 35`` needs no cast. ``abs``, ``clamp``, ReLU and
-other piecewise transforms are written this way. The functions
-``rv_case`` (returning a ``random_variable``) and ``provenance_case``
-build the same construct from a
-``[guard₁, value₁, …, guardₖ, valueₖ, default]`` UUID array. The guards
-and branches see one consistent draw, so correlations through shared
-variables are preserved.
+numeric casts to ``CASE`` branches. Guards and branches see one
+consistent draw, so variables they share stay correlated.
 
-Moments (``expected`` / ``variance`` / ``moment``) of a ``CASE`` are
-computed in **closed form**, exact even under
-``SET provsql.rv_mc_samples = 0``, for these shapes:
-
-- a **piecewise function of one random variable** (guards compare it to
-  constants, branches are affine in it): ``abs`` / ``clamp`` / ReLU and
-  the like, integrated over the branch intervals;
-- a **two-way min / max** (``CASE WHEN x >= y THEN x ELSE y``), and more
-  generally a sequence of guards that computes the **max or min of
-  several** random variables.
-
-Other multi-variable ``CASE`` shapes are evaluated by Monte Carlo (or
-raise under ``rv_mc_samples = 0``). A ``CASE`` passed to a
-set-returning function (``support`` / ``rv_sample``) in the ``FROM``
-clause must be materialised first
-(``CREATE TABLE ... AS SELECT CASE ...``), as for the aggregates.
+Moments of a ``CASE`` are exact for a piecewise-affine function of one
+random variable (``abs``, ``clamp``, ReLU) and for a ``CASE`` computing
+the max or min of several random variables; other shapes use Monte
+Carlo. A ``CASE`` passed to a set-returning function (``support``,
+``rv_sample``) in the ``FROM`` clause must be materialised first
+(``CREATE TABLE ... AS SELECT CASE ...``).
 
 Probabilistic Queries
 ---------------------
@@ -437,13 +397,9 @@ overload computes the probability of an event written in infix form:
     SELECT probability(x > y AND x < z) FROM d; -- 0.1667  (ordering y<x<z)
 
 ``probability`` is also a short alias of
-:sqlfunc:`probability_evaluate` on a ``uuid``, and the spelling
-preferred throughout this chapter. Over a purely
-deterministic Boolean it is total -- ``probability(1 > 0)`` is ``1``,
-``probability(region = 'north')`` is a per-row ``0`` / ``1`` -- so it
-works on definite events too, even with ``provsql.active`` off. The
-predicate overload exists only under the name ``probability``, not
-``probability_evaluate``.
+:sqlfunc:`probability_evaluate` on a ``uuid``; the predicate overload
+exists only under the name ``probability``. On a deterministic Boolean
+it returns ``0`` or ``1``.
 
 Two comparison events can be conditioned with the same ``|`` operator
 that conditions a random variable (:doc:`conditioning`): ``(A) | (B)``
@@ -457,15 +413,11 @@ column, or the left operand of a further ``|``:
     -- x ~ Normal(1500, 400); {x >= 2000} ⊂ {x >= 1000}
     SELECT probability((x >= 2000) | (x >= 1000)) FROM d;  -- 0.1181
 
-The joint is *not* the product of the marginals: both comparisons share
-the variable ``x``, so ``Pr(x >= 2000 ∧ x >= 1000) = Pr(x >= 2000)``.
-Comparisons against constants on a single distribution are resolved
-through its CDF, so the answer is exact regardless of
-``provsql.rv_mc_samples``, including ``0``. Correlated events with no
-closed form, such as comparisons over composite expressions like
-``x + y > z``, need Monte Carlo; with ``provsql.rv_mc_samples = 0``
-such a query raises an error instead of returning the
-independent-product approximation.
+Shared variables are taken into account: here
+``Pr(x >= 2000 ∧ x >= 1000) = Pr(x >= 2000)``. Comparisons of a single
+distribution against constants are exact (through its CDF); correlated
+events over composite expressions such as ``x + y > z`` need Monte
+Carlo.
 
 Configuration of the Monte Carlo Sampler
 -----------------------------------------
@@ -494,28 +446,14 @@ other :sqlfunc:`probability` parameter.
 Exact vs. Sampled Answers
 -------------------------
 
-Wherever the shape of a query allows, ProvSQL answers it in closed
-form -- exactly, with no sampling. This covers the family-preserving
-combinations above (sums of normals, i.i.d. exponentials to Erlang,
-affine transforms…), comparisons resolved from a distribution's CDF
-(``normal > 2``, ``uniform <= 1.5``) or decided from the support alone
-(``reading > 1 AND reading < 3`` on a single normal), same-family
-comparisons between two variables (``probability(x > y)`` for two
-i.i.d. uniforms is exactly ``0.5``; ``probability(a < b)`` for
-``a ~ Exp(2), b ~ Exp(3)`` is exactly ``0.4``), i.i.d. order-statistic
-means (``expected(greatest(x, y, z))`` of three uniforms is exactly
-``0.75``), and conditioning on a comparison (``E[X | X > Y] = 2/3`` for
-uniforms). Everything else falls back to Monte Carlo (see
-*Configuration of the Monte Carlo Sampler* above).
-
-Setting ``provsql.rv_mc_samples = 0`` makes a query raise an error
-when no closed form applies: this asserts that a query is answered
-exactly.
-
-``provsql.simplify_on_load`` (default: ``on``) simplifies a circuit
-when it is loaded, for every consumer (semiring evaluation, Monte
-Carlo, ``view_circuit``, PROV export, ProvSQL Studio). Turn it off
-only to inspect the raw circuit.
+Wherever the shape of a query allows, ProvSQL answers it exactly, with
+no sampling: family-preserving combinations (sums of normals, affine
+transforms…), comparisons resolved from a distribution's CDF or
+support, comparisons between two variables of the same family, and the
+other cases this chapter marks as exact. Everything else falls back to
+Monte Carlo. Setting ``provsql.rv_mc_samples = 0`` makes a query raise
+an error when no exact answer is available: this asserts that a query
+is answered exactly.
 
 Moments, Quantiles, and Support
 -------------------------------
@@ -547,14 +485,11 @@ they accept ``random_variable``, plain ``uuid``, ``numeric``, and
 :sqlfunc:`quantile` ``(input, p [, prov])``
     p-quantile (inverse CDF)
     ``F⁻¹(p) = min{x : P(input ≤ x | prov) ≥ p}`` for
-    ``p ∈ [0, 1]`` -- medians, percentiles, Value-at-Risk, credible
-    intervals. ``p = 0`` / ``p = 1`` return the (possibly infinite)
-    support edges. Exact for a bare random variable (continuous or
-    categorical), including under conditioning that reduces to an
-    interval. Compound expressions use the empirical Monte Carlo
-    quantile with ``percentile_cont``-style interpolation. Plain
-    numeric input is its own quantile (a Dirac). Plain ``uuid`` and
-    ``agg_token`` inputs are not supported.
+    ``p ∈ [0, 1]``: medians, percentiles, credible intervals.
+    ``p = 0`` / ``p = 1`` return the (possibly infinite) support
+    edges. Exact for a bare random variable, including under
+    conditioning on an interval; compound expressions use the Monte
+    Carlo empirical quantile.
 
     .. code-block:: postgresql
 
@@ -564,11 +499,8 @@ they accept ``random_variable``, plain ``uuid``, ``numeric``, and
         FROM model_posteriors WHERE param = 'mu_revenue';
 
 :sqlfunc:`support` ``(input [, prov [, method [, arguments]]])``
-    Support interval ``[lo, hi]``. For a ``random_variable``, the
-    interval obtained by interval arithmetic over the expression,
-    narrowed by the bounds that ``prov`` imposes; for plain numeric
-    input, the point ``[c, c]``; for an ``agg_token``, the
-    closed-form support of the aggregate.
+    Support interval ``[lo, hi]``, narrowed by the bounds that ``prov``
+    imposes.
 
 Three further functions take ``random_variable`` arguments from the
 *same row* (they are not aggregates over a group of rows):
@@ -577,17 +509,11 @@ Three further functions take ``random_variable`` arguments from the
     Standard deviation ``sqrt(Var[x | prov])``.
 
 :sqlfunc:`covariance` ``(x, y [, prov])``
-    Covariance ``E[xy | prov] − E[x | prov]·E[y | prov]``.
-    Arguments built from disjoint sets of random variables give an
-    exact ``0``; arguments sharing random variables are computed
-    analytically where every factor has a closed form, otherwise as
-    the sample covariance of jointly drawn ``(x, y)`` pairs.
+    Covariance ``E[xy | prov] − E[x | prov]·E[y | prov]``; exactly
+    ``0`` for arguments over disjoint sets of random variables.
 
 :sqlfunc:`correlation` ``(x, y [, prov])``
-    Pearson correlation, the covariance normalised by the two
-    standard deviations. Returns ``NULL`` when either standard
-    deviation is zero (a constant argument). All moments are
-    evaluated under the same conditioning event ``prov``.
+    Pearson correlation; ``NULL`` when either argument is constant.
 
 .. code-block:: postgresql
 
@@ -597,30 +523,19 @@ Three further functions take ``random_variable`` arguments from the
 Three information-theoretic functions (all in nats):
 
 :sqlfunc:`entropy` ``(x [, prov])``
-    Entropy ``H(x)``: Shannon entropy for a discrete distribution
-    (a categorical, a discrete count, a constant -- a point mass has
-    entropy ``0``), differential entropy for a continuous one
-    (computed exactly, including for mixtures of independent
-    components such as :sqlfunc:`gmm`). Arithmetic expressions and
-    the conditional form (``prov``) are estimated from a Monte Carlo
-    histogram, so they need ``provsql.rv_mc_samples > 0``.
+    Shannon entropy for a discrete distribution, differential entropy
+    for a continuous one; exact for a distribution, estimated by Monte
+    Carlo for arithmetic expressions and under ``prov``.
 
 :sqlfunc:`kl` ``(p, q)``
-    Kullback-Leibler divergence ``KL(P ‖ Q)``, exact via the
-    defining sum (discrete-discrete) or integral
-    (continuous-continuous). ``Infinity`` when ``P`` is not
-    absolutely continuous with respect to ``Q``: an outcome of
-    ``P`` that ``Q`` gives zero mass, mismatched kinds, or a region
-    of ``P``'s support where ``Q``'s density (under)flows to zero.
-    Both arguments must have closed-form densities; arithmetic
-    expressions raise an error.
+    Kullback-Leibler divergence ``KL(P ‖ Q)``, exact; ``Infinity``
+    when ``P`` is not absolutely continuous with respect to ``Q``.
+    Both arguments must be distributions, not arithmetic expressions.
 
 :sqlfunc:`mutual_information` ``(x, y)``
-    Mutual information ``I(x; y)``: exactly ``0`` for arguments built
-    from disjoint sets of random variables, ``H(x)`` for a discrete
-    variable paired with itself (``Infinity`` for a continuous one),
-    and otherwise an estimate from a 2-D histogram of joint Monte
-    Carlo draws (needs ``provsql.rv_mc_samples > 0``).
+    Mutual information ``I(x; y)``: exactly ``0`` for arguments over
+    disjoint sets of random variables, otherwise in general estimated
+    by Monte Carlo.
 
 .. code-block:: postgresql
 
@@ -667,25 +582,15 @@ pseudo-column conditions on the filter:
     FROM sensor_readings
     WHERE reading > 2;
 
-For sensor ``1`` (``normal(2.5, 0.5)`` truncated to ``> 2``),
-the conditional mean is the textbook Mills-ratio formula
-``μ + σ · φ(α) / (1 − Φ(α))`` with ``α = (2 − μ)/σ``; for sensor
-``2`` (``uniform[1, 3]`` truncated to ``> 2``), the conditional
-distribution is ``uniform[2, 3]`` with mean ``2.5``; for sensor
-``3`` (``exponential(0.4)`` truncated to ``> 2``), the
-memoryless property gives conditional mean ``2 + 1/0.4 = 4.5``.
+The conditional means are those of the truncated distributions:
+``≈ 2.64`` for the normal, ``2.5`` for the uniform (now on
+``[2, 3]``), and ``2 + 1/0.4 = 4.5`` for the exponential.
 
-Conditioning on a one- or two-sided interval is exact in closed form
-for the families with closed-form truncated moments: Normal
-(Mills-ratio truncation), Uniform (truncated support), Exponential
-(memorylessness), Log-normal, Weibull, Pareto, and Beta; other shapes
-are estimated by Monte Carlo. If the conditioning event is rare, few
-samples may be accepted within the ``provsql.rv_mc_samples`` budget,
-and a ``NOTICE`` suggests increasing it (an error under
-``provsql.rv_mc_samples = 0``).
-
-Passing ``gate_one()`` (the default) as ``prov`` gives the
-unconditional moment, at no extra cost.
+Conditioning on a one- or two-sided interval is exact for the families
+with closed-form truncated moments (Normal, Uniform, Exponential,
+Log-normal, Weibull, Pareto, Beta); other shapes are estimated by Monte
+Carlo. If the conditioning event is rare, few samples may be accepted,
+and a ``NOTICE`` suggests increasing ``provsql.rv_mc_samples``.
 
 Sampling and Histograms
 -----------------------
@@ -694,36 +599,18 @@ Two functions return raw and binned samples.
 
 :sqlfunc:`rv_sample` ``(token, n [, prov])`` ``RETURNS SETOF float8``
     Draws ``n`` samples of the value ``token``, conditioned on the
-    provenance event ``prov`` (unconditional by default). The value
-    and the event are drawn jointly, so random variables they share
-    stay correlated.
-
-    When ``token`` is a bare Uniform, Normal, Exponential,
-    Log-normal, Weibull, Pareto, or Logistic random variable and the
-    event reduces to an interval constraint on it, the truncated
-    distribution is sampled directly: exactly ``n`` samples are
-    returned, even for a narrow tail like ``X > 9.5`` over
-    ``U(0, 10)``.
-
-    Otherwise ``provsql.rv_mc_samples`` draws are attempted; a
-    ``NOTICE`` is emitted when fewer than ``n`` satisfy the event,
-    and the function returns the samples that did.
+    provenance event ``prov`` (unconditional by default). When
+    ``token`` is a bare Uniform, Normal, Exponential, Log-normal,
+    Weibull, Pareto or Logistic variable and the event an interval on
+    it, exactly ``n`` samples are returned; otherwise
+    ``provsql.rv_mc_samples`` draws are attempted, and a ``NOTICE`` is
+    emitted when fewer than ``n`` satisfy the event.
 
 :sqlfunc:`rv_histogram` ``(token, bins [, prov])`` ``RETURNS jsonb``
-    Empirical histogram of the same value as
-    :sqlfunc:`rv_sample`, returned as a JSON array of
-    ``{bin_lo, bin_hi, count}`` objects. The number of bins is
-    ``bins`` (default ``30``); the bin range covers the observed
-    ``[min, max]`` of the draws; the sample count is
-    ``provsql.rv_mc_samples``. Pin ``provsql.monte_carlo_seed``
-    for reproducibility.
-
-    ``token`` must be a scalar value: a constant (single bin), a
-    random variable, an arithmetic expression, a mixture, or an
-    aggregate; a conditioned ``X | C`` gives the histogram of its
-    conditional distribution. Any other token raises an error. The
-    direct truncated sampling of :sqlfunc:`rv_sample` applies here
-    too.
+    Histogram of ``provsql.rv_mc_samples`` draws of the same value, as
+    a JSON array of ``{bin_lo, bin_hi, count}`` objects (``bins``
+    defaults to ``30``). A conditioned ``X | C`` gives the histogram
+    of its conditional distribution.
 
 Example, drawing 200 samples from the sensor-1 reading conditioned on
 ``reading > 2.5``:
@@ -782,9 +669,7 @@ outcomes:
              ARRAY[0, 1, 2]::double precision[]);
 
 Two ``categorical(probs, outcomes)`` calls with the same arrays
-produce two *independent* categorical draws. A categorical with a
-single positive-probability outcome is the constant
-:sqlfunc:`as_random` of that outcome.
+produce two *independent* categorical draws.
 
 .. _continuous-aggregation:
 
@@ -821,45 +706,17 @@ deterministic scalars to ``random_variable`` columns:
 ``COUNT`` over a tracked ``random_variable`` column counts rows as
 for any tracked table.
 
-The SQL-standard second-moment statistic aggregates are also lifted to
-``random_variable`` rows, with the same provenance-weighted semantics
-(a row absent in a world drops out of every sum, the count, and the
-percentile member set):
-
-:sqlfunc:`covar_pop` / :sqlfunc:`covar_samp` ``(random_variable, random_variable)`` ``RETURNS random_variable``
-    Population / sample covariance of the row pairs,
-    :math:`S_{XY}/N - (S_X/N)(S_Y/N)` and
-    :math:`(S_{XY} - S_X S_Y / N)/(N-1)` over the
-    indicator-weighted power sums. Rows with either side ``NULL``
-    are skipped (standard SQL); a world with :math:`N = 0` (or
-    :math:`N = 1` for the sample form) evaluates to ``NaN``, the
-    undefined-world convention the moment estimators skip.
-
-:sqlfunc:`corr` ``(random_variable, random_variable)`` ``RETURNS random_variable``
-    Pearson correlation
-    :math:`\mathrm{covar\_pop} / \sqrt{v_X\,v_Y}` (a zero-variance
-    world yields ``NaN``, matching SQL's ``NULL`` for a
-    zero-stddev input).
-
-:sqlfunc:`stddev_pop` / :sqlfunc:`stddev_samp` ``(random_variable)`` ``RETURNS random_variable``
-    Population / sample standard deviation.
-
-:sqlfunc:`percentile_cont` ``(fraction) WITHIN GROUP (ORDER BY random_variable)`` ``RETURNS random_variable``
-    The SQL-standard continuous percentile as an order statistic
-    over the group: in each Monte Carlo draw, the values of the rows
-    present in that world are sorted and linearly interpolated at
-    the fraction. Requires provenance-tracked input: on an
-    untracked table it raises the error for ordering a
-    ``random_variable``.
-
-Each of these statistics is a ``random_variable`` whose moments
-(:sqlfunc:`expected`, :sqlfunc:`variance`…) are estimated by Monte
-Carlo (there is no closed form), so set
-``provsql.rv_mc_samples > 0``. Do not confuse the *aggregate*
-:sqlfunc:`corr` (one value per group of rows) with the *same-row
-scalar readouts* :sqlfunc:`covariance` / :sqlfunc:`correlation` /
-:sqlfunc:`stddev`, which take two RV expressions from a single row
-and return ``double precision``.
+The SQL statistical aggregates are lifted the same way, each returning
+a ``random_variable`` over the rows present in each world:
+:sqlfunc:`covar_pop`, :sqlfunc:`covar_samp`, :sqlfunc:`corr`,
+:sqlfunc:`stddev_pop`, :sqlfunc:`stddev_samp`, and
+:sqlfunc:`percentile_cont` ``(fraction) WITHIN GROUP (ORDER BY
+random_variable)`` (on a tracked table only). A world where the
+statistic is undefined (too few rows, zero variance) gives ``NaN`` and
+is skipped by the moment functions. Their moments are estimated by Monte
+Carlo. These aggregates, one value per group of rows, differ from the
+same-row readouts :sqlfunc:`covariance` / :sqlfunc:`correlation` /
+:sqlfunc:`stddev` above.
 
 Latent variables and posterior inference
 ----------------------------------------
@@ -874,40 +731,16 @@ for instance a Normal whose mean is drawn from a broad prior:
     -- M ~ Normal(0, 10);  X ~ Normal(M, 1):  a hierarchical model.
     SELECT expected(normal(normal(0, 10), 1));
 
-Most constructors have overloads accepting a random variable in each
-parameter position (``normal(random_variable, float8)``,
-``normal(float8, random_variable)``,
-``normal(random_variable, random_variable)``, and likewise for
-``logistic``, ``uniform``, ``exponential``, ``gamma``, ``lognormal``,
-``weibull``, ``pareto``, ``beta``, ``inverse_gamma`` and
-``inverse_gaussian``; ``erlang``, ``chi_squared`` and ``wald`` keep
-literal-only forms). A call with literal parameters is the plain
-numeric constructor.
+All continuous constructors accept a random variable in any parameter
+position, except ``erlang``, ``chi_squared`` and ``wald``; among the
+discrete ones, ``poisson``, ``geometric``, ``binomial`` (its
+probability) and ``negative_binomial`` do (e.g., ``poisson(120 * R)``).
 
-The **discrete** families accept a latent rate or success probability
-through ``poisson(random_variable)``, ``geometric(random_variable)``,
-``binomial(integer, random_variable)`` and the ``negative_binomial``
-overloads (e.g., ``poisson(120 * R)`` or ``binomial(50, 40.0 / N)``).
-These are sampled like the continuous ones, while the literal
-``poisson(λ)`` / ``binomial(n, p)`` remain exact categoricals. Their
-pmf is used as the likelihood when they are observed, which gives the
-discrete conjugate updates (Gamma-Poisson, Beta-Binomial) below.
-
-The **mean** of a compound distribution is exact (no Monte Carlo, even
-with ``provsql.rv_mc_samples = 0``) whenever the family's mean is
-affine in its parameters (Normal ``μ``, Uniform ``(a+b)/2``,
-inverse-Gaussian ``μ``, Poisson ``λ``), since
-``E[X] = E[mean(θ)] = mean(E[θ])`` by linearity of expectation, with no
-independence assumption. It stays exact through ``+``/``-``/scaling
-and mixtures; a nonlinear dependency (a product of shared variables, a
-family with nonlinear mean such as Exponential ``1/λ``) uses Monte
-Carlo.
-
-Other moments of compound distributions are estimated by Monte Carlo
-(set ``provsql.rv_mc_samples > 0``). A latent **shared** by several
-distributions correlates them: two ``normal(M, 1)`` over the *same*
-``M`` are positively correlated, a way to model correlation without a
-multivariate distribution.
+The mean of a compound distribution is exact when the family's mean is
+affine in its parameters (Normal, Uniform, inverse-Gaussian, Poisson);
+other moments are estimated by Monte Carlo. A latent **shared** by
+several distributions correlates them: two ``normal(M, 1)`` over the
+*same* ``M`` are positively correlated.
 
 .. note::
 
@@ -937,24 +770,16 @@ conditioning argument of any function above:
     LATERAL (SELECT and_agg(| (normal(mu, 1) = x)) AS ev
              FROM (VALUES (8.0), (10.0), (12.0)) AS obs(x)) e;
 
-The posterior is computed by **self-normalised importance sampling**:
-latents are drawn from the prior and each draw is weighted by the
-densities of the observations. An *inequality* event (``Y > c``, a
-truncation) weighs a draw ``0`` or ``1``, a point equality ``Y = c``
-by the pdf (the **pmf** for a discrete distribution), and both can be
-combined in the same evidence. :sqlfunc:`expected`,
-:sqlfunc:`variance`, :sqlfunc:`moment`, :sqlfunc:`quantile` and
-:sqlfunc:`rv_sample` all accept such evidence; the posterior
-predictive is ``rv_sample`` on a new distribution that reuses the
-latent.
+The posterior is computed by importance sampling (latents drawn from
+the prior, each draw weighted by the observations' densities);
+equalities and inequalities (``Y > c``) can be combined in the same
+evidence. The posterior predictive is ``rv_sample`` on a new
+distribution that reuses the latent.
 
-**Exact conjugate posteriors.** When the model matches a classic
-conjugate prior/likelihood pair (the latent is a bare distribution,
-and every observation binds a datum to a distribution with the latent
-in one parameter and literal other parameters), the posterior is
-computed in **closed form**: exact, deterministic, and available with
-Monte Carlo disabled (``provsql.rv_mc_samples = 0``), with the same
-queries. The recognised pairs:
+**Exact conjugate posteriors.** When the latent is a bare distribution
+and every observation is of a distribution with the latent in one
+parameter and literal other parameters, forming one of the conjugate
+pairs below, the posterior is exact, with the same queries:
 
 .. list-table::
    :header-rows: 1
@@ -994,40 +819,29 @@ queries. The recognised pairs:
      - ``gamma``
      - Gamma
 
-Because each observation updates the *running* posterior, mixed
-likelihoods sharing one conjugate prior compose: a Gamma-prior rate
-observed through interleaved Poisson counts and Exponential gaps stays
-Gamma. The closed form is the exact value of what importance sampling
-estimates. Any other shape (a latent entering the observed
-distribution through arithmetic, a prior on a Normal's ``σ``, a
-Boolean event combined with the observations, several latents in one
-evidence set) uses importance sampling, with the diagnostics below.
+Mixed likelihoods sharing one conjugate prior compose (a Gamma-prior
+rate observed through both Poisson counts and Exponential gaps). Other
+shapes use importance sampling.
 
 .. note::
 
-   A continuous point event ``Y = c`` has probability zero as a
-   *selection* (in a ``WHERE`` clause it matches nothing), but as a
-   *conditioning* event it is the observation of ``Y`` at ``c``.
-   ``Y`` must be a **bare distribution**: observing a derived quantity
+   As a ``WHERE`` selection, a continuous point event ``Y = c`` matches
+   nothing; only as a conditioning event is it an observation. ``Y``
+   must be a bare distribution: observing a derived quantity
    (``(X + Y) = d``) is not supported, and the observations must share
    the latent within one query.
 
 **Marginal likelihood and diagnostics.** :sqlfunc:`evidence` returns the
-marginal likelihood ``P(data)`` (the mean importance weight, the same
-quantity conditioning computes as ``P(C)``). When many observations
-constrain one latent, the weights concentrate and the *effective sample
-size* (ESS) of the posterior collapses; a ``WARNING`` is emitted when
-the ESS falls below ``provsql.ess_warn_fraction`` of the accepted
-draws. Increase ``provsql.rv_mc_samples``; one latent observed through
-many rows calls for sequential Monte Carlo instead.
+marginal likelihood ``P(data)``. When many observations constrain one
+latent, the effective sample size of the importance sampler collapses;
+a ``WARNING`` is emitted when it falls below
+``provsql.ess_warn_fraction`` of the accepted draws: increase
+``provsql.rv_mc_samples``.
 
-**Explaining the posterior (Shapley over observations).**
-:sqlfunc:`shapley_observe` returns the Shapley value of each observation
-over a posterior moment, answering *"which observation most shifted my
-posterior"*. The values sum to the shift from prior to posterior, and a
-dominant outlier gets the largest-magnitude value. The computation is
-exact over subsets of observations, so it is limited to 12
-observations.
+**Explaining the posterior.** :sqlfunc:`shapley_observe` returns the
+Shapley value of each observation (at most 12) over a posterior moment:
+which observation most shifted the posterior. The values sum to the
+shift from prior to posterior.
 
 Studio Integration
 ------------------

@@ -44,10 +44,8 @@ different input gate:
     UPDATE sightings SET provsql = provsql.replace_input(provsql, 0.3)
       WHERE id = 42;
 
-That is an ordinary row update, so it rolls back with its transaction and
-travels with a dump; the old gate stays in the circuit, and so does
-anything already derived from it.  :doc:`persistence` explains why, and
-covers the block form :sqlfunc:`replace_block` for
+Results already derived keep the old probability; :doc:`persistence`
+covers this and the block form :sqlfunc:`replace_block` for
 :sqlfunc:`repair_key` tables.
 
 To read back a stored probability with :sqlfunc:`get_prob`:
@@ -56,9 +54,8 @@ To read back a stored probability with :sqlfunc:`get_prob`:
 
     SELECT get_prob(provenance()) FROM mytable;
 
-:sqlfunc:`get_prob` answers the value an evaluation would use, so it says
-``1`` both for a token written as certain and for one nobody has given a
-probability; :sqlfunc:`probability_is_set` distinguishes the two.
+:sqlfunc:`get_prob` returns ``1`` both for a token set as certain and for
+one with no probability; :sqlfunc:`probability_is_set` tells them apart.
 
 Correlated and block-independent inputs
 ---------------------------------------
@@ -91,9 +88,7 @@ example below; it adds the ``provsql`` column itself and is used
     -- Make tuples with the same context mutually exclusive
     SELECT repair_key('weather', 'context');
 
-    -- Assign probabilities and evaluate.  repair_key leaves the rows
-    -- at the uniform weight of their block rather than writing a
-    -- probability on them, so this is a first write.
+    -- Assign probabilities and evaluate
     SELECT set_prob(provenance(), p) FROM weather;
 
     SELECT ground,
@@ -190,20 +185,9 @@ Aggregates: expected values and HAVING
 Expected values of aggregates
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For aggregate queries over a probabilistic table, the :sqlfunc:`expected`
-function computes the expected value of the aggregate result.  It
-supports ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``.  The
-expectation is over the possible worlds in which the value exists: a
-grouped result row is there only where its group has a row, and a ``SUM``,
-``MIN``, ``MAX`` or ``AVG`` over no row is ``NULL`` (the expectation is
-``NULL`` only when the value never exists).  So ``expected(sum(x))`` of a
-group equals ``expected(sum(x), provenance())``, and a world is counted
-only where it contributes a value.  The one exception is a ``COUNT``
-without ``GROUP BY``: its row is there in every world, counting a real 0
-over no row.  ``AVG`` is exact over tuple-independent (or shared-anchor)
-groups.  Other shapes are exact when they depend on at most 20 input
-tuples, and otherwise estimated by Monte Carlo at the
-``provsql.rv_mc_samples`` budget:
+For aggregate queries over a probabilistic table, :sqlfunc:`expected`
+computes the expected value of a ``COUNT``, ``SUM``, ``MIN``, ``MAX`` or
+``AVG`` result:
 
 .. code-block:: postgresql
 
@@ -213,24 +197,18 @@ tuples, and otherwise estimated by Monte Carlo at the
     FROM employees
     GROUP BY dept;
 
-An optional second argument specifies a provenance condition for
-computing a *conditional* expectation E[aggregate | condition].  For
-instance, to compute the expected count within each group conditioned
-on the group existing (i.e., its provenance being true):
+The expectation is over the possible worlds in which the value exists,
+i.e., where its group has a row; it is ``NULL`` only if the value never
+exists.  A ``COUNT`` without ``GROUP BY`` exists in every world, and is
+0 where no row is present.  The result is exact for ``AVG`` over
+tuple-independent rows and for any aggregate depending on at most 20
+input tuples; otherwise it is estimated by Monte Carlo at the
+``provsql.rv_mc_samples`` budget.
 
-.. code-block:: postgresql
-
-    SELECT dept,
-           expected(COUNT(*), provenance()) AS conditional_count
-    FROM employees
-    GROUP BY dept;
-
-Without the second argument, the expectation is unconditional.  With
-it, the result is normalised by the probability of the condition. This
-:sqlfunc:`expected` ``(aggregate, condition)`` form is the aggregate-specific
-spelling of the conditioning operator ``|``; see :doc:`conditioning` for the
-uniform ``A | B`` ("``A`` given ``B``") operator across discrete events,
-random variables, and aggregates.
+An optional second argument gives the *conditional* expectation
+E[aggregate | condition], for a provenance condition; it is the
+aggregate-specific spelling of the conditioning operator ``|`` (see
+:doc:`conditioning`).
 
 HAVING with probabilities
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -361,10 +339,9 @@ graph has bounded treewidth -- a property of many real networks
 workflow graphs…).
 
 The interface is an ordinary recursive reachability query, under
-``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the result is
-the exact Boolean provenance, but only the *absorptive quotient* of the
-infinite recursive semiring provenance; see
-:ref:`provsql-provenance-class`):
+``provsql.provenance = 'absorptive'`` or ``'boolean'`` (see
+:ref:`provsql-provenance-class`), over a provenance-tracked edge relation
+``link`` whose tuples carry probabilities:
 
 .. code-block:: postgresql
 
@@ -378,144 +355,73 @@ infinite recursive semiring provenance; see
     SELECT node, probability_evaluate(provenance())
     FROM reach WHERE node = 42;
 
-Here ``link`` is a provenance-tracked base relation whose tuples carry
-probabilities; ProvSQL produces one provenance circuit per reachable
-vertex, in linear total size.  Cyclic graphs are handled and the
-computation is exact; vertex columns of any type work (values are
-compared as text).
+Cyclic graphs are handled, and vertex columns of any type work (values
+are compared as text).  The following variations are recognised too:
 
-Two variations of the shape are recognised as well.  *Undirected
-connectivity* is the natural symmetric traversal:
+* *undirected connectivity*:
+  ``SELECT CASE WHEN e.src = r.node THEN e.dst ELSE e.src END FROM link e
+  JOIN reach r ON r.node IN (e.src, e.dst)``;
+* a *deterministic edge filter*, a ``WHERE`` clause over the edge
+  relation's columns alone (``WHERE e.capacity >= 10``);
+* a *source set* in the base arm, ``SELECT v FROM sources``: certain
+  sources if ``sources`` is untracked, probabilistic ones if it is tracked
+  (but not prepared with :sqlfunc:`repair_key`);
+* edge relations prepared with :sqlfunc:`repair_key` (mutually exclusive
+  alternative edges);
+* a *derived* edge relation (a subquery or view over several tracked
+  tables), provided no two derived edges share a base tuple;
+* *bounded hops*: a counter column seeded by an integer constant,
+  incremented in the recursive arm and bounded by a mandatory ``WHERE``
+  condition (``<`` or ``<=``).  Row ``(v, h)`` holds when some *walk* (not
+  necessarily a simple path) of exactly ``h`` edges reaches ``v``, and
+  ``SELECT node FROM reach GROUP BY node`` gives the vertices within the
+  bound:
 
-.. code-block:: postgresql
+  .. code-block:: postgresql
 
-    WITH RECURSIVE reach(node) AS (
-        SELECT 1
-      UNION
-        SELECT CASE WHEN e.src = r.node THEN e.dst ELSE e.src END
-        FROM link e JOIN reach r ON r.node IN (e.src, e.dst)
-    )
-    SELECT node, probability_evaluate(provenance()) FROM reach;
+      WITH RECURSIVE reach(node, hops) AS (
+          SELECT 1, 0
+        UNION
+          SELECT e.dst, r.hops + 1
+          FROM link e JOIN reach r ON e.src = r.node
+          WHERE r.hops < 4
+      )
+      SELECT node, hops, probability_evaluate(provenance()) FROM reach;
 
-and *deterministic edge filters* (a ``WHERE`` clause over the edge
-relation's columns alone) restrict which edges participate:
+* *reachability per group*: joining the reached vertices with an untracked
+  relation and grouping by one of its columns (``... FROM reach r JOIN
+  regions t ON r.node = t.node GROUP BY t.region``, or the ``SELECT
+  DISTINCT`` equivalent), optionally filtered on that relation's own
+  columns, gives the probability that some vertex of each group is
+  reachable;
+* *k-terminal reliability*: a self-join of the CTE fixing one vertex per
+  reference (``FROM reach r1, reach r2, reach r3 WHERE r1.node = 5 AND
+  r2.node = 6 AND r3.node = 9``) gives the probability that all are
+  reachable.
 
-.. code-block:: postgresql
+Any other shape, or data whose treewidth exceeds the cap of the
+``tree-decomposition`` method, falls back to the generic recursive
+evaluation, with the same result.  Set ``provsql.verbose_level`` to at
+least 10 for a notice when this happens, or 20 to confirm the compiled
+route.
 
-    ... SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
-        WHERE e.capacity >= 10 ...
-
-The base arm may also be a relation, ``SELECT v FROM sources``: a
-*source set*.  When ``sources`` is itself provenance-tracked, each
-source participates with its tuple's probability (a probabilistic
-source set: "reachable from some present source"); an untracked
-relation gives certain sources.  A :sqlfunc:`repair_key` source
-relation is rejected (its tuples are block-correlated, not an
-independent source set) and the query falls back.
-
-Edge relations prepared with :sqlfunc:`repair_key` work too: a block
-of mutually exclusive alternative edges (say, an uncertain road whose
-true endpoint is one of several candidates) keeps its
-block-independent semantics exactly.
-
-The recursive arm may even join a *derived* edge relation, a subquery
-or view over several tracked tables.  Each derived edge then
-participates as the conjunction of its base tuples.  This is accepted
-when the derived edges' supports are pairwise disjoint (e.g., a
-one-to-one join); edges sharing a base tuple are correlated, and the
-query falls back to the generic evaluation.
-
-*Bounded-hop reachability* is recognised as well: a hop-counting CTE
-whose counter column is seeded by an integer constant, incremented in
-the recursive arm, and bounded by a (mandatory) ``WHERE`` qual:
-
-.. code-block:: postgresql
-
-    WITH RECURSIVE reach(node, hops) AS (
-        SELECT 1, 0
-      UNION
-        SELECT e.dst, r.hops + 1
-        FROM link e JOIN reach r ON e.src = r.node
-        WHERE r.hops < 4
-    )
-    SELECT node, hops, probability_evaluate(provenance()) FROM reach;
-
-Row ``(v, h)`` carries the provenance of "some *walk* of exactly
-``h`` edges connects the source to ``v``": walks, not simple paths,
-matching the semantics of the recursive query, and exact on cyclic
-data too.  Both ``<`` and ``<=`` bounds,
-either column order, any integer seed, and the undirected, filtered,
-multi-source and ``repair_key`` variants compose with the counter.
-The natural follow-up, "which nodes are *within* k hops", deduplicates
-the hop column away and stays on the linear exact route:
-
-.. code-block:: postgresql
-
-    ... SELECT node FROM reach GROUP BY node;
-
-*Cross-vertex aggregations* of a reachability CTE are recognised as
-well, grouping the reachable vertices by a column of a joined
-(untracked) member relation:
-
-.. code-block:: postgresql
-
-    ... SELECT t.region
-        FROM reach r JOIN regions t ON r.node = t.node
-        GROUP BY t.region;
-
-Each group's provenance is an OR of *correlated* events (the vertices
-share edges); ProvSQL compiles, per group, the certified circuit of
-"some member vertex is reachable", so the per-region reliability is
-evaluated exactly on the linear route.  All the groups share one
-compilation.  The ``SELECT DISTINCT`` spelling of the same aggregation
-(with no ``GROUP BY``) is recognised too.  A deterministic filter on
-the member relation's own columns (``WHERE t.kind = 'hospital'``) is
-allowed: it restricts which members each group counts, as an
-edge-column filter restricts the edges.  A tracked member relation, a
-filter that touches the recursive side, or any other deviation from
-the join-and-group-by-one-column shape falls back to the generic
-evaluation.
-
-*K-terminal conjunctions* close the family: a self-join of the CTE
-with one constant node binding per reference
-
-.. code-block:: postgresql
-
-    ... SELECT 'all supplied'
-        FROM reach r1, reach r2, reach r3
-        WHERE r1.node = 5 AND r2.node = 6 AND r3.node = 9;
-
-asks "are these vertices *all* reachable": its row provenance is the
-product of the correlated per-vertex tokens.  ProvSQL compiles the
-certified all-members-reachable circuit, so the query evaluates to the
-**k-terminal reliability** on the linear route.  The semantics is
-joint over worlds: under nonnegative min-plus (see :doc:`semirings`)
-the same token prices the cheapest covering subgraph, the **directed
-Steiner cost**, paying shared edges once where the raw product would
-pay them once per terminal.
-
-The circuits produced are *deterministic and decomposable by
-construction* (**d-Ds**; not in negation normal form, so not
-d-DNNFs), and each ``plus`` / ``times`` gate carries a persisted
-**certificate** of that property (readable with :sqlfunc:`get_infos`).
-Thanks to it, :sqlfunc:`probability_evaluate` settles on the linear
-exact ``independent`` method, and ``interpret-as-dd`` compilation,
-:sqlfunc:`ddnnf_stats`, :sqlfunc:`shapley` and :sqlfunc:`banzhaf` work
-on them without external compilers.  Shapley values of the edge
-tuples give a principled *edge criticality* analysis of the network:
+The circuits produced are certified *deterministic and decomposable*
+(**d-Ds**), so :sqlfunc:`probability_evaluate` is linear on them, and
+:sqlfunc:`shapley`, :sqlfunc:`banzhaf` and :sqlfunc:`ddnnf_stats` need no
+external compiler.  Shapley values of the edge tuples measure the
+criticality of each edge:
 
 .. code-block:: postgresql
 
     SELECT src, dst, shapley(reach_token, provenance()) AS criticality
     FROM link;
 
-The same certified circuits evaluate exactly in every **absorptive
-semiring**, not just under probability: the value is the image of the
-absorptive provenance of the recursive query
-:cite:`DBLP:conf/icdt/DeutchMRT14`.  In the nonnegative min-plus
-semiring this gives **exact min-cost reachability**: single-source
-shortest distances, on cyclic data too, in time linear in the
-circuit:
+The same circuits evaluate exactly in every **absorptive semiring**
+:cite:`DBLP:conf/icdt/DeutchMRT14`.  The nonnegative min-plus semiring
+gives **min-cost reachability** (shortest distances, constrained by the
+hop budget in the bounded-hop variant, per-group minima, and the
+**directed Steiner cost** in the k-terminal form, shared edges paid
+once):
 
 .. code-block:: postgresql
 
@@ -523,67 +429,31 @@ circuit:
                              nonnegative => true) AS min_cost
     FROM reach;
 
-The bounded-hop variant prices walks under a hop budget (a
-constrained shortest path), and the cross-vertex aggregation gives
-per-region minima.
-The other absorptive semirings read the same tokens: the
-most-reliable path (:sqlfunc:`sr_viterbi`), the widest path
-(:sqlfunc:`sr_maxmin` over a capacity enum), fuzzy best paths
-(:sqlfunc:`sr_lukasiewicz`), and *temporal reachability*: when each
-edge carries a validity multirange, :sqlfunc:`sr_temporal` returns
-exactly the instants at which the vertex is reachable (see
-:doc:`temporal`).  The tokens carry the ``'absorptive'`` assumption
-marker (:sqlfunc:`get_gate_type` reports the root as ``assumed``):
-counting and why-provenance, genuinely infinite on cyclic recursion,
-raise an error instead of returning a wrong value, while probability
-and the absorptive semirings (see :doc:`semirings`) evaluate normally.
-
-When the route cannot apply (the *data* treewidth exceeds the same cap
-as the ``tree-decomposition`` method, the edge tuples are not
-independent base tuples, or the CTE deviates from the recognised
-shape), the query silently falls back to the generic recursive
-evaluation, with the same behaviour as without the route.  Set
-``provsql.verbose_level`` to at least 10 to get a notice when the
-fallback fires, or 20 to confirm the compiled route.
-
-On a 2×n ladder network (treewidth 2), the route answers
-exactly over 1,500 probabilistic edges in under 200 ms end to end,
-and the columnar form compiles 300,000 edges in seconds, whereas
-evaluating the equivalent recursive query's provenance crosses the
-circuit-treewidth cap at a few dozen edges, and the cyclic/undirected
-case exceeds minutes already at thirty edges.
+Likewise :sqlfunc:`sr_viterbi` gives the most reliable path,
+:sqlfunc:`sr_maxmin` the widest path, :sqlfunc:`sr_lukasiewicz` the best
+fuzzy path, and :sqlfunc:`sr_temporal` the instants at which a vertex is
+reachable (see :doc:`temporal`).  The result carries the
+``'absorptive'`` assumption (:sqlfunc:`get_gate_type` reports its root as
+``assumed``): semirings that are not absorptive, such as counting and
+why-provenance, raise an error on it instead of returning a wrong value.
 
 .. _bounded-joint-width:
 
 Bounded joint width: hard UCQs over correlated data
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The query-side dichotomies (safe-query rewriting and the
-``inversion-free`` class) make a *self-join-free hierarchical* or
-*inversion-free* query tractable, but only over **tuple-independent**
-inputs, and they give up on the genuinely :math:`\#P`-hard queries: the
-textbook one is :math:`H_0 = R(x), S(x, y), T(y)`, and behind it the
-whole hard family :math:`H_k`.  ProvSQL evaluates these **exactly**
-when a different parameter is small, the **joint width**: the
-treewidth of the data graph *together with* its correlation structure
-:cite:`Amarilli2016thesis` (§4.2).  The data graph and the provenance
-circuit can *both* have small treewidth while the joint width, and the
-hardness, is large (thesis Prop. 4.2.11).  When the joint width *is*
-bounded, the probability is linear in the data, even though the query
-is :math:`\#P`-hard and the inputs are arbitrarily correlated.
-
-Like the reachability route above, the compilation runs along a tree
-decomposition of the data (for correlated inputs, together with the
-part of the provenance that carries the correlations) and produces a
-certified **d-D**, with no external compiler.
+Safe-query rewriting and the ``inversion-free`` class only apply to
+tractable queries, and not over **correlated** inputs.  ProvSQL also
+evaluates :math:`\#P`-hard UCQs, such as :math:`H_0 = R(x), S(x, y),
+T(y)`, **exactly**, over inputs that may be correlated, when their
+**joint width** is small: the treewidth of the data together with its
+correlation structure :cite:`Amarilli2016thesis` (§4.2).  The cost is
+then linear in the data.
 
 The route takes the same opt-in as :ref:`safe-query rewriting
-<safe-query-rewriting>`: the ``'boolean'`` provenance class, off by
-default.  Within that class it applies **automatically** to a
-conjunctive query the safe-query rewriter declined (an unsafe /
-:math:`\#P`-hard UCQ) whose *existence* is formed by a
-``SELECT DISTINCT`` or a ``GROUP BY``: ``probability_evaluate(provenance())``
-then returns the exact marginal with no method named:
+<safe-query-rewriting>`, the ``'boolean'`` provenance class, and then
+applies automatically to a UCQ the safe-query rewriter declined, whose
+*existence* is formed by a ``SELECT DISTINCT`` or a ``GROUP BY``:
 
 .. code-block:: postgresql
 
@@ -595,22 +465,14 @@ then returns the exact marginal with no method named:
     WHERE r.x = s.x AND s.y = t.y
     GROUP BY t.id;
 
-(The ``provsql.joint_width`` GUC, on by default, is only a debug switch
-to turn the route off and compare against the literal circuit.)
-
-A ``GROUP BY`` is compiled in a **single pass** over all its groups, so a
-query with many answer groups costs about as much as one.
-
-Because the bound is on the joint object, the route stays exact where
-every query-side method is inapplicable: over **correlated** inputs
-(:sqlfunc:`repair_key` blocks, view-derived provenance), the one cell of
-the :ref:`tractability table <tractable-cases>` that nothing else fills.
-When the joint width exceeds the supported cap, or the query shape is
-not recognised, the query is evaluated on its literal circuit by the
-general chooser; set ``provsql.verbose_level`` to confirm which route ran.
-
-:doc:`Case Study 7 <casestudy7>`, Step 9, walks a worked example over
-both independent and :sqlfunc:`repair_key`-correlated reviewing data.
+It is the only exact route over **correlated** inputs
+(:sqlfunc:`repair_key` blocks, view-derived provenance) in the
+:ref:`tractability table <tractable-cases>`.  When the joint width exceeds
+the supported cap or the query shape is not recognised, the query is
+evaluated on its ordinary circuit by the general chooser; set
+``provsql.verbose_level`` to confirm which route ran, or
+``provsql.joint_width`` off to disable the route.  :doc:`Case Study 7
+<casestudy7>`, Step 9, walks a worked example.
 
 .. _forcing-a-method:
 
@@ -746,16 +608,12 @@ Each method in detail:
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
 
 ``'possible-worlds-aggregates'``
-    The same enumeration, with the aggregates' values computed in each world
-    and a comparison read from the values it compares there.  The other
-    methods turn a comparison of aggregate results into one term per subset
-    of the rows it aggregates (the rank of a row among 21 candidates is
-    millions of gates, though those rows read a handful of input tuples).
-    So the chooser takes this method when a comparison aggregates more rows
-    than the circuit has input tuples, and at most 20 of them; below that,
-    the other methods are cheaper.  It is also the method for an aggregate
-    whose contributions are themselves aggregate results (an ``avg`` of a
-    ``count``, see :ref:`reaggregation`), whatever the counts:
+    The same enumeration, computing the aggregates' values in each world,
+    for comparisons of aggregate results (``HAVING``, the rank of a
+    ``LIMIT``).  The chooser takes it when a comparison aggregates more rows
+    than the circuit has input tuples, and these are at most 20, and for an
+    aggregate over aggregate results (an ``avg`` of a ``count``, see
+    :ref:`reaggregation`):
 
     .. code-block:: postgresql
 
@@ -1106,14 +964,8 @@ the general chooser.  ``provsql.mobius`` (on by default), the
 ``provsql.mobius_max_gates`` data-cost cap and the
 ``provsql.mobius_max_cnf`` query-cost cap control the route.
 
-**Self-joins.**  A query that repeats a relation is handled.  As in
-the dichotomy proof, atoms that pin a constant (``S(a,y)``) or repeat a
-variable (``S(x,x)``) are separated from the others; two remaining
-components over one relation (Dalvi & Suciu's
-:math:`q_J = R(x_1),S(x_1,y_1),T(x_2),S(x_2,y_2)`) are computed as
-:math:`P(c_1) + P(c_2) - P(c_1 \lor c_2)`.  A self-join carrying an
-inversion (``S(x,y),S(y,x)``) is outside every tractable class and is
-declined.
+**Self-joins** are handled, except a self-join carrying an inversion
+(``S(x,y),S(y,x)``), which is outside every tractable class.
 
 .. _having-shortcuts:
 

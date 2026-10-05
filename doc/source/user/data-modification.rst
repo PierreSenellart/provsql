@@ -87,13 +87,11 @@ table; pass its ``provsql`` token to :sqlfunc:`undo` to reverse its effect:
 Transactions
 -------------
 
-Each statement has an ``update`` gate of its own, and all statements of
-one transaction also share the **transaction's** gate
-(:sqlfunc:`transaction_token`): what a statement does to a row is recorded
-as ``times(transaction, statement)``.  In the ``update_provenance`` table,
-the ``tx_token`` column names the transaction's gate and the ``xid``
-column the PostgreSQL transaction id, and :sqlfunc:`undo` works at either
-granularity:
+The statements of one transaction share a **transaction** gate
+(:sqlfunc:`transaction_token`), logged in ``update_provenance`` with
+``query_type = 'TRANSACTION'`` (and no ``query`` text); the ``tx_token``
+column of each statement's row names it. :sqlfunc:`undo` reverses a
+single statement or a whole transaction:
 
 .. code-block:: sql
 
@@ -108,19 +106,10 @@ granularity:
     WHERE query_type = 'TRANSACTION'
     ORDER BY ts DESC LIMIT 1;
 
-A transaction's own row has no ``query`` text, so looking a statement up
-by its text finds the statement, not the transaction that carried it.
-The transaction's validity is the universal range, the identity of the
-temporal semiring.  When the transaction rolls back, nothing of it
-remains, log rows included.
-
-``ts`` and the start of ``valid_time`` are stamped **at commit**, not when
-the statement ran, so that recorded validity follows commit order.
-
-The two notions of undo remain distinct and consistent: PostgreSQL's
-``ROLLBACK`` removes a modification *and its record* -- the transaction
-never happened -- while :sqlfunc:`undo` appends a compensating ``update``
-gate and keeps the history: the modification happened and was reversed.
+``ts`` and the start of ``valid_time`` are the **commit** time. A
+transaction that rolls back leaves no trace, log rows included, whereas
+:sqlfunc:`undo` keeps the modification in the history and records its
+reversal.
 
 Limitations
 ------------
@@ -128,10 +117,7 @@ Limitations
 Update tracking is still experimental, both in the operations it
 supports and in performance.
 
-A deleted row is physically deleted and re-inserted with a ``monus``
-token.  Under ``READ COMMITTED``, a concurrent transaction blocked on the
-same row therefore finds, once the first commits, no version of the row
-visible to its snapshot: its own ``DELETE`` affects zero rows but is
-still logged, as an ``update`` gate that touches nothing.  Under
-``REPEATABLE READ`` it gets a serialization failure instead, as for any
-row rewritten under a concurrent reader.
+Under ``READ COMMITTED``, a ``DELETE`` blocked on a row that a concurrent
+transaction deletes affects zero rows once that transaction commits, but
+is still logged. Under ``REPEATABLE READ`` it gets a serialization
+failure instead.

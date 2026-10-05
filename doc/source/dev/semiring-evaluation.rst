@@ -218,7 +218,7 @@ in general, one without monus factors for a monotone comparison in a
 semiring that declares ``idempotent()``, or, for a ``MIN`` / ``MAX``
 comparison in a semiring that declares ``absorptive()`` (and
 ``mul_sub_left_distributive()`` for the non-existential ones), the
-single-scan closed form described in :doc:`aggregation`.  Each result
+single-scan closed form (see :doc:`aggregation`).  Each result
 is injected
 into the provenance mapping keyed by the ``cmp`` gate itself, so
 the main traversal reaches those gates with a pre-resolved value
@@ -242,19 +242,10 @@ general) should leave it at the default ``false`` and declare
 
 Override ``idempotent()`` to return ``true`` if
 :math:`a \oplus a = a` for all :math:`a` in a semiring that is *not*
-absorptive; the default forwards to ``absorptive()``, so absorptive
-semirings need not override it.  Why- and which-provenance do, citing
-``Why.idempotent`` / ``Which.idempotent``.  The ``HAVING`` evaluator
-uses it for the monotone comparisons, those preserved as a group
-grows (``MIN`` below and ``MAX`` above a constant, ``COUNT`` above
-one, ``SUM`` above one over non-negative values, ``bool_or = true``,
-``bool_and = false``): their valid worlds form a family closed under
-supersets, over which the monus factors cancel from the
-possible-world sum (Lean ``Having.witness_identity``, which assumes
-idempotence only), so each world contributes the plain product of
-its present annotations.  The enumeration itself stays exhaustive;
-absorptivity is what further prunes it to the minimal worlds (see
-:doc:`aggregation`).
+absorptive (the default forwards to ``absorptive()``).  The ``HAVING``
+evaluator then drops the monus factors of the possible-world sum for
+the monotone comparisons, those whose valid worlds are closed under
+supersets.
 
 Override ``mul_sub_left_distributive()`` to return ``true`` if
 :math:`\otimes` distributes over the monus on the left,
@@ -262,16 +253,10 @@ Override ``mul_sub_left_distributive()`` to return ``true`` if
 Together with absorptivity this licenses the single-scan closed form
 for every ``MIN`` / ``MAX`` comparison in ``HAVING`` (see
 :doc:`aggregation`), in place of the :math:`2^N` possible-worlds
-enumeration; absorptivity alone already licenses it for the
-existential comparisons (``MIN`` below, ``MAX`` above a constant),
-whose closed form has no monus.  It holds in the Boolean, counting, tropical, Viterbi,
-Łukasiewicz and interval-union semirings and fails in the security
-(min-max) semiring, which is absorptive but not distributive, and in
-why- / which- / how-provenance; each override cites the Lean lemma
-(``*.mul_sub_left_distributive``, or ``*.not_mul_sub_left_distributive``
-for the refusals) that settles it.  Like ``absorptive()``, the flag
-is fail-closed: a new semiring that leaves it at ``false`` merely
-keeps the enumeration.
+enumeration.  Like ``absorptive()`` and ``idempotent()``, the flag is
+fail-closed: a semiring that leaves it at ``false`` merely keeps the
+enumeration, and the overrides cite the Lean lemma that justifies
+them.
 
 Boolean-Rewrite Compatibility
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -424,25 +409,9 @@ semiring's declared properties select:
    * - none of these
      - refused
 
-The properties are virtual methods of :cfunc:`Semiring`:
-
-* ``selective()``: :math:`a \oplus b \in \{a, b\}`, the precondition,
-  with absorption, of Dijkstra's algorithm (``Boolean``, both tropical
-  semirings, ``Viterbi``, ``Lukasiewicz``, ``MinMax``);
-* ``exact_equality()`` and ``equal(a, b)``: whether equality of values
-  can be decided, by ``equal`` (``==`` by default, multirange equality
-  for ``IntervalUnion``); false for ``BoolExpr`` and ``Formula``;
-* ``has_star()`` and ``star(a)``: :math:`a^* = \mathbb{1} \oplus a
-  \oplus a^2 \oplus \cdots`.  The default iterates
-  :math:`s \leftarrow \mathbb{1} \oplus a \otimes s` for an idempotent
-  semiring with exact equality (why- and which-provenance, whose partial
-  sums are finitely many); ``Counting`` has an infinite count
-  (:math:`a^* = \infty` for :math:`a > 0`), refused when converted to an
-  integer result, and ``Tropical`` gives :math:`-\infty` for a cycle of
-  negative cost;
-* ``symbolic()``, ``symbolic_unknown()`` and ``define()``: a rendering
-  semiring names unknowns and records their equations instead of
-  solving them.
+The properties (``selective()``, ``exact_equality()`` / ``equal()``,
+``has_star()`` / ``star()``, ``symbolic()``) are virtual methods of
+:cfunc:`Semiring`, documented there.
 
 A system is solved once per evaluation, and
 :cfile:`provenance_evaluate_compiled.cpp` caches the solution of every

@@ -52,15 +52,9 @@ spent in the rewriter is logged.
 Before the planner hook, a ``post_parse_analyze_hook`` puts the
 ``provsql`` column that ``*`` expands to last in the target list of the
 user's ``SELECT`` (and of the query of a ``CREATE VIEW`` or ``CREATE
-TABLE AS``), where the rewriting puts the row's provenance.  ``CREATE
-VIEW`` never plans its query: it pairs its column list with the analysed
-target list, so this has to happen at parse analysis.  Parse analysis
-also resolves a position in ``ORDER BY`` to a target entry and keeps no
-trace of it; the hook re-reads the statement's text to find the positional
-keys and points them at the columns in the order shown.  It leaves alone
-the statements run from functions (ProvSQL's own triggers read
-``provsql`` from ``SELECT *`` over transition tables), an explicit
-``provsql``, and set operations.
+TABLE AS``), where the rewriting puts the row's provenance.  This has to
+happen at parse analysis because ``CREATE VIEW`` never plans its query:
+it pairs its column list with the analysed target list.
 
 
 Query-Time TID / BID Classifier
@@ -268,25 +262,14 @@ subsequent recursive processing can track provenance through them.
 Recursive CTEs (``UNION`` recursion, PostgreSQL 15 or later) are handled
 by ``lower_recursive_cte`` (inside :cfunc:`inline_ctes`), in every
 provenance class, through ``eval_recursive_system``, which records the
-recursion as one equation per derived row:
-
-1. the rows are computed by PostgreSQL's own recursion, with provenance
-   tracking off;
-2. each row is given a fresh unknown (a ``gate_fixvar``) as its token;
-3. the CTE body is run once over these rows through ProvSQL's own
-   rewriting, which gives each row the right-hand side of its equation
-   (the recursive join's ``times``, the untracked base branch's
-   ``gate_one``, the ``UNION``'s ``plus`` merge);
-4. ``resolve_fix_system`` (:cfile:`fix_system.cpp`) walks the strongly
-   connected components of the equations' dependency graph in solving
-   order: a row derived through no cycle gets its right-hand side
-   rebuilt over the tokens of the rows it reads, with the rewriter's own
-   gate builders, so that its token is the content-addressed circuit a
-   fixpoint iteration would reach; the rows of a cycle get a
-   ``gate_fixpoint`` each, over a ``gate_fixsystem`` of their own.
-
-The rows' values on a cycle are left to the evaluating semiring (see
-:doc:`semiring-evaluation`).  Under ``'boolean'`` or ``'absorptive'``,
+recursion as one equation per derived row: PostgreSQL's own recursion
+computes the rows, each gets a fresh unknown as its token, and one run
+of the CTE body through ProvSQL's rewriting gives each row the
+right-hand side of its equation.  :cfile:`fix_system.cpp` then solves
+the system by strongly connected components: a row derived through no
+cycle gets the ordinary circuit of its derivations, the rows of a cycle
+get ``gate_fixpoint`` gates whose values are left to the evaluating
+semiring (see :doc:`semiring-evaluation`).  Under ``'boolean'`` or ``'absorptive'``,
 recognised reachability shapes are driven through the bounded-treewidth
 compiler instead (see :ref:`recursive-lowering` below).  A ``UNION ALL``
 recursion has its own driver, ``eval_recursive_all``, one round per bag of
@@ -313,34 +296,18 @@ constructed ``UNION`` / ``EXCEPT`` subqueries are processed by the
 recursive passes.
 
 Then :cfunc:`lower_limit_to_rank` turns an ``ORDER BY … LIMIT`` /
-``OFFSET`` into the filter of a rank, when :cfunc:`limit_lowerable`
-accepts it (no ``plain()`` marker, sort keys whose values are the same
-in every world, a query that keeps its input rows): the query, without
-its ``LIMIT``, becomes the subquery of
-
-.. code-block:: text
-
-   SELECT … FROM (SELECT …, row_number() OVER (ORDER BY …) AS rank
-                  FROM (q) limited_rows) limited
-   WHERE rank > m AND rank <= m + k ORDER BY …
-
-with ``rank()`` for ``WITH TIES``.  The window rewriting then tracks the
-rank (see :doc:`aggregation`), and the comparison on it, a column of the
-subquery, goes into each row's annotation.  The rank is computed one
-level above the query, over its rows with their provenance: a ``WHERE``
-of the query on an uncertain value (a comparison on an aggregate of a
-subquery, on a window value) only goes into that provenance, and a rank
-in the query itself would count the rows it rejects.  The query exposes the
-output columns and the sort keys; the target entries that read
-``provenance()`` move to the enclosing query, where the provenance of a
-row includes the comparison, and correlated references go one level
-down.  This runs before Step 2, since the rewriting restarts on the
-enclosing query, whose target list is the user's; and without the
-inversion-free markers of the query, whose rows are no longer products
-of inputs.  A ``LIMIT`` it leaves alone stays a truncation of the actual
-result, reported by a warning below the top level of the statement
+``OFFSET`` into the filter of a rank, when :cfunc:`limit_lowerable` accepts
+it; the window
+rewriting then tracks the rank (see :doc:`aggregation`), and the
+comparison on it goes into each row's annotation.  The rank is computed
+one level above the query, over its rows with their provenance, because a ``WHERE``
+on an uncertain value only goes into that provenance, and a rank in the
+query itself would count the rows it rejects.  This runs before Step 2,
+since the rewriting restarts on the enclosing query.  A ``LIMIT`` it
+leaves alone stays a truncation of the actual result, reported by a
+warning below the top level of the statement
 (:cfunc:`nested_limit_on_provenance`), and at the top level when it has
-an ``ORDER BY`` and no ``plain()`` marker (``top_limit_is_truncation``).
+an ``ORDER BY`` and no ``plain()`` marker.
 
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -366,25 +333,15 @@ non-``ALL`` top node handled by a wrapper.
   operation in a new outer query with ``GROUP BY`` on all columns.
   This implements duplicate elimination as provenance addition (⊕).
   The ``ORDER BY`` / ``LIMIT`` / ``OFFSET`` of the statement move to
-  the wrapper, since they apply to the deduplicated result (their
-  sort references are remapped onto the wrapper's renumbered target
-  list).  Every ``UNION`` below a non-``ALL`` ``UNION`` is made
-  ``ALL``: the one ``GROUP BY`` merges the whole subtree, and ⊕ is
-  associative.  The function then re-enters :cfunc:`process_query`
-  on the wrapper.
+  the wrapper, and every ``UNION`` below it is made ``ALL`` (the one
+  ``GROUP BY`` merges the whole subtree).  The function then
+  re-enters :cfunc:`process_query` on the wrapper.
 
 - **Nested set operations**: once the top node is ``ALL``,
   :cfunc:`nest_set_operations` replaces every subtree that does not
-  fit the level -- a non-``ALL`` ``UNION`` or an ``EXCEPT`` under a
-  ``UNION ALL``, any set operation under an ``EXCEPT`` -- by a leaf:
-  a subquery built as the parser would build a parenthesised set
-  operation (``Var`` target list on the leftmost leaf, typed by the
-  node's column descriptions).  The recursion into subqueries then
-  rewrites it at its own level, wrapper included.  This is the
-  rewriting a user would do by hand by moving the inner set operation
-  to a ``FROM`` subquery; without it, a ``UNION`` under a
-  ``UNION ALL`` would lose its deduplication.  The range table is
-  rebuilt to hold exactly the remaining leaves.
+  fit the level by a subquery leaf, which the recursion into
+  subqueries rewrites at its own level -- what a user would do by hand
+  by moving the inner set operation to a ``FROM`` subquery.
 
 - ``UNION ALL``: each branch is processed independently.
   :cfunc:`process_set_operation_union` validates the pure-``UNION``
@@ -397,19 +354,15 @@ non-``ALL`` top node handled by a wrapper.
 - **Difference**: :cfunc:`transform_except_into_join` rewrites the
   internal node ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a
   ``provenance_monus`` (⊖) gate, plus a filter removing
-  zero-provenance tuples.  Beforehand,
-  ``group_set_difference_right_arm`` wraps the right operand in a
-  ``GROUP BY`` on all its columns, so that a left tuple meets a single
-  right row whose token is the ⊕ of the equal right tuples: α ⊖ ⊕β, and
-  not one ⊖ per matching right tuple.  This node is the multiset difference of the
-  algebra (each left tuple loses the ⊕ of the equal right tuples, the
-  ``NOT IN`` reading), which is *not* SQL's ``EXCEPT ALL``: the rows
-  differ as soon as the left operand has duplicates.  It only arises
-  from the rewriting itself -- the wrapper of a non-``ALL`` ``EXCEPT``,
-  outer-join lowering, the uncorrelated antijoin.  An ``EXCEPT ALL``
-  written by the user over tracked relations is refused by
-  :cfunc:`refuse_except_all`, which runs in the planner hook on the
-  statement as written, before any of those nodes exist.
+  zero-provenance tuples; ``group_set_difference_right_arm`` first
+  groups the right operand so that each left tuple gets α ⊖ ⊕β.  This
+  node is the multiset difference of the algebra (the ``NOT IN``
+  reading), which is *not* SQL's ``EXCEPT ALL`` when the left operand
+  has duplicates.  It only arises from the rewriting itself (the
+  wrapper of a non-``ALL`` ``EXCEPT``, outer-join lowering, the
+  uncorrelated antijoin); a user-written ``EXCEPT ALL`` over tracked
+  relations is refused by :cfunc:`refuse_except_all` on the statement
+  as written.
 
 - ``INTERSECT`` is not supported (raises an error).
 

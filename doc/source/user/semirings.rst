@@ -223,10 +223,9 @@ Over a recursive query on a cyclic graph, the min cost is that of the
 cheapest path, and ``-Infinity`` for a vertex reached through a cycle of
 negative cost.  With the optional third argument ``nonnegative => true``,
 input costs are checked nonnegative and the semiring becomes *absorptive*
-(:math:`\min(0, a) = 0` for :math:`a \ge 0`), which a recursion on a
-cyclic graph evaluates faster, by Dijkstra's algorithm; evaluation then
-also accepts circuits carrying the ``'absorptive'`` assumption marker
-(see :ref:`provsql-provenance-class`):
+(:math:`\min(0, a) = 0` for :math:`a \ge 0`): a recursion on a cyclic
+graph then evaluates faster, and circuits carrying the ``'absorptive'``
+assumption marker are accepted (see :ref:`provsql-provenance-class`):
 
 .. code-block:: postgresql
 
@@ -239,24 +238,10 @@ also accepts circuits carrying the ``'absorptive'`` assumption marker
                              nonnegative => true) AS min_cost
     FROM reach;
 
-Under ``provsql.provenance = 'absorptive'``, on bounded-treewidth data,
-the query compiles into
-a circuit of linear total size, which min-plus evaluation, like any
-absorptive-semiring evaluation, reads exactly in time linear in the
-circuit (see :doc:`probabilities`).
-Single-source shortest distances over thousands of
-probabilistic edges, hop-bounded variants (the min cost of reaching a
-vertex within :math:`k` hops), per-region minima (through a
-``GROUP BY`` over a joined member relation) and **exact directed
-Steiner costs** -- the cheapest subgraph covering :math:`k` terminals
-at once, through a self-join of the reachability CTE -- all stay on
-this route.
-The same holds for every absorptive semiring on this page:
-:sqlfunc:`sr_viterbi` gives the most reliable path,
-:sqlfunc:`sr_maxmin` the widest path, :sqlfunc:`sr_lukasiewicz` the
-best fuzzy path, and :sqlfunc:`sr_temporal` the exact set of instants
-at which a vertex is reachable from edges carrying validity
-multiranges (see :doc:`temporal`).
+Under ``provsql.provenance = 'absorptive'`` on bounded-treewidth data,
+this evaluation, like that of every absorptive semiring on this page,
+is linear in the data, including hop-bounded variants, per-group minima
+and directed Steiner costs; see :ref:`network-reliability-btw`.
 
 Viterbi Semiring (m-semiring)
 ------------------------------

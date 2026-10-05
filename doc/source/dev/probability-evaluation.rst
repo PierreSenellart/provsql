@@ -485,10 +485,9 @@ all three, plus a genuinely read-once circuit, report ``independent``.
 Circuit production (planner) and evaluation (here) are separate steps, so
 the *circuit* is the channel between them -- the same one ``mobius`` uses
 (a dedicated gate type) and ``inversion-free`` uses (a certificate in the
-root's ``extra``).  Each route marks the root it produces, on a gate the
-route owns rather than on the root itself: a materialised root is addressed
-by its shape, which another route or the ordinary rewriting may build too,
-and a gate records only what follows from its address.
+root's ``extra``).  Each route marks the root it produces on a gate the
+route owns, not on the root itself, since a materialised root is addressed
+by its shape and another route may build it too.
 
 .. list-table::
    :header-rows: 1
@@ -509,12 +508,8 @@ and a gate records only what follows from its address.
    * - ``reachability``
      - ``info1`` of the ``'absorptive'`` ``gate_assumed`` wrapper
        (``wrapAssumedAbsorptive``), and ``info2`` of the
-       ``plus-canonical`` dedup alias.  Again the assumption kind is not
-       enough: the truncated-fixpoint path mints ``'absorptive'`` wrappers
-       too.
-
-Circuits stored by earlier versions carry ``bounded-jw`` as a tag in
-``info2`` of the root itself; ``rootRoute()`` still reads it there.
+       ``plus-canonical`` dedup alias.  Again the assumption kind alone is
+       not enough.
 
 ``rootRoute()`` in :cfile:`probability_evaluate.cpp` reads the mark back
 (walking down the transparent ``gate_annotation`` wrappers above a route's
@@ -693,14 +688,10 @@ The chain (in order) :
   COUNT).  The DP
   dispatches on the smaller side of ``C`` (lower tail directly,
   or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
-  C))`` total cost per cmp.  Two cmps on the same COUNT, which the
-  ``ref_count(gate_agg) == 1`` condition refuses, are resolved together
-  when their only parent is one ``times`` gate (``count > m AND count <=
-  m + k``, the two comparisons of an ``OFFSET m LIMIT k`` on a rank):
-  their conjunction is the event that the count lies in the intersection
-  of their intervals, a single Poisson-binomial range of cost
-  ``O(N x hi)``; the first cmp becomes that Bernoulli, the second
-  ``gate_one``.  See ``src/CountCmpEvaluator.{h,cpp}``.
+  C))`` total cost per cmp.  Two cmps on the same COUNT conjoined
+  under one ``times`` gate (the ``OFFSET m LIMIT k`` of a rank) are
+  resolved together as one Poisson-binomial range.  See
+  ``src/CountCmpEvaluator.{h,cpp}``.
 - :cfunc:`runMinMaxCmpEvaluator` (same gate
   ``provsql.cmp_probability_evaluation``) : recognises HAVING
   ``gate_cmp(gate_agg(MIN|MAX, semimod children), gate_value(C))`` and
@@ -732,14 +723,10 @@ The chain (in order) :
   the COUNT / MIN-MAX evaluators (shared ``CmpEvaluatorCommon``).  See
   ``src/SumCmpEvaluator.{h,cpp}``.
 - The shape these three evaluators match (``matchAggCmp``) admits
-  constant arithmetic on the aggregate, ``agg + c``, ``c + agg``,
-  ``agg - c``, ``c - agg`` and ``-agg``, folded into the comparator and
-  the threshold.  That arithmetic reaches the comparison when the
-  aggregate is computed in a subquery and compared in the enclosing
-  query, where the rewriter cannot fold it: the rank of a window function
-  is one plus a count, and ``rk <= 3`` compares ``count + 1`` with 3.
-  The peeled ``gate_arith`` gates are subject to the same condition as
-  the ``gate_agg``, ``ref_count == 1`` (``aggPrivateToCmp``).
+  constant arithmetic on the aggregate (``agg + c``, ``c - agg``, ``-agg``…),
+  folded into the comparator and the threshold: it reaches the
+  comparison when the aggregate is compared in an enclosing query, e.g.,
+  a window rank, one plus a count.
 - :cfunc:`runAggMarginalEvaluator` (same gate
   ``provsql.cmp_probability_evaluation``) : the hierarchical
   marginal-vector engine for the safe join shapes the flat COUNT /
@@ -1521,12 +1508,8 @@ Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
    whether or not the analysis ran.
 
    Neither is built for a query whose rows are products of distinct
-   inputs -- nothing merges or subtracts rows at any level, and no
-   relation occurs twice
-   (:cfunc:`rows_are_products_of_distinct_inputs`): ``'independent'``,
-   which precedes ``'inversion-free'`` in the default chain, always
-   applies to such rows, and the markers cost one gate and one key per
-   input per output row at query time.
+   inputs (:cfunc:`rows_are_products_of_distinct_inputs`), to which
+   ``'independent'``, earlier in the default chain, always applies.
 
 Structured d-DNNF builder (``src/StructuredDNNF.{h,cpp}``)
    :cfunc:`StructuredDNNFBuilder` compiles the monotone lineage top-down

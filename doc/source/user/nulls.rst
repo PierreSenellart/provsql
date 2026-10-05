@@ -87,26 +87,18 @@ fully supported across possible worlds: ``sum(b) IS NULL`` holds in
 exactly the worlds where the group exists but no non-NULL-valued row is
 present.
 
-The test also reads an *expression* over aggregates, not only an
-aggregate: a ``CASE``, and what becomes one (``GREATEST`` / ``LEAST``,
-``COALESCE``, ``NULLIF``), is NULL exactly where the arm it selects in
-that world is, and arithmetic over aggregates is strict, NULL where one
-of its operands is. So ``HAVING GREATEST(sum(b), min(b)) IS NULL``
-holds in the worlds where the group has rows but none with a value, and
-``HAVING COALESCE(sum(b), 0) IS NULL`` in none. A comparison over such
-an expression -- ``HAVING GREATEST(sum(b), 2) > 5`` -- is read as well,
-by a different route: see
+The same holds for an expression over aggregates (``CASE``,
+``GREATEST`` / ``LEAST``, ``COALESCE``, ``NULLIF``, arithmetic): ``HAVING
+GREATEST(sum(b), min(b)) IS NULL`` holds in the worlds where the group has
+rows but none with a value. For a comparison over such an expression, see
 :ref:`what a guarded selection carries <case-over-aggregates>`.
 
 **Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked relations gives
 its NULL-padded rows the provenance of the absence of a match (a monus).
-This covers chains of outer joins, outer joins mixed with inner joins and
-outer joins beside other ``FROM`` items. An outer join whose null-padded
-side is entirely *untracked* is also fine: which rows are padded is then
-deterministic. An outer join with a tracked relation on a null-padded
-side is refused with an explicit error in a query with a ``LATERAL``
-item, or when a column merged by ``USING`` / ``NATURAL`` is read through
-the join.
+An outer join whose null-padded side is entirely *untracked* is also
+fine. An outer join with a tracked relation on a null-padded side is
+refused in a query with a ``LATERAL`` item, or when a column merged by
+``USING`` / ``NATURAL`` is read through the join.
 
 **Comparisons on NULL random variables.** A comparison involving a NULL
 ``random_variable`` -- a NULL constant or a NULL cell -- is unknown in
@@ -119,16 +111,11 @@ Zero-Annotated Rows May Stay Visible
 
 A row whose annotation is the semiring zero is equivalent to an absent
 row, and ProvSQL does not always filter such rows out: queries may return
-rows that vanilla SQL does not, whose annotation evaluates to zero. Typical examples are the antijoin arm of
-a difference (a row removed *on this instance* but present in worlds
-where its remover is absent -- exactly what makes its probability
-meaningful) and ``HAVING`` groups that fail the predicate on this
-instance but pass it in other worlds. Deciding whether an annotation is
-zero requires evaluating it, in a given semiring. ProvSQL does leave out
-some rows it can tell to be zero at no cost, such as a ``HAVING`` group
-asked for ``count(*) >= 3`` over two rows, or for ``sum(x) > 10`` over
-values that add up to 8; which zero rows are left out and which stay
-visible is not something to rely on.
+rows that vanilla SQL does not, whose annotation evaluates to zero, such as
+the antijoin arm of a difference (a row removed *on this instance* but
+present in worlds where its remover is absent) and ``HAVING`` groups that
+fail the predicate on this instance but pass it in other worlds. Which
+zero rows stay visible is not something to rely on.
 
 When the vanilla result set is wanted, filter explicitly with
 :sqlfunc:`present`:
