@@ -184,6 +184,10 @@ HAVING
     GROUP BY dept
     HAVING COUNT(*) > 2;
 
+A group is not filtered on the current data: one that fails the predicate
+may still appear in the result, with a provenance that evaluates to zero
+where the predicate fails.
+
 ``HAVING`` clauses whose outcome is a deterministic scalar are also
 supported, including conditions that wrap a ``random_variable``
 aggregate in a moment function such as

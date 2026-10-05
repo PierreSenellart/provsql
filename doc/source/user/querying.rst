@@ -42,104 +42,28 @@ Supported SQL Features
 
 The following SQL constructs are supported with full provenance tracking:
 
-* ``SELECT … FROM … WHERE`` (conjunctive queries, multiset semantics)
-* ``JOIN`` (inner joins, outer joins, natural joins)
-* ``LATERAL`` subqueries
-* Non-recursive CTEs (``WITH`` clauses).  A data-modifying CTE
-  (``INSERT`` / ``UPDATE`` / ``DELETE … RETURNING``) runs once, not
-  tracked, and the rows it returns carry no provenance; it may not
-  read another CTE over provenance-tracked relations
-* Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) or
-  ``UNION ALL`` (bag semantics) over
-  provenance-tracked relations, on PostgreSQL 15+: the result carries
-  provenance like any other query (e.g., the provenance of s--t
-  reachability is the disjunction over the s--t paths).  A row derived
-  through no cycle of the data has the ordinary provenance of its
-  derivations, in every semiring.  A row derived through a cycle has
-  infinitely many derivations: its provenance is recorded as equations
-  between the rows of the cycle, and the semiring evaluating it decides its
-  value.  Absorptive semirings (probability, Boolean, nonnegative tropical,
-  Viterbi, temporal, …) give it, as do min-plus with arbitrary costs
-  (``-Infinity`` downstream of a cycle of negative cost) and why- and
-  which-provenance; counting refuses it with an integer mapping (the count
-  is infinite), and so does how-provenance.  :sqlfunc:`sr_formula` prints the
-  equations::
-
-    x₂ where x₁ = a ⊗ x₂, x₂ = 𝟙 ⊕ (c ⊗ x₃), x₃ = b ⊗ x₁
-
-  Where-provenance of a row derived through a cycle is not supported.
-  ``SELECT *`` over a tracked relation in the terms gives the answer the
-  columns written out give.  A term that reads the ``provsql`` column of the
-  CTE itself (the token of a row derived so far, as data) is refused.  Since
-  ``*`` includes the ``provsql`` column, ``SELECT 'x', *`` in a ``UNION`` arm
-  fails in PostgreSQL itself.
-
-  ``UNION ALL`` is the *bag* recursion, read as SQL reads it: each round
-  applies the recursive term to the previous round only, the answer is the
-  rows of every round together, and the recursion ends on a round that
-  derives nothing. Each row is then one derivation, annotated by the
-  conjunction along it, and two derivations of the same tuple are two rows,
-  where ``UNION`` returns one row annotated with their disjunction. Over the
-  two paths ``1→2→4`` and ``1→3→4``, each edge present with probability one
-  half, ``UNION ALL`` gives the row ``4`` twice, at 0.25 each, and ``UNION``
-  gives it once, at 0.4375. A ``UNION ALL`` recursion that does not end (over
-  cyclic data, as in plain SQL) stops at an iteration bound with an error
-* Subqueries in the ``FROM`` clause (including deeply nested)
-* Subqueries outside ``FROM`` (``EXISTS``/``NOT EXISTS``,
-  ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
-  ``<> ALL``, scalar subqueries, ``ARRAY(SELECT …)``), correlated or
-  not.  The subquery body may involve a single provenance-tracked relation, or an inner
-  join of several, written with ``JOIN`` or as a comma-separated
-  ``FROM`` list; e.g., ``NOT IN``
-  over a joined body carries the same antijoin provenance as the
-  equivalent ``EXCEPT``. A row comparison against a subquery is supported in
-  both spellings, ``(a, b) NOT IN (…)`` and ``(a, b) <> ALL (…)``, which are
-  the same condition and get the same provenance; an *ordering* row comparison
-  (``(a, b) < ANY (…)``) is not.  An aggregate body can be compared against a
-  constant or an outer column, including through ``IN``/``NOT IN``
-  (the single-row aggregate body makes these scalar comparisons).
-  The body of a membership test (``IN``, ``= ANY``) may be a set operation.
-  A correlated one is read through its arms where the condition splits into
-  conditions on them: ``NOT EXISTS`` over a ``UNION``, ``IN`` over an
-  ``INTERSECT`` or an ``EXCEPT``, and ``NOT EXISTS`` over an ``EXCEPT``
-  (every row of the first arm is one of the second).
-  A block that reads tracked relations only through its subqueries (a
-  ``FROM``-less ``SELECT`` whose condition is an ``EXISTS``, a constant or
-  untracked left side filtered by a ``NOT EXISTS``, untracked tables whose
-  ``WHERE`` tests tracked ones) is tracked as well: the rows of the untracked
-  side count as present in every world, and the answer carries the
-  provenance of the semijoin or the antijoin. Where this
-  is not possible, ProvSQL does not track the block and emits a warning.
-  A subquery condition need not be a conjunct of the ``WHERE`` clause: in
-  ``WHERE name = 'NY' OR EXISTS (…)``, a row licensed by the other disjunct
-  keeps its own provenance and one licensed only by the subquery gets the
-  semijoin's. Such a combination may hold only one subquery condition
-* ``EXISTS (…)`` in the ``SELECT`` list, as a Boolean *value*: the row
-  gives two rows, one per truth value (see :ref:`explode-agg-value`), the
-  true one annotated with the semijoin's provenance and the false one with
-  the antijoin's. ``NOT EXISTS`` exchanges them, and an expression over the
-  value (``CASE WHEN EXISTS (…) THEN …``) follows. ``x IN (…)`` as a value
-  is not supported: SQL makes it unknown where no row matches and some
-  comparison is unknown, which ProvSQL cannot tell from false
+* ``SELECT … FROM … WHERE``, with multiset semantics
+* Joins: inner, outer and natural joins, ``LATERAL`` subqueries
+* Subqueries in ``FROM``, and outside it (``EXISTS``, ``IN``, quantified
+  comparisons such as ``= ANY``, scalar subqueries, ``ARRAY(SELECT …)``),
+  correlated or not (see :ref:`subqueries`)
+* ``WITH`` clauses, and ``WITH RECURSIVE`` on PostgreSQL 15+ (see
+  :ref:`recursive-queries`)
 * ``GROUP BY``, with ``GROUPING SETS``, ``ROLLUP`` and ``CUBE``
-* ``SELECT DISTINCT`` (set semantics), and ``DISTINCT ON``, read as
-  a ``LIMIT 1`` in each group (see :ref:`limit`)
-* ``UNION`` and ``UNION ALL``
-* ``EXCEPT``
-* ``INTERSECT`` (set semantics): each row has the provenance of its
-  copies on the left, ⊕-combined, times that of its copies on the right
-* ``VALUES`` tables (treated as having no provenance)
 * Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``,
-  ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
-* ``HAVING`` (a group is not filtered on the current data: one that
-  fails the predicate may still appear in the result, with a provenance
-  that evaluates to zero where the predicate fails; a group that can
-  pass in no possible world may be left out)
-* ``FILTER`` clause on aggregates; on an ``AGG(DISTINCT …)`` it asks for an
-  aggregate that skips NULL inputs, so ``array_agg(DISTINCT …) FILTER (…)``
-  and the ``json_agg`` family are refused there
-* ``INSERT … SELECT`` (provenance propagated when target table is
-  provenance-tracked)
+  ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``, …), ``FILTER``
+  and ``HAVING`` (see :doc:`aggregation`)
+* Window functions: aggregates over a frame determined by values, ``rank``,
+  ``dense_rank``, ``row_number``, ``ntile``, ``percent_rank``,
+  ``cume_dist`` (see :ref:`window-aggregates`)
+* ``SELECT DISTINCT`` and ``DISTINCT ON``
+* ``ORDER BY … LIMIT`` / ``FETCH`` / ``OFFSET`` (see :ref:`limit`)
+* ``UNION``, ``UNION ALL``, ``EXCEPT``, ``INTERSECT``
+* ``VALUES`` tables, whose rows have no provenance
+* ``EXISTS (…)`` in the ``SELECT`` list, as a Boolean value (see
+  :ref:`explode-agg-value`)
+* ``CREATE TABLE … AS``, ``CREATE MATERIALIZED VIEW`` and
+  ``INSERT … SELECT`` (see below)
 
 All of these follow SQL's semantics for NULL values (three-valued
 logic in predicates, syntactic matching in set operations and
@@ -149,122 +73,89 @@ grouping, NULL-skipping aggregates); :doc:`the chapter on NULLs
 Unsupported SQL Features
 -------------------------
 
-The following constructs are **not** currently supported; queries using them
-either raise an error or have a part whose provenance is not tracked, with a
-warning.
-A query ProvSQL refuses raises an error with SQLSTATE ``0A000``
-(``feature_not_supported``), which a client can tell from an internal
-error (``XX000``). Its message names the cause for a reader, and its
-``DETAIL`` line for a program:
+A query using one of the constructs below is refused with SQLSTATE
+``0A000`` (``feature_not_supported``); where only part of a query cannot
+be tracked, it runs with a warning instead (see :ref:`plain-sql`). Both
+name their cause on a ``DETAIL`` line, which tools can rely on:
 
 .. code-block:: text
 
-    ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported
-            here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose
-            rows the decorrelation cannot group
     DETAIL:  provsql-reason: body-set-operation; scope: gap
 
-The ``provsql-reason`` tag stays stable while the message may be
-reworded, so a tool surveying what ProvSQL covers can group refusals by it.
-For an aggregate result read as a plain value
-(``aggregate-read-as-plain-value``), the ``DETAIL`` line also names what
-read it: ``reader:`` followed by one or more of ``function``, ``cast``,
-``operator``, ``comparison``, ``comparison-of-aggregates``, ``in-list``,
-``conditional``, ``boolean``, ``constructor`` (an array, a row, an XML
-element), ``window`` and ``aggregate``. The ``scope`` says what kind of
-limit it is:
+The scope is ``deliberate`` when the construct has no provenance to give
+(``EXCEPT ALL``, a ``LIMIT`` without ``ORDER BY``), ``gap`` when ProvSQL
+does not compute it yet, and ``out-of-scope`` for what lies outside the
+supported query fragment (random variables, where-provenance,
+conditioning).
 
-``deliberate``
-    the shape has no provenance to give, so the refusal, or the warning
-    naming the part not tracked, is the answer, and will remain so:
-
-    * ``EXCEPT ALL`` and ``INTERSECT ALL``, whose kept copies have no
-      provenance of their own;
-    * ``IN`` read as a value, whose unknown truth no count of matches tells
-      from false;
-    * a ``LIMIT`` with no ``ORDER BY``, since SQL leaves open which rows are
-      kept, and a ``LIMIT plain(k)``, which asks for the cut of the actual
-      result; an ``ORDER BY … LIMIT`` that ProvSQL does not read in
-      every world is reported as a ``gap``;
-    * a window function whose value is read at an offset other than one
-      (``lag(x, 3)``, ``nth_value(x, 2)``), or an aggregate over a ``ROWS`` or
-      ``GROUPS`` frame with an offset, both decided by which rows are present;
-      the offset functions at offset one (``lag(x)``, ``first_value``, …),
-      which are not tracked, are reported as a ``gap``;
-    * a recursion outside the shape the fixpoint is defined for.
-
-``gap``
-    the query has a provenance, which ProvSQL does not compute yet.
-
-``out-of-scope``
-    the feature is outside the provenance of the supported query fragment:
-    random variables and continuous distributions, where-provenance,
-    conditioning, and ProvSQL's own functions, such as a ``provenance()``
-    call in an expression.
-
-A warning that names a part whose provenance is not tracked (see :ref:`plain-sql`)
-carries the same fields, whatever :ref:`provsql.implicit_freeze
-<provsql-implicit-freeze>` does with it.
-
-The constructs themselves:
-
-* **Subqueries outside FROM** whose body uses an outer join
-  (``LEFT`` / ``RIGHT`` / ``FULL``; inner joins, in any syntax, are
-  fine) or ``LIMIT``/``OFFSET`` (it would pick
-  an order-dependent subset); also, when an *uncorrelated* body with
-  no ``WHERE`` clause is compared against an outer column, only
-  non-star aggregate bodies are supported (``max(x)``, ``count(x)``,
-  …, including via ``IN``/``NOT IN``) -- a plain value body or
-  ``count(*)`` in that position is not.  A scalar subquery nested in a
-  larger expression (``1 + (SELECT …)``, an argument of a function such
-  as ``generate_series(1, (SELECT n FROM t))``) is not tracked, and
-  ProvSQL emits a ``WARNING``
-* **Recursive CTEs** (``WITH RECURSIVE``) on PostgreSQL versions before 15
-* ``EXCEPT ALL`` over provenance-tracked relations: SQL removes as many
-  copies of a row as the right-hand side has, without saying which, so
-  the copies it keeps have no provenance of their own. Use ``EXCEPT``,
-  which returns the same rows whenever the left-hand side has no
-  duplicates, or ``NOT IN`` / ``NOT EXISTS``; likewise ``INTERSECT
-  ALL``, which keeps as many copies as the side with fewer has: use
-  ``INTERSECT``, or ``IN`` / ``EXISTS``
-* **Outer joins with a provenance-tracked relation on a null-padded
-  side** beside a ``LATERAL`` item that reads a row of the join itself
-  (a ``LATERAL`` over constants, or over another item of the same
-  ``FROM``, is fine), or whose ``USING`` /
-  ``NATURAL`` merged column is read (see
-  :doc:`the chapter on NULLs <nulls>`): refused with an explicit error;
-  an outer join whose null-padded side is untracked is fine
-* ``DISTINCT ON`` over an aggregation, a set operation, or keys or an
-  order on values that vary between worlds
-* **Operations on the value of an aggregate whose values are not read off
-  its contributions:** grouping by, deduplicating on or uniting on the
-  value of an aggregate other than a ``count``, a ``min``, a ``max`` or a
-  :sqlfunc:`choose`, which are exploded into one row per value they take
-  (see :ref:`explode-agg-value`), in every arm of a set operation; and an
-  aggregate of them that reads one in its ``FILTER``, its ``ORDER BY`` or
-  its ``DISTINCT``, or whose inner value is not numeric (an aggregate of
-  another kind is tracked per possible world, see :ref:`reaggregation`)
-* `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  other than aggregates over a frame determined by values, the ranks
-  ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER``, and ``CUME_DIST``,
-  ``PERCENT_RANK``, ``NTILE`` (see :ref:`window-aggregates`): ``LAG``,
-  ``LEAD``, ``FIRST_VALUE``, ``ROWS`` frames with an offset, etc. The query still executes, with a
-  ``WARNING``, and each output row carries the provenance of its input
-  row, but the window value is an opaque scalar
-* ``*`` **over a provenance-tracked table where the number of columns has
-  to match:** ``*`` counts the ``provsql`` column, so PostgreSQL rejects an
-  arm of ``UNION``, ``INTERSECT`` or ``EXCEPT`` whose other arm does not
-  have that column (``each UNION query must have the same number of
-  columns``), and an ``INSERT INTO t SELECT * …`` into a table that is not
-  tracked (``INSERT has more expressions than target columns``). These are
-  errors of PostgreSQL (SQLSTATE ``42601``), raised before ProvSQL sees the
-  query; ProvSQL adds a ``HINT`` to them. List the columns instead of
-  writing ``*``. Two arms that both read ``*`` from tracked tables are fine
+* Subqueries outside ``FROM`` whose body uses an outer join or
+  ``LIMIT`` / ``OFFSET``; a scalar subquery nested in a larger expression
+  (``1 + (SELECT …)``), which runs untracked with a warning
+* Recursive CTEs before PostgreSQL 15, and where-provenance through a cycle
+* ``EXCEPT ALL`` and ``INTERSECT ALL`` over tracked relations: use
+  ``EXCEPT`` or ``INTERSECT``, or ``NOT IN`` / ``IN``
+* An outer join with a tracked relation on its null-padded side, beside a
+  ``LATERAL`` item that reads a row of the join, or whose ``USING`` /
+  ``NATURAL`` merged column is read (see :doc:`nulls`)
+* ``DISTINCT ON`` over an aggregation, a set operation, or keys that vary
+  between possible worlds
+* Grouping by, deduplicating on or uniting on the value of an aggregate
+  other than ``count``, ``min``, ``max`` and :sqlfunc:`choose` (see
+  :ref:`explode-agg-value`)
+* Window functions other than those listed above (``lag``, ``lead``,
+  ``first_value``, ``ROWS`` frames with an offset, …): the query runs with
+  a warning, the window value untracked
+* A data-modifying ``WITH`` (``INSERT`` / ``UPDATE`` / ``DELETE …
+  RETURNING``), which runs once, untracked
+* ``x IN (…)`` used as a value rather than as a condition, and an ordering
+  row comparison against a subquery (``(a, b) < ANY (…)``)
+* ``FILTER`` on ``array_agg(DISTINCT …)`` and on the ``json_agg`` family
+  with ``DISTINCT``
+* ``*`` over a tracked table where the number of columns must match (an
+  arm of a set operation, ``INSERT INTO t SELECT *`` into an untracked
+  table): ``*`` includes the ``provsql`` column, so PostgreSQL rejects the
+  query, with a hint from ProvSQL; list the columns instead
 
 For unsupported correlated subqueries, ``LATERAL`` can be used as a
 workaround.
 To read an aggregate result as its plain value on purpose, and silence the
 warning that reports it, wrap it in ``plain()`` (see :ref:`plain-sql`).
+
+.. _recursive-queries:
+
+Recursive Queries
+-----------------
+
+``WITH RECURSIVE`` over provenance-tracked relations is supported on
+PostgreSQL 15+. With ``UNION``, a row's provenance combines all its
+derivations: the provenance of s--t reachability is the disjunction over
+the s--t paths. With ``UNION ALL``, each derivation is a row of its own,
+as in SQL.
+
+Over cyclic data, a row has infinitely many derivations. ProvSQL records
+its provenance as equations between the rows of the cycle, and the
+semiring evaluating it solves them: probabilities and the Boolean,
+tropical, Viterbi, temporal, why- and which-provenance semirings give a
+value, while counting and how-provenance raise an error, the result being
+infinite. :sqlfunc:`sr_formula` prints the equations::
+
+    x₂ where x₁ = a ⊗ x₂, x₂ = 𝟙 ⊕ (c ⊗ x₃), x₃ = b ⊗ x₁
+
+A ``UNION ALL`` recursion that does not end stops with an error.
+
+.. _subqueries:
+
+Subqueries
+----------
+
+A subquery condition gives a row the provenance of the subquery's matching
+rows (``EXISTS``, ``IN``, ``= ANY``), or of their absence (``NOT EXISTS``,
+``NOT IN``, ``<> ALL``). The body may join several relations, aggregate,
+or be a set operation, and the condition may sit in a disjunction
+(``WHERE name = 'NY' OR EXISTS (…)``). A block that reads tracked
+relations only through its subqueries is tracked too, its own rows counting
+as present in every possible world. The limits are listed under
+`Unsupported SQL Features`_.
 
 .. _limit:
 
