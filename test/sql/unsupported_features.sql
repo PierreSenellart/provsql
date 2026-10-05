@@ -81,3 +81,27 @@ SELECT (SELECT provsql FROM personnel WHERE id = 1) IS NOT NULL AS token;
 SELECT city FROM (SELECT city, array_agg(id) AS ids FROM personnel
                   GROUP BY city) t WHERE 3 = ANY(ids);
 SELECT city FROM personnel GROUP BY city HAVING 3 = ANY(array_agg(id));
+
+-- crosstab (tablefunc) runs its source query itself and builds its rows in C:
+-- over a tracked relation it is refused, as the provenance column of that
+-- query would break the row type it declares.  Over an untracked relation
+-- (here a copy whose provenance is removed), and with provsql.active off, it
+-- answers, the same rows.
+CREATE EXTENSION IF NOT EXISTS tablefunc;
+CREATE TABLE ct_plain AS SELECT id, city, classification FROM personnel;
+SELECT remove_provenance('ct_plain');
+SELECT * FROM crosstab(
+  'SELECT city, classification, count(*) FROM personnel GROUP BY 1, 2 ORDER BY 1, 2',
+  $$VALUES ('secret'), ('top_secret')$$) AS ct(city text, s bigint, t bigint);
+SELECT * FROM crosstab(
+  'SELECT city, classification, count(*) FROM ct_plain GROUP BY 1, 2 ORDER BY 1, 2',
+  $$VALUES ('secret'), ('top_secret')$$) AS ct(city text, s bigint, t bigint)
+ORDER BY city;
+SET provsql.active = off;
+SELECT * FROM crosstab(
+  'SELECT city, classification, count(*) FROM personnel GROUP BY 1, 2 ORDER BY 1, 2',
+  $$VALUES ('secret'), ('top_secret')$$) AS ct(city text, s bigint, t bigint)
+ORDER BY city;
+SET provsql.active = on;
+DROP TABLE ct_plain;
+DROP EXTENSION tablefunc;

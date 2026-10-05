@@ -50,3 +50,19 @@ ERROR:  ProvSQL: Unsupported aggregate comparison shape in the selection predica
 DETAIL:  provsql-reason: aggregate-comparison-shape; scope: gap
 ERROR:  ProvSQL: condition on an aggregate result not supported in HAVING: only comparisons, IS [NOT] NULL and their Boolean combinations are (not, e.g., x = ANY(array_agg(...)))
 DETAIL:  provsql-reason: having-condition-shape; scope: gap
+remove_provenance
+
+(1 row)
+ERROR:  ProvSQL: crosstab over a provenance-tracked relation is not supported: tablefunc builds its rows itself, without provenance, and the provenance column of its source query breaks the row type it declares
+DETAIL:  provsql-reason: crosstab-over-tracked; scope: deliberate
+HINT:  Run it with provsql.active off: the rows crosstab builds have no provenance either way.
+city|s|t
+Berlin|2|
+New York||
+Paris||1
+(3 rows)
+city|s|t
+Berlin|2|
+New York||
+Paris||1
+(3 rows)

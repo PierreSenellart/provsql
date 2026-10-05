@@ -35108,6 +35108,89 @@ static void refuse_handmade_provsql(void) {
     PROVSQL_COLUMN_NAME);
 }
 
+/** @brief Context for @c crosstab_reads_tracked_walker. */
+typedef struct {
+  const constants_t *constants;
+  bool found;
+} crosstab_ctx;
+
+/**
+ * @brief Whether @p funcid is one of the @c crosstab functions of the
+ *        @c tablefunc extension, recognised by name and library.
+ */
+static bool is_tablefunc_crosstab(Oid funcid) {
+  HeapTuple tup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+  bool result = false;
+
+  if (HeapTupleIsValid(tup)) {
+    Form_pg_proc proc = (Form_pg_proc)GETSTRUCT(tup);
+    bool isnull;
+    Datum bin;
+
+    if (strncmp(NameStr(proc->proname), "crosstab", 8) == 0) {
+      bin = SysCacheGetAttr(PROCOID, tup, Anum_pg_proc_probin, &isnull);
+      if (!isnull) {
+        char *lib = TextDatumGetCString(bin);
+        result = strstr(lib, "tablefunc") != NULL;
+        pfree(lib);
+      }
+    }
+    ReleaseSysCache(tup);
+  }
+  return result;
+}
+
+/**
+ * @brief Walker: whether a @c crosstab call of @c tablefunc reads, in an SQL
+ *        text given as a constant, a provenance-tracked relation.
+ *
+ * @c crosstab runs its SQL texts itself, through SPI, and builds its rows in C:
+ * they have no provenance, and the provenance column the rewriting adds to the
+ * query it runs breaks the row type the statement declares.  The texts are
+ * parsed and analysed here, before the statement runs; one computed at run
+ * time is not seen.
+ */
+static bool crosstab_reads_tracked_walker(Node *node, void *cx) {
+  crosstab_ctx *c = (crosstab_ctx *)cx;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, crosstab_reads_tracked_walker, cx,
+                             0);
+  if (IsA(node, FuncExpr) && is_tablefunc_crosstab(((FuncExpr *)node)->funcid)) {
+    ListCell *la;
+    foreach (la, ((FuncExpr *)node)->args) {
+      Node *a = (Node *)lfirst(la);
+      ListCell *lr;
+      char *sql;
+
+      if (!IsA(a, Const) || ((Const *)a)->constisnull ||
+          ((Const *)a)->consttype != TEXTOID)
+        continue;
+      sql = TextDatumGetCString(((Const *)a)->constvalue);
+      foreach (lr, pg_parse_query(sql)) {
+        List *analyzed;
+        ListCell *lq;
+#if PG_VERSION_NUM >= 150000
+        analyzed = pg_analyze_and_rewrite_fixedparams(
+          lfirst_node(RawStmt, lr), sql, NULL, 0, NULL);
+#else
+        analyzed = pg_analyze_and_rewrite(lfirst_node(RawStmt, lr), sql,
+                                          NULL, 0, NULL);
+#endif
+        foreach (lq, analyzed)
+          if (lfirst_node(Query, lq)->commandType == CMD_SELECT &&
+              has_provenance(c->constants, lfirst_node(Query, lq)))
+            c->found = true;
+      }
+      if (c->found)
+        return true;
+    }
+  }
+  return expression_tree_walker(node, crosstab_reads_tracked_walker, cx);
+}
+
 
 
 /** @brief Context of @c reads_provsql_walker: the level whose range table
@@ -35796,6 +35879,20 @@ static PlannedStmt *provsql_planner(Query *q,
         refuse_handmade_provsql();
       q = lifted_q;
       sublinks_lifted = true;
+    }
+
+    if (provsql_active && constants.ok && provsql_executor_depth == 0) {
+      crosstab_ctx cc = {&constants, false};
+      crosstab_reads_tracked_walker((Node *)q, &cc);
+      if (cc.found)
+        provsql_unsupported_hint(
+          PROVSQL_DELIBERATE, "crosstab-over-tracked",
+          "Run it with provsql.active off: the rows crosstab builds have no "
+          "provenance either way.",
+          "crosstab over a provenance-tracked relation is not supported: "
+          "tablefunc builds its rows itself, without provenance, and the "
+          "provenance column of its source query breaks the row type it "
+          "declares");
     }
 
     if (constants.ok && has_provenance(&constants, q)) {
