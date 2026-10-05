@@ -187,3 +187,8 @@ types that appear:
   first-match semantics
 * ``observe`` – likelihood-weighting evidence on an observed
   random-variable leaf
+* ``fixvar``, ``fixsystem``, ``fixpoint`` – equation system of a
+  recursive query over cyclic data: a ``fixsystem`` holds one equation per
+  derived row over its ``fixvar`` unknowns, and a ``fixpoint`` is one
+  component of its least solution, which the evaluating semiring computes
+  (see :ref:`recursive-queries`)

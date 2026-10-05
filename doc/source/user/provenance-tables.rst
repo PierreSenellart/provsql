@@ -236,6 +236,8 @@ Further gate types serve specific features:
   ``[target, evidence]`` (see :doc:`conditioning`)
 - ``mobius``: signed Möbius combination over child islands, with one
   integer coefficient per child (safe-UCQ probability evaluation)
+- ``fixvar``, ``fixsystem``, ``fixpoint``: the equation system of a
+  recursive query over cyclic data (see :ref:`recursive-queries`)
 
 Two *transparent marker* gates wrap a single child without changing its
 value (a circuit carrying them evaluates identically to one without):
@@ -243,8 +245,8 @@ value (a circuit carrying them evaluates identically to one without):
 - ``assumed``: structural assumption marker whose ``extra`` label names
   the assumption the wrapped sub-circuit was computed under:
   ``'boolean'`` (the default when the label is absent: only Boolean
-  semantics are preserved) or ``'absorptive'`` (cyclic recursion
-  truncated at the absorptive value fixpoint).  Evaluation under a
+  semantics are preserved) or ``'absorptive'`` (the bounded-treewidth
+  reachability route).  Evaluation under a
   semiring outside the recorded class refuses with an explicit error.
 - ``annotation``: carries the inversion-free certificate on a result root,
   or a per-input order key, for the ``'inversion-free'`` probability
