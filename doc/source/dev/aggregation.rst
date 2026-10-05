@@ -137,9 +137,9 @@ whereas what we want is a single "it exists".
 The **δ operator** (Amsterdamer, Deutch, Tannen
 :cite:`DBLP:conf/pods/AmsterdamerDT11`) solves this.  A
 δ-semiring is a semiring together with a unary operation δ
-satisfying :math:`\delta(\mathbb{0}) = \mathbb{0}` and
-:math:`\delta(\mathbb{1} \oplus \cdots \oplus \mathbb{1}) = \mathbb{1}`
-regardless of the number of :math:`\mathbb{1}` s.  Intuitively, δ collapses "any positive number of
+satisfying :math:`\delta(\mathbbm{0}) = \mathbbm{0}` and
+:math:`\delta(\mathbbm{1} \oplus \cdots \oplus \mathbbm{1}) = \mathbbm{1}`
+regardless of the number of :math:`\mathbbm{1}` s.  Intuitively, δ collapses "any positive number of
 witnesses" to a single "exists".  The rewriter emits a ``delta``
 gate wrapping the row-level ⊕ for grouped aggregation whose
 ``HAVING`` clause (if any) is *not* lifted into the provenance
@@ -475,22 +475,24 @@ comparisons on it.
 Currently Supported Aggregates
 ------------------------------
 
-The :cfunc:`AggregationOperator` enum in :cfile:`Aggregation.h`
-lists the operators recognised in |cpp|: ``COUNT`` (distinct from
-``SUM`` because it is 0, not ``NULL``, over an empty input), ``SUM``,
-``MIN``, ``MAX``,
-``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Only the
-aggregates the Monte-Carlo sampler and the subset enumerator
-evaluate *directly* get an :cfunc:`Aggregator` accumulator (the
-numeric ones -- ``SUM`` / ``COUNT`` / ``MIN`` / ``MAX`` / ``AVG``
--- and ``CHOOSE``); the boolean aggregates (``bool_and`` /
-``bool_or`` / ``every``) and ``array_agg`` exist only as enum
-values for routing, because their ``HAVING`` comparisons are
-resolved entirely by the m-semiring rewrite in
-:cfile:`having_semantics.cpp` and never reach the deterministic
-sampler.  Adding to the accumulator list is the
-topic of the next section.
+Any aggregate over tracked rows is recorded as an ``agg`` gate (the
+aggregate's OID in ``info1``) over the semimodule contributions of its
+rows, so its displayed value and the provenance of its group are always
+available.  Reading its value in every possible world (``HAVING``,
+:sqlfunc:`expected`, exploding its values into rows) needs an evaluator:
+``getAggregationOperator`` in :cfile:`Aggregation.cpp` maps ``count``,
+``sum``, ``min``, ``max``, ``avg``, :sqlfunc:`choose`, ``array_agg`` /
+``array_collect``, ``bool_and`` / ``every`` and ``bool_or`` onto
+:cfunc:`AggregationOperator`, and refuses any other aggregate there
+(``aggregate-no-evaluator``).  The Monte Carlo sampler and the subset
+enumerator have an :cfunc:`Aggregator` for the numeric ones and
+``choose``.
 
+Some aggregates are rewritten before they reach the circuit: ``stddev``,
+``variance`` and their ``_pop`` / ``_samp`` forms into arithmetic over
+sums and counts, and ``AGG(DISTINCT …)`` into an aggregate over a
+deduplicating subquery.  Aggregates over ``random_variable`` take the
+path of the next section.
 
 Random-Variable Aggregates
 --------------------------
@@ -624,14 +626,16 @@ combine the values incrementally.
    conventions).
 
 6. **Update the user guide.**  Mention the new aggregate in
-   :doc:`../user/aggregation`, and add it to the list of currently
-   supported operators in the "Currently Supported Aggregates"
-   section above.
+   :doc:`../user/aggregation`.
 
-Nothing else needs to change: the query rewriter, the
-:sqlfunc:`provenance_aggregate` SQL function, and the :cfunc:`agg_token`
-composite type all operate on OIDs and metadata, so they pick up new
-aggregates automatically once steps 1--4 are in place.
+The :sqlfunc:`provenance_aggregate` SQL function and the :cfunc:`agg_token`
+type operate on OIDs and metadata, and need no change.  The rewriter does
+decide some readings by aggregate name, in :cfile:`provsql.c`: which
+aggregates are ``NULL`` exactly when they read no value
+(``null_iff_no_value``), which can nest per possible world
+(``nested_agg_trackable``), and which can be exploded into their values or
+the truth of a comparison on them (``aggref_truth_comparable``).  A new
+aggregate is refused or read as a plain value there until added.
 
 CASE over aggregates
 --------------------

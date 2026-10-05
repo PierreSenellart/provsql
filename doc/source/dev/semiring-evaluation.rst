@@ -45,9 +45,9 @@ Every semiring must override the following pure-virtual methods:
    * - Method
      - Semantics
    * - ``zero()``
-     - Additive identity :math:`\mathbb{0}`.
+     - Additive identity :math:`\mathbbm{0}`.
    * - ``one()``
-     - Multiplicative identity :math:`\mathbb{1}`.
+     - Multiplicative identity :math:`\mathbbm{1}`.
    * - ``plus(vector<V>)``
      - Additive operation :math:`v_0 \oplus v_1 \oplus \cdots`.
        An empty vector should return ``zero()``.
@@ -184,7 +184,7 @@ working default and is flagged as such):
      - ``gate_rv`` -- continuous random-variable leaf.
    * - ``arith(op, children, extra)``
      - ``gate_arith`` -- arithmetic over scalar children.
-   * - ``mixture(p, prob, x, y)``
+   * - ``mixture(p, x, y)``
      - ``gate_mixture`` -- Bernoulli mixture.
    * - ``categorical(key, probs, outcomes)``
      - ``gate_mixture`` -- categorical mixture over ``gate_mulinput``
@@ -226,17 +226,62 @@ and treats them like ordinary leaves.  The semiring's ``cmp`` /
 ``agg`` / ... overrides are therefore never reached on real
 queries.
 
+The remaining optional methods declare properties of the semiring, which
+the evaluators read to choose a method, or supply the operations some
+methods need.  Each has a safe default: a property is not claimed unless
+declared, and an operation the semiring does not provide throws.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Method (default)
+     - Meaning
+   * - ``absorptive()`` (false)
+     - :math:`\mathbbm{1} \oplus a = \mathbbm{1}` (see `Absorptive
+       Semirings`_).
+   * - ``idempotent()`` (``absorptive()``)
+     - :math:`a \oplus a = a`.
+   * - ``selective()`` (false)
+     - :math:`a \oplus b \in \{a, b\}`; with ``absorptive()``, licenses
+       Dijkstra's algorithm on recursions.
+   * - ``mul_sub_left_distributive()`` (false)
+     - licenses the closed forms of conditions on aggregates (see
+       :doc:`aggregation`).
+   * - ``exclusive()``, ``mul_idempotent()`` (false)
+     - together, the product of two conditions on one group is their
+       joint provenance (``product_is_joint()``), so the ``HAVING``
+       evaluator need not resolve them jointly.
+   * - ``compatibleWithBooleanRewrite()`` (false)
+     - the safe-query rewriting is sound here (see `Boolean-Rewrite
+       Compatibility`_).
+   * - ``equal(a, b)`` (``==``), ``exact_equality()`` (true)
+     - equality of semiring elements, and whether it is decided exactly;
+       iterative solvers stop on it.
+   * - ``has_star()`` (``idempotent() && exact_equality()``),
+       ``star(a)`` (iterates :math:`\mathbbm{1} \oplus a \otimes s`)
+     - :math:`a^*`, used to solve cyclic recursions in non-absorptive
+       semirings (see `Recursive Queries: Equation Systems`_).
+   * - ``symbolic()`` (false), ``symbolic_unknown()``, ``define(x, rhs)``
+       (throw)
+     - name an unknown and record its equation, for semirings that render
+       a recursion rather than solve it (``Formula``).
+   * - ``certifying()``, ``independent_literal(v)`` (false),
+       ``certified_world_term``, ``certified_exclusive_plus`` (throw)
+     - build certified exclusive enumerations (``BoolExpr``, for the
+       certified d-DNNF of ``HAVING`` conditions).
+
 Absorptive Semirings
 ^^^^^^^^^^^^^^^^^^^^
 
 Override ``absorptive()`` to return ``true`` if
-:math:`\mathbb{1} \oplus a = \mathbb{1}` for all :math:`a` (e.g., the
+:math:`\mathbbm{1} \oplus a = \mathbbm{1}` for all :math:`a` (e.g., the
 Boolean semiring).  Absorptivity implies idempotency
 (:math:`a \oplus a = a`); the evaluator exploits this flag to
 deduplicate operands of ``plus`` gates and to short-circuit over the
 multiplicative identity, which can significantly improve performance.
 Idempotent-but-not-absorptive semirings (such as why-provenance and
-which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
+which-provenance, where :math:`\mathbbm{1} \oplus a \neq \mathbbm{1}` in
 general) should leave it at the default ``false`` and declare
 ``idempotent()`` instead.
 

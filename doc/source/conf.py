@@ -17,6 +17,9 @@ imgmath_use_preview = True
 # Match the surrounding prose; the imgmath default (12) and 14 both render
 # noticeably smaller than the RTD body text.
 imgmath_font_size = 16
+# Blackboard-bold digits (the semiring's 0 and 1): amssymb's \mathbb has
+# capital letters only, and renders \mathbb{1} as an unrelated glyph.
+imgmath_latex_preamble = r'\usepackage{bbm}'
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".

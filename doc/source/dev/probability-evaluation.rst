@@ -1026,7 +1026,7 @@ FPTRAS (Thm 9) would add only rare-event sample efficiency.  Pinned by
      <https://provsql.org/lean-docs/Provenance/Algorithms/SumDP.html#SumDP.sumDP_correct>`_.
    - On the hardness side, and independently of the #P-hardness
      results tabulated above, merely deciding whether a
-     ``HAVING SUM`` provenance is non-:math:`\mathbb{0}` -- whether
+     ``HAVING SUM`` provenance is non-:math:`\mathbbm{0}` -- whether
      *any* possible world satisfies the predicate -- is
      **NP-complete already in data complexity**
      (`havingSumNonzero_NP_complete

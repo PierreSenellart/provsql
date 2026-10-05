@@ -1049,7 +1049,7 @@ Under a Bernoulli mixture the truncated PDF is
 with the per-arm normalisers
 :math:`Z_L, Z_R` computed by ``shape_mass``. Under a categorical
 the conditional masses are :math:`p_i \cdot
-\mathbb{1}\{v_i \in A\} / \sum_j p_j \cdot \mathbb{1}\{v_j \in A\}`.
+\mathbbm{1}\{v_i \in A\} / \sum_j p_j \cdot \mathbbm{1}\{v_j \in A\}`.
 A Dirac is invariant under any feasible event.
 
 The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
