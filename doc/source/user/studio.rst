@@ -1338,6 +1338,14 @@ extension version.
        :doc:`probabilities` and :doc:`semirings`). Random-variable
        families added to the extension render without a Studio
        upgrade (see :doc:`continuous-distributions`).
+   * - ``1.9.x``
+     - ``≥ 1.13.0``
+     - Shows the reason tag of ProvSQL's warnings and refusals as a badge
+       and keeps their hints visible, builds the configuration panel from
+       the server's parameters (with the new resource limits and the
+       ``provsql.implicit_freeze`` setting), shows input probabilities
+       read-only since they are written once (see :doc:`persistence`), and
+       renders the equation-system gates of recursions over cyclic data.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

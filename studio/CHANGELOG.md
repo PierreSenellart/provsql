@@ -14,6 +14,60 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.9.0] - unreleased
+
+Companion release for ProvSQL extension 1.13.0, which reports every
+refusal and every untracked part of a query with a reason tag, and adds
+resource limits, write-once probabilities and recursion by equation
+systems. Studio shows all of these where they occur, and its settings
+panel is now built from the server's own list of parameters.
+Requires extension **>= 1.13.0**.
+
+### Highlights
+
+- **Diagnostics you can act on.** A warning or an error from ProvSQL
+  shows its reason tag as a badge (`provsql-reason`, and whether the
+  limit is deliberate, a gap or out of scope), and its `HINT`, which
+  says what to write instead or which setting to raise, stays visible
+  on its own line in the result area and the notebook cells.
+- **Settings built from the server.** The configuration panel is
+  generated from `pg_settings`, with a curated list in sections
+  (Tracking, Limits, Evaluation, Messages, and a folded Advanced
+  section): each widget follows the parameter's type, PostgreSQL
+  validates the value and its refusals appear on the status line, and
+  parameters the user cannot change are greyed out. The new
+  `provsql.implicit_freeze`, `provsql.max_memory`, `provsql.max_worlds`
+  and `provsql.gate_cache_size` are there. The tool settings
+  (`provsql.tool_search_path`, `provsql.fallback_compiler`) move to a
+  Settings section of the Tools panel.
+- **Cancel and limits.** A query stopped by the cancel button, a
+  statement timeout or one of ProvSQL's resource limits is reported as
+  such, with the limit's hint.
+- **Probabilities are written once.** The circuit inspector shows an
+  input gate's probability read-only, offering only a first write; the
+  documentation explains how to give a row a new probability with
+  `replace_input`.
+- **Recursion and arithmetic in the circuit view.** The equation-system
+  gates of a recursion over cyclic data are rendered, and every
+  arithmetic operator ProvSQL records over aggregates (integer
+  division, `floor`, `ceil`, `round`, `abs`, `power`, …) has its glyph.
+
+### Fixes
+
+- A saved setting for a parameter the server no longer has, or no longer
+  accepts, no longer breaks every request: each override is applied on
+  its own.
+- The row cap Studio puts around a query no longer triggers ProvSQL's
+  warning about a `LIMIT` without `ORDER BY` over tracked data.
+- Temporal mode offers plain tracked tables in its relation picker.
+- An older `/api/temporal` response no longer overwrites a newer one on
+  the timeline.
+
+### Notebooks
+
+- New example notebook for case study 9 (a sales-forecast dashboard over
+  deals that may not close); case studies 1 and 5 revised.
+
 ## [1.8.0] - 2026-08-07
 
 Companion release for ProvSQL extension 1.12.0. A focused release on the
