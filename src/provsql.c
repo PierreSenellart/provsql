@@ -9432,13 +9432,21 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         /* A lifted comparison supersedes the compared group's delta rather
          * than multiplying with it: the cmp gate's enumeration ranges over the
          * non-empty worlds of the very same per-row tokens, so it already
-         * entails the group existence that delta stands for, and conjoining
-         * both would count that factor twice in a non-idempotent semiring.
+         * entails the group existence that delta stands for.  Dropping the
+         * delta saves a gate and changes no value in the semirings ProvSQL
+         * offers: delta(⊕K) ⊗ cmp = cmp wherever cmp holds only in worlds
+         * where the group exists, delta being there the support indicator, or
+         * the identity with an idempotent, absorptive ⊗.  Only a semiring given
+         * to provenance_evaluate with a delta not satisfying that absorption
+         * reads the two differently.
          *
-         * That is only licensed when the predicate really does entail
-         * existence.  A disjunct with no aggregate in it does not -- it lowers
-         * to a deterministic regular_indicator, whose 1 would otherwise claim
-         * the group exists in every world -- so there the delta stays.
+         * So the test may answer "no" where it could say "yes", at the cost
+         * of a gate, but never the converse.  A disjunct with no aggregate in
+         * it does not entail existence -- it lowers to a deterministic
+         * regular_indicator, whose 1 would otherwise claim the group exists in
+         * every world -- so there the delta stays.  (The scalar_row case below
+         * is another matter: there the delta must not be multiplied in, the
+         * one row existing also in the world with no input row.)
          *
          * What the supersede removes is precisely that delta.  When this level
          * owns the aggregation, @c result *is* the group's plus (built just
