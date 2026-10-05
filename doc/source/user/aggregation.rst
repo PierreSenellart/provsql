@@ -27,12 +27,12 @@ The value displayed for an aggregate (``3 (*)``) is the one plain SQL
 computes on the same data. Rows kept only for the worlds where they exist
 (the null-padded row of an outer join for a row that has a match, a group
 that a ``HAVING`` rejects, a row beyond an ``ORDER BY … LIMIT``) do not
-count in it; they do in its provenance. Whether a row holds in the actual
-database is :sqlfunc:`sr_boolean` without a mapping:
+count in it; they do in its provenance. :sqlfunc:`present` tells whether
+a row holds in the actual database:
 
 .. code-block:: postgresql
 
-    SELECT e.name, p.project, sr_boolean(provenance())
+    SELECT e.name, p.project, present(provenance())
     FROM employees e LEFT JOIN projects p ON p.lead = e.id;
 
 ``ORDER BY`` on an aggregate result sorts on that displayed value, i.e.,
