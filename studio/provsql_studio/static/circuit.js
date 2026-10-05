@@ -1600,8 +1600,8 @@
   // `absorptive`: mirrors the C++ per-semiring `absorptive()`
   // predicate and Python's `_COMPILED_SEMIRINGS[*].absorptive`.  When
   // the eval target carries `absorptive_assumed = true` (descendant of
-  // an elided 'absorptive'-labelled gate_assumed wrapper -- a cyclic
-  // recursive query truncated at the absorptive value fixpoint), only
+  // an elided 'absorptive'-labelled gate_assumed wrapper -- a
+  // reachability circuit of the bounded-treewidth route), only
   // `absorptive: true` options are sound; when it carries
   // `absorptive_folded = true` (the in-memory absorptive-fold marker),
   // `booleanCompatible` options are additionally sound (the folds

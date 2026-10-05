@@ -126,9 +126,9 @@ value_type parse_leaf(const char *v) const {
  * canonically-ordered case the Lean formalisation proves
  * (@c Tropical.absorptive under @c CanonicallyOrderedAdd).  Declaring
  * it lets min-plus evaluation accept circuits carrying the
- * @c 'absorptive' assumption marker -- notably cyclic recursive
- * queries truncated at the absorptive value fixpoint, whose minimal
- * derivations determine the min-cost exactly (negative costs would
+ * @c 'absorptive' assumption marker -- notably the reachability
+ * circuits of the bounded-treewidth route, whose minimal derivations
+ * determine the min-cost exactly (negative costs would
  * make cyclic min-cost genuinely unbounded, which is why the
  * unrestricted @c Tropical declines).  Negative input costs are
  * rejected at leaf-parsing time.

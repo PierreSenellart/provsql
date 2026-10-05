@@ -161,10 +161,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
        *   functions.
        * - 'absorptive': the sub-circuit only represents the
        *   absorptive (Sorp) quotient of the recursive provenance --
-       *   either truncated at the absorptive value fixpoint (cyclic
-       *   recursion stopped once every minimal,
-       *   tuple-repetition-free, derivation is covered) or compiled
-       *   by the bounded-treewidth reachability route (whose world
+       *   compiled by the bounded-treewidth reachability route (whose world
        *   enumeration surfaces exactly the minimal derivation
        *   supports); longer derivations are absorbed in any
        *   absorptive semiring but genuinely missing for the rest

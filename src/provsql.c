@@ -139,7 +139,7 @@ bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier 
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
 bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
-bool provsql_absorptive_provenance = false; ///< Derived flag: the session's provenance class is 'absorptive' or 'boolean' -- licenses constructions sound for absorptive semirings only (cyclic recursive queries stopped at the absorptive value fixpoint, the bounded-treewidth reachability route's certified circuits, absorptive circuit simplifications; tokens tagged accordingly). Set from the @c provsql.provenance GUC.
+bool provsql_absorptive_provenance = false; ///< Derived flag: the session's provenance class is 'absorptive' or 'boolean' -- licenses constructions sound for absorptive semirings only (the bounded-treewidth reachability route's certified circuits, absorptive circuit simplifications; tokens tagged accordingly). Set from the @c provsql.provenance GUC.
 
 /** @brief Values of the @c provsql.provenance enum GUC, from most general to most specialised. */
 typedef enum provsql_provenance_class_t {
@@ -37177,11 +37177,11 @@ void _PG_init(void) {
                            "projection gates) on top of universal "
                            "semiring provenance; 'semiring' (the "
                            "default) tracks universal semiring "
-                           "provenance; 'absorptive' additionally lets "
-                           "recursive queries on cyclic data stop at "
-                           "the absorptive value fixpoint, tagging "
-                           "their tokens so non-absorptive semirings "
-                           "refuse them; 'boolean' (which implies "
+                           "provenance; 'absorptive' additionally "
+                           "answers reachability over graphs of bounded "
+                           "treewidth by a route sound only for "
+                           "absorptive semirings, tagging its tokens so "
+                           "non-absorptive semirings refuse them; 'boolean' (which implies "
                            "'absorptive') additionally enables the "
                            "Boolean-only machinery -- the safe-query "
                            "read-once rewrite, the bounded-treewidth "

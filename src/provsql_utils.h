@@ -708,8 +708,8 @@ extern bool provsql_boolean_provenance;
 
 /** @brief Derived flag of the @c provsql.provenance GUC: the session's
  *  provenance class is 'absorptive' or 'boolean', licensing
- *  constructions sound for absorptive semirings only (cyclic recursion
- *  stopped at the absorptive value fixpoint, tagged tokens). */
+ *  constructions sound for absorptive semirings only (the
+ *  bounded-treewidth reachability route, tagged tokens). */
 extern bool provsql_absorptive_provenance;
 
 #include "MMappedTableInfo.h"

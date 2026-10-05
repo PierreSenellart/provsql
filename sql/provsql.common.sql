@@ -49,8 +49,8 @@ CREATE TYPE provenance_gate AS
                       -- assumption named by the gate's extra label --
                       -- 'boolean' (e.g. the safe-query rewrite; the
                       -- default when the label is absent) or
-                      -- 'absorptive' (cyclic recursion truncated at the
-                      -- absorptive value fixpoint).  Transparent for
+                      -- 'absorptive' (the bounded-treewidth
+                      -- reachability route).  Transparent for
                       -- evaluation semirings satisfying the assumption,
                       -- fatal error for the rest, rendered as an
                       -- explicit element in PROV-XML export.
@@ -11799,9 +11799,9 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE;
  *
  * With @p nonnegative, input costs are checked nonnegative and the
  * semiring is *absorptive*: evaluation then also accepts circuits
- * carrying the @c 'absorptive' assumption marker -- notably cyclic
- * recursive queries truncated at the absorptive value fixpoint, giving
- * exact min-cost reachability on cyclic data.
+ * carrying the @c 'absorptive' assumption marker -- notably the
+ * reachability circuits of the bounded-treewidth route, giving exact
+ * min-cost reachability on cyclic data.
  */
 CREATE FUNCTION sr_tropical(token ANYELEMENT, token2value regclass,
                             nonnegative BOOLEAN = false)
