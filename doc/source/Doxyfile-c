@@ -18,13 +18,15 @@ FORCE_LOCAL_INCLUDES   = YES
 # Preprocessor: strip GCC/Clang attributes so Doxygen can match declarations
 # to definitions (otherwise e.g. __attribute__((visibility("default"))) on a
 # function definition breaks the declaration/definition link and pollutes
-# call graphs).
+# call graphs).  PG_VERSION_NUM is that of the newest PostgreSQL supported, so
+# that the version-guarded code documented is the current one.
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = __attribute__(x)= \
                          PGDLLEXPORT= \
-                         DOXYGEN
+                         DOXYGEN \
+                         PG_VERSION_NUM=180000
 
 # Source browsing
 SOURCE_BROWSER         = YES

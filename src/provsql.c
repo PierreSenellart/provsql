@@ -1432,13 +1432,15 @@ static bool reach_is_hop_bound(Node *n, Index cte_rti, AttrNumber hops_pos,
  *
  * Accepted (in either arm order, with either qual orientation):
  *
+ * @code{.sql}
  *   WITH RECURSIVE reach(v) AS (
  *       SELECT <constant>
  *     UNION
  *       SELECT e.<dst> FROM <edge> e JOIN reach r ON e.<src> = r.v
  *   )
+ * @endcode
  *
- * where @c <edge> is a provenance-tracked base relation (a @c provsql
+ * where @c \<edge\> is a provenance-tracked base relation (a @c provsql
  * UUID column), the recursive arm has no other clauses, and the single
  * join qual is a mergejoinable equality between an edge column and the
  * CTE's (single) column.  The caller has already checked the UNION
@@ -1447,12 +1449,14 @@ static bool reach_is_hop_bound(Node *n, Index cte_rti, AttrNumber hops_pos,
  * The *hop-counting* variant adds a counter column (in either CTE
  * position):
  *
+ * @code{.sql}
  *   WITH RECURSIVE reach(v, hops) AS (
  *       SELECT <constant>, <int constant>
  *     UNION
  *       SELECT e.<dst>, r.hops + 1 FROM <edge> e JOIN reach r
  *       ON e.<src> = r.v WHERE r.hops < <int constant>
  *   )
+ * @endcode
  *
  * with @c <= accepted too; the bound qual is mandatory (an unbounded
  * counter never reaches a fixpoint on cyclic data) and the maximum
@@ -2004,6 +2008,8 @@ static Node *freeze_recursive_guard_mutator(Node *node, void *cx) {
 }
 
 /** @brief Mark the bounds of every term of @p cteq @c plain() (see above).
+ *  @param constants  Extension OID cache.
+ *  @param cteq    The recursive CTE's query.
  *  @param frozen  Out: the first bound frozen, which tells whether the freezing
  *                 is coherent (it reads no relation the rest of the statement
  *                 reads). */
@@ -2798,8 +2804,10 @@ typedef struct ReachAggCandidate {
  * @brief Detect, before CTE lowering, the grouped-reachability
  *        aggregation shape:
  *
+ * @code{.sql}
  *   WITH RECURSIVE reach(v) AS (...)
  *   SELECT ... FROM reach r JOIN T ON r.v = T.<a> ... GROUP BY T.<g>
+ * @endcode
  *
  * The aggregation collapses each group's per-vertex reach tokens into
  * one @c provenance_plus -- an OR of *correlated* events (the vertices
@@ -35681,9 +35689,9 @@ static void finish_matview_fill(Query *q, List *types) {
  * that involves at least one provenance-bearing relation or an explicit
  * @c provenance() call, rewrites the query via @c process_query before
  * handing the result to the standard planner.  Non-SELECT commands and
- * queries without provenance are passed through unchanged.  From
- * PostgreSQL 13 the hook also receives the query's source text.
+ * queries without provenance are passed through unchanged.
  * @param q              The query to plan.
+ * @param query_string   Source text of the query (PostgreSQL 13+).
  * @param cursorOptions  Cursor options bitmask.
  * @param boundParams    Pre-bound parameter values.
  * @return               The planned statement.
