@@ -307,7 +307,7 @@ _C_FUNC_MAP = {
                                  '/doxygen-c/html/provsql_8c.html#a57440d8b9adc042575734ad9b506eaa2',
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
-    'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',
+    'provsql_planner':           '/doxygen-c/html/provsql_8c.html#ae30fe6bc52afa5291cd97f93a10f439b',
     'process_query':             '/doxygen-c/html/provsql_8c.html#a93b94031899269cea3d99f82fc7f2bda',
     'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
     'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a84ea91c1664bbb8533394fc6da46651c',
@@ -368,7 +368,7 @@ _C_FUNC_MAP = {
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
     'add_eq_from_OpExpr_to_Expr':'/doxygen-c/html/provsql_8c.html#abed26c95056d10b1f670bd37d840d989',
     # provsql.c -- ProcessUtility hook (CTAS / SELECT INTO / matview lineage)
-    'provsql_ProcessUtility':       '/doxygen-c/html/provsql_8c.html#ab1ed4f68831024fd2bef99804474c4ff',
+    'provsql_ProcessUtility':       '/doxygen-c/html/provsql_8c.html#ae56f056ce930ff8b74eb514f5ec06780',
     # classify_query.c -- query-time TID/BID/OPAQUE classifier
     'provsql_classify_query':       '/doxygen-c/html/classify__query_8h.html#aafc42e9a94c5f918f87e000a971edcf1',
     'provsql_classify_emit_notice': '/doxygen-c/html/classify__query_8h.html#a66b72aec3f370db5f259ccd410c09118',
@@ -457,7 +457,6 @@ _C_FUNC_MAP = {
     'getGenericCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#aea0e3c624d65cc59c68d313fbe0306af',
     'getBooleanCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#a66a011a61d08d6fd604c4668a62d46d0',
     'provenance_evaluate_compiled_internal': '/doxygen-c/html/provenance__evaluate__compiled_8cpp.html#a3df67864ec62b62e0b10e5a3d7945c21',
-    'list_insert_nth':           '/doxygen-c/html/compatibility_8c.html#af40069a7906dd7dabbd6ab5fcd429090',
     # Macros
     'STARTWRITEM':               '/doxygen-c/html/provsql__mmap_8h.html#a71fa51d40b2e5caeaf49eaf95b85033a',
     'ADDWRITEM':                 '/doxygen-c/html/provsql__mmap_8h.html#a8ff2a88528de32f06edc2c2df8aec35c',

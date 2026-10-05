@@ -51,7 +51,7 @@ uses the ``PG_VERSION_NUM`` macro (from PostgreSQL's own ``pg_config.h``):
 
 :cfile:`compatibility.c` / :cfile:`compatibility.h` provide shim
 functions for APIs that changed across PostgreSQL versions (e.g.,
-:cfunc:`list_insert_nth`, ``list_delete_cell``).
+``list_insert_nth``, ``list_delete_cell``).
 
 
 Generated SQL
