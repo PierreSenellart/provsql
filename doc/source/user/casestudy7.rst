@@ -548,12 +548,13 @@ walk:
     FROM conn JOIN reviewers r ON conn.node = r.id
     WHERE conn.node <> 'r1' ORDER BY r.id
 
-With the toggle on :guilabel:`Semiring` (the default) the fixpoint never
-stabilises -- *"no fixpoint after 1000 rounds (cyclic data?)"* -- because a
-cycle keeps producing new derivations. Switch the toggle to
-:guilabel:`Absorptive` and it converges: :math:`1 \oplus a = 1`, so a longer cycle-revisiting path is
-absorbed by the shorter one inside it, and the fixpoint is the set of
-minimal paths.
+With the toggle on :guilabel:`Semiring` (the default), a cycle gives a
+reviewer infinitely many derivations: ProvSQL records the recursion as
+equations between the reviewers reached, which each evaluation solves, so
+:guilabel:`Marginal probability` already answers. Switch the toggle to
+:guilabel:`Absorptive`: :math:`1 \oplus a = 1`, so a longer cycle-revisiting
+path is absorbed by the shorter one inside it, and only the minimal paths
+count.
 
 The probability is then **two-terminal network reliability** -- that ``r1``
 stays connected when each edge is present independently -- which is
@@ -567,9 +568,11 @@ vertex, linear in the edges when the graph has bounded treewidth (see
 :ref:`network-reliability-btw`). That is the case study in miniature: Part B's
 hardness lived in the *query* and needed a compiler; here -- as throughout
 Part C -- it is dissolved by the structure of the *data*, with no external
-tool. (On these tokens, multiplicity counting and why-provenance, which are
-genuinely infinite on cycles, are refused instead of returning an unjustified
-value.)
+tool. (These tokens carry the absorptive assumption, so counting and
+why-provenance, which are not absorptive, refuse them rather than return a
+value only absorptive semirings justify. Under :guilabel:`Semiring`,
+why-provenance gives its witnesses, and counting refuses: the number of
+derivations is infinite.)
 
 .. seealso::
 
