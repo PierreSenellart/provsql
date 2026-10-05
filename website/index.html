@@ -29,9 +29,10 @@ feature_row:
     excerpt: >
       SQL queries are automatically rewritten to track provenance circuits –
       across inner and outer joins, subqueries anywhere (`EXISTS`, `IN`,
-      quantified and scalar comparisons), aggregation, set operations, CTEs,
-      and recursive queries (`WITH RECURSIVE`). No changes to your schema or
-      application code required.
+      quantified and scalar comparisons), aggregation, window functions and
+      ranking, `ORDER BY … LIMIT`, set operations, CTEs, and recursive
+      queries (`WITH RECURSIVE`), cyclic data included. No changes to your
+      schema or application code required.
     url: "/overview/#query-rewriting"
     btn_label: "Learn more"
     btn_class: "btn--primary"

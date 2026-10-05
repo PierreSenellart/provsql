@@ -34,10 +34,18 @@ The rewriter handles:
 - Subqueries in `FROM` (including deeply nested) and outside `FROM`
   (`EXISTS` / `NOT EXISTS`, `IN` / `NOT IN`, quantified comparisons such
   as `= ANY`, scalar subqueries), correlated or not
-- GROUP BY, aggregation (including `FILTER` clauses), HAVING, SELECT DISTINCT
-- UNION / UNION ALL / EXCEPT
+- GROUP BY (including `GROUPING SETS`, `ROLLUP`, `CUBE`), aggregation
+  (including `FILTER` clauses), HAVING, SELECT DISTINCT, `DISTINCT ON`
+- Window functions: aggregates over a frame determined by values, `rank`,
+  `dense_rank`, `row_number`, `ntile`, `percent_rank`, `cume_dist`
+- `ORDER BY … LIMIT` / `FETCH` / `OFFSET`, read in every possible world as
+  a selection on rank
+- UNION / UNION ALL / INTERSECT / EXCEPT
 - VALUES
-- Common table expressions (`WITH`), including `WITH RECURSIVE` on PostgreSQL 15+
+- Common table expressions (`WITH`), including `WITH RECURSIVE` on
+  PostgreSQL 15+: a recursion over cyclic data is recorded as a system of
+  equations, solved by each semiring as its properties allow
+- Materialized views, whose rows keep their provenance across `REFRESH`
 - UPDATE / INSERT / DELETE (when `provsql.update_provenance` is enabled)
 
 See the [supported-features list](/docs/user/querying.html#supported-sql-features)
@@ -107,6 +115,10 @@ documentation](/docs/user/aggregation.html). Data modifications
 and undo; combined with the interval-union semiring, validity
 timestamps turn a provenance-tracked database into a [temporal
 database](/docs/user/temporal.html), time-travel queries included.
+The provenance circuits themselves are part of the database's
+[persistence story](/docs/user/persistence.html): what survives a
+crash, how to back them up alongside `pg_dump`, and how to stream them
+to a replica.
 
 ## ProvSQL Studio {#studio}
 

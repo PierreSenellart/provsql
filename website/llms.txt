@@ -13,8 +13,10 @@
 
 Capabilities have grown substantially since the 2018 VLDB demo paper:
 current ProvSQL supports inner and outer joins, subqueries, aggregation
-with HAVING, set operations, CTEs including WITH RECURSIVE, data
-modifications (INSERT/UPDATE/DELETE), window-function pass-through,
+with HAVING, window functions and ranking, ORDER BY ... LIMIT read in
+every possible world, set operations, CTEs including WITH RECURSIVE over
+cyclic data (recorded as equation systems each semiring solves),
+materialized views, data modifications (INSERT/UPDATE/DELETE),
 continuous probability distributions, and latent-variable Bayesian
 inference (observing evidence conditions latent distribution parameters
 into their posterior by likelihood weighting). The authoritative,
@@ -32,6 +34,11 @@ current reference is the documentation below.
 - [Shapley and Banzhaf values](https://provsql.org/docs/user/shapley.html)
 - [Where-provenance](https://provsql.org/docs/user/where-provenance.html)
 - [Aggregation](https://provsql.org/docs/user/aggregation.html): aggregate provenance
+- [Conditioning](https://provsql.org/docs/user/conditioning.html): conditional probabilities and expectations with the `|` operator
+- [Data modification](https://provsql.org/docs/user/data-modification.html): provenance of INSERT/UPDATE/DELETE, audit and undo
+- [Temporal databases](https://provsql.org/docs/user/temporal.html): validity intervals and time-travel queries
+- [Persistence](https://provsql.org/docs/user/persistence.html): durability, backups and replication of the provenance circuits
+- [Configuration](https://provsql.org/docs/user/configuration.html): GUC reference
 - [ProvSQL Studio](https://provsql.org/docs/user/studio.html): web UI and notebooks
 - [Case studies](https://provsql.org/docs/user/casestudies.html): extended worked examples
 
