@@ -5523,13 +5523,23 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     }
     /* The semimod is the first argument; an ordered aggregate carries its sort
      * keys as further (junk) arguments. */
+    /* An aggregate of aggregate results (a sum of sums, a max of sums: its
+     * contributions are provenance_semimod_flat or _nested) is NULL in a world
+     * according to whether the inner aggregates are, which this reading does
+     * not follow. */
     if (!IsA(arr, Aggref) || arr->args == NIL)
-      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+      provsql_unsupported(PROVSQL_GAP, "null-test-aggregate-of-aggregates",
+                          "the NULL-ness of an aggregate of aggregate results "
+                          "(a COALESCE or IS [NOT] NULL over it) is not "
+                          "supported");
     te = (TargetEntry *)linitial(arr->args);
     if (!IsA(te->expr, FuncExpr) ||
         (((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD &&
          ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
-      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+      provsql_unsupported(PROVSQL_GAP, "null-test-aggregate-of-aggregates",
+                          "the NULL-ness of an aggregate of aggregate results "
+                          "(a COALESCE or IS [NOT] NULL over it) is not "
+                          "supported");
     sm = (FuncExpr *)te->expr;
     V = (Node *)list_nth(sm->args, 0); /* per-row aggregated value */
     K = (Node *)list_nth(sm->args, 1); /* per-row provenance token */

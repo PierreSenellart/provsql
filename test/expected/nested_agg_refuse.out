@@ -74,6 +74,12 @@ s
 s
 4
 (1 row)
+ERROR:  ProvSQL: the NULL-ness of an aggregate of aggregate results (a COALESCE or IS [NOT] NULL over it) is not supported
+DETAIL:  provsql-reason: null-test-aggregate-of-aggregates; scope: gap
+ERROR:  ProvSQL: the NULL-ness of an aggregate of aggregate results (a COALESCE or IS [NOT] NULL over it) is not supported
+DETAIL:  provsql-reason: null-test-aggregate-of-aggregates; scope: gap
+ERROR:  ProvSQL: the NULL-ness of an aggregate of aggregate results (a COALESCE or IS [NOT] NULL over it) is not supported
+DETAIL:  provsql-reason: null-test-aggregate-of-aggregates; scope: gap
 remove_provenance
 
 (1 row)

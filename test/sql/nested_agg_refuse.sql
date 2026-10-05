@@ -154,6 +154,14 @@ GROUP BY s ORDER BY 1;
 SET provsql.active = on;
 RESET client_min_messages;
 
+-- The NULL-ness of an aggregate of aggregate results, which a COALESCE reads:
+-- whether the outer aggregate is NULL in a world depends on whether the inner
+-- ones are, which is not followed.  A tagged refusal (it was an internal
+-- error), for a sum of counts, a max of counts and an IS NULL.
+SELECT coalesce(sum(c), 0) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT coalesce(max(c), 0) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT sum(c) IS NULL FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+
 SELECT remove_provenance('l_nested');
 SELECT remove_provenance('r_nested');
 DROP TABLE l_nested;
