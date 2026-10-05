@@ -238,7 +238,7 @@ Aggregation
    "``choose`` aggregate", "", "", "", "", "", "", "", "", "", ""
    "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", "", ""
    "``stddev`` / ``variance`` over tracked rows", "", "", "", "", "", "", "", "", "", "✓"
-   "``bool_and`` / ``bool_or``", "", "", "", "✓", "", "", "", "", "", ""
+   "``bool_and`` / ``bool_or``", "", "", "", "", "", "", "", "", "", ""
    "Functions of an aggregate result (``round`` / ``abs`` / ``power``…)", "", "", "", "", "", "", "", "", "", "✓"
    "``COALESCE`` / ``NULLIF`` / ``GREATEST`` over aggregates", "", "", "", "", "", "", "", "", "", "✓"
    "Aggregate of an aggregate result (``avg`` of a ``count``…)", "", "", "", "", "", "", "", "", "", "✓"

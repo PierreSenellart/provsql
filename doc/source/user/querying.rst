@@ -189,9 +189,8 @@ limit it is:
     * a window function whose value is read at an offset other than one
       (``lag(x, 3)``, ``nth_value(x, 2)``), or an aggregate over a ``ROWS`` or
       ``GROUPS`` frame with an offset, both decided by which rows are present;
-      the offset and distribution functions at offset one (``lag(x)``,
-      ``first_value``, ``cume_dist``, …) that are not tracked are reported as a
-      ``gap``;
+      the offset functions at offset one (``lag(x)``, ``first_value``, …),
+      which are not tracked, are reported as a ``gap``;
     * a recursion outside the shape the fixpoint is defined for.
 
 ``gap``
@@ -246,10 +245,10 @@ The constructs themselves:
   its ``DISTINCT``, or whose inner value is not numeric (an aggregate of
   another kind is tracked per possible world, see :ref:`reaggregation`)
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  other than aggregates over a frame determined by values and the ranks
-  ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see
-  :ref:`window-aggregates`): ``LAG``, ``LEAD``, ``NTILE``, ``ROWS``
-  frames with an offset, etc. The query still executes, with a
+  other than aggregates over a frame determined by values, the ranks
+  ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER``, and ``CUME_DIST``,
+  ``PERCENT_RANK``, ``NTILE`` (see :ref:`window-aggregates`): ``LAG``,
+  ``LEAD``, ``FIRST_VALUE``, ``ROWS`` frames with an offset, etc. The query still executes, with a
   ``WARNING``, and each output row carries the provenance of its input
   row, but the window value is an opaque scalar
 * ``*`` **over a provenance-tracked table where the number of columns has

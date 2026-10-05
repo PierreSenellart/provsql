@@ -3335,15 +3335,6 @@ END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-/** @brief Mint (or reuse) the gate_arith for an agg_token arithmetic
- *  result and return the agg_token carrying it.
- *
- * Also records the computed scalar in the gate's @c extra -- exactly
- * what aggregate evaluation does for @c agg gates -- so
- * @c agg_token_value_text can recover the @c "value (*)" display from
- * the bare UUID (as ProvSQL Studio does for result cells under
- * @c provsql.aggtoken_text_as_uuid). The gate UUID is deterministic in
- * (op, children), so re-recording the (identical) value is idempotent. */
 /**
  * @brief The SQL type of the value an @c agg_token carries.
  *
@@ -3436,6 +3427,18 @@ END
 $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public;
 
+/** @brief Mint (or reuse) the gate_arith for an agg_token arithmetic
+ *  result and return the agg_token carrying it.
+ *
+ * The gate records the computed scalar in its @c extra, in @c numeric --
+ * exactly what aggregate evaluation does for @c agg gates -- and, in
+ * @c info2, the SQL type the expression has (@c agg_arith_result_type), so
+ * that @c agg_token_value_text recovers the @c "value (*)" display from the
+ * bare UUID, read as SQL reads it (as ProvSQL Studio does for result cells
+ * under @c provsql.aggtoken_text_as_uuid).  A NULL value (a division by zero
+ * on a row the database as it is may not have) keeps the gate.  The gate UUID
+ * is deterministic in (op, children), so re-recording the (identical) value
+ * is idempotent. */
 CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
   RETURNS agg_token AS
 $$
@@ -3717,9 +3720,6 @@ CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
    here instead, and ORDER BY @(2 - max(x)) carries its gate like abs(...). */
 CREATE OPERATOR @ (RIGHTARG=agg_token, PROCEDURE=provsql_abs);
 
-/** @brief ln(agg_token) (gate_arith LN): the logarithm of the value the
- *  aggregate takes, in every world, rather than of the one it takes in the
- *  database as it is. */
 /**
  * @brief @p fn of the value of @p a, computed in the type the value is read in.
  *
@@ -3754,6 +3754,9 @@ $$
 $$ LANGUAGE sql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public;
 
+/** @brief ln(agg_token) (gate_arith LN): the logarithm of the value the
+ *  aggregate takes, in every world, rather than of the one it takes in the
+ *  database as it is. */
 CREATE OR REPLACE FUNCTION provsql_ln(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(8, ARRAY[(a)::uuid],
