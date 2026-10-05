@@ -4691,6 +4691,7 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
  * values once the group is empty.
  *
  * @param constants  Extension OID cache.
+ * @param q          The query level the aggregate belongs to.
  * @param agg_ref    The original @c Aggref node from the query.
  * @param prov_atts  List of provenance @c Var nodes.
  * @param op         Semiring operation (determines how tokens are combined).
@@ -5741,7 +5742,7 @@ static FuncExpr *make_regular_indicator(const constants_t *constants,
  * and not here, so it explodes into the truths the worlds give it rather than
  * settling on the divisor the data as it is displays.  SQL RAISES there instead
  * of answering NULL; the NULL is the algebra's totalization of a function
- * undefined at zero (semantics, @c \S aggexpr), which is the convention to
+ * undefined at zero (semantics, section @c aggexpr), which is the convention to
  * argue with if anyone objects, not this gate.
  *
  * A divisor that is itself an @c agg_token gets the comparison gate the HAVING
@@ -6538,8 +6539,11 @@ static Expr *having_possible_atom(OpExpr *op, const constants_t *constants,
  *   the condition is the disjunction of the two comparisons (their conjunction
  *   where the bound is from above).
  *
- * @param handled  Set when the shape is one of these, whether or not a
- *                 condition comes out of it.
+ * @param op         The comparison.
+ * @param constants  Extension OID cache.
+ * @param negated    Whether the comparison appears under a NOT.
+ * @param handled    Set when the shape is one of these, whether or not a
+ *                   condition comes out of it.
  */
 static Expr *having_possible_carried(OpExpr *op, const constants_t *constants,
                                      bool negated, bool *handled) {
@@ -12716,13 +12720,14 @@ remove_provenance_attribute_groupref(Query *q,
 }
 
 /**
- * @brief Strip the provenance column's type info from a set-operation node.
+ * @brief Strip the provenance column's type info from a set-operation node
+ *        and the nodes below it.
  *
  * When a provenance column is removed from a UNION/EXCEPT query's target list,
  * the matching entries in the @c SetOperationStmt's @c colTypes, @c colTypmods,
- * and @c colCollations lists must also be removed.
+ * and @c colCollations lists must also be removed, in every node of the tree.
  *
- * @param q        Query containing @c setOperations.
+ * @param node     Node of the set-operation tree (a leaf is left alone).
  * @param removed  Boolean array (from @c remove_provenance_attributes_select)
  *                 indicating which columns were removed.
  */
@@ -12763,6 +12768,13 @@ static void remove_provenance_attribute_setop_node(Node *node,
   }
 }
 
+/**
+ * @brief Strip the provenance column's type info from @p q's set operation.
+ *
+ * @param q        Query containing @c setOperations.
+ * @param removed  Boolean array (from @c remove_provenance_attributes_select)
+ *                 indicating which columns were removed.
+ */
 static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
   remove_provenance_attribute_setop_node(q->setOperations, removed);
 }
@@ -14175,6 +14187,8 @@ static bool tracked_sublink_count_walker(Node *node, void *cx) {
   return expression_tree_walker(node, tracked_sublink_count_walker, cx);
 }
 
+static bool reads_outside_walker(Node *node, Index depth);
+
 /**
  * @brief Why a tracked sublink of @p q could not be rewritten.
  *
@@ -14191,8 +14205,6 @@ static bool tracked_sublink_count_walker(Node *node, void *cx) {
  * @param sl         The sublink the rewrites left behind, or @c NULL.
  * @return  A phrase to read after @c "not supported here:".
  */
-static bool reads_outside_walker(Node *node, Index depth);
-
 static sublink_reason sublink_unsupported_reason(const constants_t *constants,
                                                  Query *q, SubLink *sl) {
   Query *b = (sl != NULL && IsA(sl->subselect, Query))
@@ -26049,25 +26061,6 @@ static bool node_varies_walker(Node *n, void *ctx) {
 }
 
 /**
- * @brief Is @p n a comparison of an aggregate of this level against a
- *        constant, of a shape the explosion can annotate?
- *
- * The aggregate side must be a bare aggregate call, and one whose @c NULL-ness
- * the explosion can express: @c count never is @c NULL, and @c sum / @c avg /
- * @c min / @c max / @c choose are exactly when they read no value, which
- * @c having_NullTest_to_provenance annotates.  Anything else -- arithmetic
- * over aggregates, an aggregate that is @c NULL over a single value
- * (@c stddev), two aggregates compared with each other -- would leave the
- * worlds where the comparison is unknown out of both truths, and those rows
- * would silently vanish, so it is declined and the value stays frozen.
- *
- * @param n        Node to test.
- * @param agg_out  Out (optional): the aggregate call.
- * @param nullable Out (optional): whether that aggregate can be @c NULL over a
- *                 group that exists, so that the explosion needs its third,
- *                 unknown row.
- */
-/**
  * @brief Walker: what makes an expression vary within a group, or between
  *        the worlds of one: an aggregate, a window, a subquery, a parameter, a
  *        reference to an outer query, a volatile function.
@@ -26100,6 +26093,26 @@ static bool aggref_truth_comparable(Aggref *ar) {
   return ok;
 }
 
+/**
+ * @brief Is @p n a comparison of an aggregate of this level against a
+ *        constant, of a shape the explosion can annotate?
+ *
+ * The aggregate side must be a bare aggregate call, and one whose @c NULL-ness
+ * the explosion can express: @c count never is @c NULL, and @c sum / @c avg /
+ * @c min / @c max / @c choose are exactly when they read no value, which
+ * @c having_NullTest_to_provenance annotates.  Anything else -- arithmetic
+ * over aggregates, an aggregate that is @c NULL over a single value
+ * (@c stddev), two aggregates compared with each other -- would leave the
+ * worlds where the comparison is unknown out of both truths, and those rows
+ * would silently vanish, so it is declined and the value stays frozen.
+ *
+ * @param n        Node to test.
+ * @param agg_out  Out (optional): the aggregate call.
+ * @param nullable Out (optional): whether that aggregate can be @c NULL over a
+ *                 group that exists, so that the explosion needs its third,
+ *                 unknown row.
+ * @param other_out Out (optional): the side compared with the aggregate.
+ */
 static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
                                      bool *nullable, Node **other_out) {
   OpExpr *op;
@@ -30323,6 +30336,7 @@ static Node *retype_group_var_mut(Node *node, void *cx) {
  * relation's row type (a subquery's column, a table created from the query):
  * there the grouping reads a junk copy of it, the output staying as it was.
  *
+ * @param ctx    The query, as for @c wholerow_mutator.
  * @param shown  Whether the outputs of the query are shown to the user
  */
 static void group_wholerows_without_provsql(wholerow_ctx *ctx, bool shown) {
@@ -35586,19 +35600,6 @@ static void warn_nested_limit(const constants_t *constants, bool ordered) {
                 "Write LIMIT plain(k) to say so.");
 }
 
-/**
- * @brief PostgreSQL planner hook – entry point for provenance rewriting.
- *
- * Replaces (or chains after) the standard planner.  For every CMD_SELECT
- * that involves at least one provenance-bearing relation or an explicit
- * @c provenance() call, rewrites the query via @c process_query before
- * handing the result to the standard planner.  Non-SELECT commands and
- * queries without provenance are passed through unchanged.
- * @param q              The query to plan.
- * @param cursorOptions  Cursor options bitmask.
- * @param boundParams    Pre-bound parameter values.
- * @return               The planned statement.
- */
 /** @brief The (type, typmod) of each non-junk output of @p q, in order. */
 static List *output_types(Query *q) {
   List *res = NIL;
@@ -35673,6 +35674,20 @@ static void finish_matview_fill(Query *q, List *types) {
   }
 }
 
+/**
+ * @brief PostgreSQL planner hook – entry point for provenance rewriting.
+ *
+ * Replaces (or chains after) the standard planner.  For every CMD_SELECT
+ * that involves at least one provenance-bearing relation or an explicit
+ * @c provenance() call, rewrites the query via @c process_query before
+ * handing the result to the standard planner.  Non-SELECT commands and
+ * queries without provenance are passed through unchanged.  From
+ * PostgreSQL 13 the hook also receives the query's source text.
+ * @param q              The query to plan.
+ * @param cursorOptions  Cursor options bitmask.
+ * @param boundParams    Pre-bound parameter values.
+ * @return               The planned statement.
+ */
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,

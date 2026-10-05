@@ -535,13 +535,12 @@ PG_FUNCTION_INFO_V1(ntile_as_rank);
  *
  * Rows that tie on the @c ORDER @c BY of the window share the bucket of
  * their rank, which is the reading of the semantics; SQL numbers them in
- * some order and may split them between two buckets.  When @p sql_bucket,
- * PostgreSQL's, differs from the tracked one, a warning says so, once per
- * statement.
+ * some order and may split them between two buckets.  Its SQL arguments
+ * are @c bucket, the @c agg_token of the tracked bucket, and @c sql_bucket,
+ * the bucket PostgreSQL gave the row; when the two differ, a warning says so,
+ * once per statement.
  *
- * @param bucket      The @c agg_token of the tracked bucket.
- * @param sql_bucket  The bucket PostgreSQL gave the row.
- * @return @p bucket.
+ * @return @c bucket.
  */
 Datum
 ntile_as_rank(PG_FUNCTION_ARGS)
@@ -568,13 +567,12 @@ PG_FUNCTION_INFO_V1(row_number_as_rank);
  *
  * The two are equal when the @c ORDER @c BY of the window leaves no ties;
  * with ties, SQL itself does not determine which row gets which number.
- * The rank is what is tracked: when @p row_number differs from it, a warning
- * says so, once per statement.
+ * The rank is what is tracked.  Its SQL arguments are @c rank, the
+ * @c agg_token of the rank of the row, and @c row_number, the row number of
+ * the row among those of the database as it is, or NULL for a row absent
+ * from it; when the two differ, a warning says so, once per statement.
  *
- * @param rank        The @c agg_token of the rank of the row.
- * @param row_number  The row number of the row among those of the database as
- *                    it is, or NULL for a row absent from it.
- * @return @p rank.
+ * @return @c rank.
  */
 Datum
 row_number_as_rank(PG_FUNCTION_ARGS)
