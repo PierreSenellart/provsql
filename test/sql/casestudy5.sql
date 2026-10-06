@@ -327,9 +327,10 @@ ORDER BY photo_id, species_id;
 DROP TABLE result_cs5_confident;
 DROP TABLE confident_detections;
 
--- Step 12: unidentified detections (NULL species_id) and the three kinds of
+-- Step 12: unidentified detections (NULL species_id) and the four kinds of
 -- "not": EXCEPT (syntactic set difference), NOT IN (unknown poisons every
--- answer), NOT EXISTS (equality never matches a NULL).  Loch Torridon is
+-- answer), NOT EXISTS (equality never matches a NULL), and LEFT JOIN ... IS
+-- NULL (the same answers as NOT EXISTS).  Loch Torridon is
 -- photos 1-8, Glen Affric photos 9-15; both stations carry one unidentified
 -- detection (photo 5 at 0.60, photo 9 at 0.50).
 

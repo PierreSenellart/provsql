@@ -2,12 +2,13 @@
 \pset format unaligned
 
 -- Case Study 8: ProvSQL as a Probability Calculator.
--- Backs the five worked problems of doc/source/user/casestudy8.rst: discrete
--- Bayes via the | conditioning operator, correlation-aware disjunction,
--- the probability_evaluate method portfolio, continuous truncation moments,
--- and conditional expectation of a probabilistic aggregate.
+-- Backs the worked problems of doc/source/user/casestudy8.rst: discrete
+-- Bayes via the | conditioning operator, correlation-aware disjunction, the
+-- probability_evaluate method portfolio, continuous truncation moments,
+-- conditional expectation of a probabilistic aggregate, a denial constraint
+-- as evidence, and the continuous and latent-variable problems after it.
 
--- Setup (mirrors doc/casestudy8/setup.sql).
+-- Setup: the data of the problems, inline.
 CREATE TABLE screening(grp int, disease boolean, positive boolean, p float);
 INSERT INTO screening VALUES
   (1, true,  true,  0.009), (1, true,  false, 0.001),
@@ -94,6 +95,40 @@ SELECT region, round(e_total::numeric,2) AS e_total,
 FROM p5;
 RESET provsql.active;
 DROP TABLE p5;
+
+-- Problem 6: a denial constraint as evidence.  Two doses fewer than 21 days
+-- apart are forbidden; the violation W = (d1 & d2) | (d2 & d3) shares dose 2,
+-- so P(W) = 0.5 * (1 - 0.5 * 0.5) = 0.375 and a valid record has 0.625.
+-- Conditioned on !W, dose 2 drops to 0.5 * 0.25 / 0.625 = 0.2, doses 1 and 3
+-- to 0.25 / 0.625 = 0.4, and dose 4, in no possible clash, stays at 0.8.
+CREATE TABLE doses(id int, administered date, p float);
+INSERT INTO doses VALUES
+  (1, '2024-03-04', 0.5),
+  (2, '2024-03-14', 0.5),
+  (3, '2024-03-28', 0.5),
+  (4, '2024-04-30', 0.8);
+SELECT add_provenance('doses');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM doses; END $$;
+CREATE TABLE violation AS
+  SELECT DISTINCT 1
+  FROM doses a JOIN doses b
+    ON a.id < b.id AND abs(a.administered - b.administered) < 21;
+CREATE TABLE p6 AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p_violation,
+         round(probability_evaluate(!provenance())::numeric, 4) AS p_valid
+  FROM violation;
+SELECT remove_provenance('p6');
+SELECT * FROM p6;
+DROP TABLE p6;
+CREATE TABLE p6 AS
+  SELECT d.id,
+         round(probability_evaluate(provenance())::numeric, 4) AS prior,
+         round(probability_evaluate(provenance()
+           | !(SELECT provenance() FROM violation))::numeric, 4) AS posterior
+  FROM doses d;
+SELECT remove_provenance('p6');
+SELECT * FROM p6 ORDER BY id;
+DROP TABLE p6, violation, doses;
 
 -- Problem 7: a skewed waiting time (log-normal), all closed-form under
 -- rv_mc_samples = 0.  Quantiles read the skew; exp(normal(mu,sigma)) folds

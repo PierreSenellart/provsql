@@ -33,11 +33,13 @@ SELECT bool_and(probability_is_set(provsql)) AS set_now,
 SET provsql.active = on;
 
 -- A different value is refused, and says what to do instead.
-DO $$ BEGIN
+DO $$ DECLARE h text; BEGIN
   PERFORM set_prob(provenance(), 0.25) FROM wo_t;
   RAISE NOTICE 'rewriting a probability was accepted';
 EXCEPTION WHEN others THEN
+  GET STACKED DIAGNOSTICS h = PG_EXCEPTION_HINT;
   RAISE NOTICE 'refused: %', regexp_replace(SQLERRM, '[0-9a-f-]{36}', '<token>');
+  RAISE NOTICE 'hint: %', h;
 END $$;
 
 -- Out-of-range values and NaN are refused too.
@@ -142,10 +144,12 @@ BEGIN
 END $$;
 
 -- replace_input refuses what it is not for, and points at what is.
-DO $$ BEGIN
+DO $$ DECLARE h text; BEGIN
   PERFORM provsql.replace_input(provsql.gate_one(), 0.5);
 EXCEPTION WHEN others THEN
+  GET STACKED DIAGNOSTICS h = PG_EXCEPTION_HINT;
   RAISE NOTICE 'refused: %', regexp_replace(SQLERRM, '[0-9a-f-]{36}', '<token>');
+  RAISE NOTICE 'hint: %', h;
 END $$;
 
 DROP TABLE wo_map;

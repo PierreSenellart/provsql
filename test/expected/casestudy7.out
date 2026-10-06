@@ -130,6 +130,9 @@ p5|ext(p6,p5)|0.700000
 create_provenance_mapping
 
 (1 row)
+create_provenance_mapping
+
+(1 row)
 remove_provenance
 
 (1 row)
@@ -139,16 +142,23 @@ r3|0.800160
 r4|0.585600
 r5|0.549600
 (4 rows)
-NOTICE:  counting refused on 4 of 4 nodes
+node|witnesses|direct_edge_is_one
+r2|622|t
+r3|622|t
+r4|718|f
+r5|718|f
+(4 rows)
+NOTICE:  counting refused as infinite on 4 of 4 nodes
 remove_provenance
 
 (1 row)
-node|reliability
-r2|0.875040
-r3|0.800160
-r4|0.585600
-r5|0.549600
+node|reliability|reliability_independent
+r2|0.875040|0.875040
+r3|0.800160|0.800160
+r4|0.585600|0.585600
+r5|0.549600|0.549600
 (4 rows)
+NOTICE:  not absorptive: why-provenance refused on 4, counting on 4, of 4 nodes
 NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to constraint recommend_paper_fkey on table recommend
 drop cascades to constraint champion_paper_fkey on table champion

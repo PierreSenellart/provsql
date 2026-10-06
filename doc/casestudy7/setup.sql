@@ -161,10 +161,9 @@ SELECT set_prob(provenance(), conf) FROM extends;
 
 -- coreview(a, b): reviewers a and b have served on a committee together.
 -- The relation is SYMMETRIC (both directions are stored), so the
--- collaboration graph is CYCLIC -- the recursive "who is reviewer r
--- connected to?" query only terminates under provsql.boolean_provenance,
--- where it computes connection *reliability* (a network-reliability /
--- #P-hard flavour).  Requires PostgreSQL 15+ to query.
+-- collaboration graph is CYCLIC: the recursive "who is reviewer r
+-- connected to?" query computes connection *reliability* (a
+-- network-reliability, #P-hard problem).  Requires PostgreSQL 15+ to query.
 DROP TABLE IF EXISTS coreview CASCADE;
 CREATE TABLE coreview (
   a    TEXT NOT NULL REFERENCES reviewers(id),

@@ -26,6 +26,24 @@ p_severe_given_referred|matches_bayes
 region|e_total|e_total_given_highday
 North|4.67|5.50
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p_violation|p_valid
+0.3750|0.6250
+(1 row)
+remove_provenance
+
+(1 row)
+id|prior|posterior
+1|0.5000|0.4000
+2|0.5000|0.2000
+3|0.5000|0.4000
+4|0.8000|0.8000
+(4 rows)
 median_days|p95_days|mean_days
 4.95|9.88|5.41
 (1 row)

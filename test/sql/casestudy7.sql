@@ -10,12 +10,12 @@ SET provsql.joint_width = off;
 --   * a safe-by-shape (hierarchical) query -> read-once;
 --   * a coverage query for ONE paper that is H0-shaped yet read-once
 --     thanks to the PRIMARY KEY on expertise(reviewer) (the FD-grouped
---     safe plan, only under provsql.boolean_provenance);
+--     safe plan, only under provsql.provenance = 'boolean');
 --   * the same coverage over the WHOLE program -> genuinely #P-hard;
 --   * a HAVING COUNT(*) pre-pass query;
 --   * a repair_key (block-correlated) query;
 --   * recursive reachability: acyclic (any semiring) and cyclic
---     (network reliability, only under provsql.boolean_provenance).
+--     (network reliability, under the 'semiring' and 'absorptive' classes).
 -- Recursive queries require PostgreSQL 15+ (this test lives in
 -- schedule.15).  No external compiler is invoked (only the built-in
 -- tree-decomposition / independent / possible-worlds methods).
@@ -195,8 +195,8 @@ DROP TABLE cs7_safe;
 
 -- ---------------------------------------------------------------------
 -- Step 2: safe by a key.  Coverage of p1 is H0-shaped; the literal
--- circuit (boolean_provenance off) is NOT read-once -> independent
--- errors.  Under boolean_provenance the FD reviewer->topic makes the
+-- circuit (the 'semiring' class) is NOT read-once -> independent
+-- errors.  Under the 'boolean' class the FD reviewer->topic makes the
 -- rewrite read-once -> independent matches the exact baseline.
 -- ---------------------------------------------------------------------
 DO $$
@@ -228,7 +228,7 @@ DROP TABLE cs7_cov_p1;
 -- ---------------------------------------------------------------------
 -- Step 3: genuinely hard.  Whole-program coverage (paper free) stays
 -- non-hierarchical even with the FD -> #P-hard.  independent errors
--- even under boolean_provenance; the exact methods succeed.
+-- even under the 'boolean' class; the exact methods succeed.
 -- ---------------------------------------------------------------------
 DO $$
 DECLARE raised boolean := false;
@@ -490,12 +490,15 @@ SELECT remove_provenance('cs7_anc');
 SELECT paper, lineage, prob FROM cs7_anc ORDER BY paper;
 DROP TABLE cs7_anc;
 
--- Cyclic without boolean_provenance: the recursion is recorded as an
--- equation system, solved by the semiring evaluating it.  Its probability is
--- the connection reliability the 'boolean' class gives below; the number of
--- its derivations, infinite through the cycles, is refused when evaluated.
+-- Cyclic, under the 'semiring' class (Studio's Semiring toggle): the recursion
+-- is recorded as an equation system, solved by the semiring evaluating it.  Its
+-- probability is the connection reliability; why-provenance gives its
+-- witnesses, finitely many (among them the direct edge, for a neighbour of
+-- r1); counting refuses, the number of derivations through the cycles being
+-- infinite.
 SET provsql.provenance = 'semiring';
-SELECT create_provenance_mapping('cs7_count', 'extends', '1');
+SELECT create_provenance_mapping('cs7_count', 'coreview', '1');
+SELECT create_provenance_mapping('cs7_why', 'coreview', 'a || ''-'' || b');
 CREATE TABLE cs7_conn AS
   WITH RECURSIVE conn(node) AS (
       SELECT 'r1'
@@ -507,34 +510,63 @@ CREATE TABLE cs7_conn AS
   FROM conn WHERE node <> 'r1';
 SELECT remove_provenance('cs7_conn');
 SELECT node, reliability FROM cs7_conn ORDER BY node;
+SELECT node,
+       length(w) - length(replace(w, '{', '')) - 1 AS witnesses,
+       position('{r1-' || node || '}' IN w) > 0 AS direct_edge_is_one
+FROM (SELECT node, sr_why(tok, 'cs7_why') AS w FROM cs7_conn) t ORDER BY node;
 DO $$
-DECLARE refused int := 0; r record;
+DECLARE refused int := 0; r record; d text;
 BEGIN
   FOR r IN SELECT tok FROM cs7_conn LOOP
     BEGIN
       PERFORM sr_counting(r.tok, 'cs7_count');
-    EXCEPTION WHEN OTHERS THEN refused := refused + 1;
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+      IF d LIKE '%recursion-infinite-count%' THEN refused := refused + 1; END IF;
     END;
   END LOOP;
-  RAISE NOTICE 'counting refused on % of % nodes', refused,
+  RAISE NOTICE 'counting refused as infinite on % of % nodes', refused,
     (SELECT count(*) FROM cs7_conn);
 END $$;
-DROP TABLE cs7_conn, cs7_count;
+DROP TABLE cs7_conn;
 
--- Cyclic under boolean_provenance: reachability converges; the
--- probability is connection reliability.
-SET provsql.provenance = 'boolean';
+-- Cyclic, under the 'absorptive' class (Studio's Absorptive toggle, as on the
+-- page): reachability is compiled along a tree decomposition of the data, the
+-- same reliabilities, which the independent method evaluates too.  The tokens
+-- carry the absorptive assumption: counting and why-provenance refuse them.
+SET provsql.provenance = 'absorptive';
 CREATE TABLE cs7_conn AS
   WITH RECURSIVE conn(node) AS (
       SELECT 'r1'
     UNION
       SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
   )
-  SELECT node, round(probability_evaluate(provenance())::numeric,6) AS reliability
+  SELECT node, round(probability_evaluate(provenance())::numeric,6) AS reliability,
+         round(probability_evaluate(provenance(), 'independent')::numeric,6)
+           AS reliability_independent,
+         provenance() AS tok
   FROM conn WHERE node <> 'r1';
 SELECT remove_provenance('cs7_conn');
-SELECT node, reliability FROM cs7_conn ORDER BY node;
-DROP TABLE cs7_conn;
+SELECT node, reliability, reliability_independent FROM cs7_conn ORDER BY node;
+DO $$
+DECLARE why_refused int := 0; count_refused int := 0; r record;
+BEGIN
+  FOR r IN SELECT tok FROM cs7_conn LOOP
+    BEGIN
+      PERFORM sr_why(r.tok, 'cs7_why');
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE '%not absorptive%' THEN why_refused := why_refused + 1; END IF;
+    END;
+    BEGIN
+      PERFORM sr_counting(r.tok, 'cs7_count');
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE '%not absorptive%' THEN count_refused := count_refused + 1; END IF;
+    END;
+  END LOOP;
+  RAISE NOTICE 'not absorptive: why-provenance refused on %, counting on %, of % nodes',
+    why_refused, count_refused, (SELECT count(*) FROM cs7_conn);
+END $$;
+DROP TABLE cs7_conn, cs7_count, cs7_why;
 SET provsql.provenance = 'semiring';
 
 DROP TABLE bid, expertise, topic_of, extends, coreview, assignment,

@@ -712,21 +712,21 @@ reliability among them (``MAX(reliability)``):
            COUNT(*)           AS n_studies,
            MAX(reliability)   AS top_reliability,
            COUNT(*) * MAX(reliability) AS evidence_weight,
-           (COUNT(*) * MAX(reliability))::NUMERIC AS evidence_weight_value
+           plain(COUNT(*) * MAX(reliability)) AS evidence_weight_value
     FROM f
     GROUP BY exposure, outcome, effect
-    ORDER BY evidence_weight_value, exposure, outcome, effect;
+    ORDER BY evidence_weight_value DESC, exposure, outcome, effect;
 
 .. note::
 
    ``evidence_weight`` is an aggregate token, which can be inspected and
-   evaluated like any provenance circuit. To get its *value* as a plain
-   number, cast it to ``NUMERIC`` as in ``evidence_weight_value``: the
-   cast drops the provenance and yields ordinary SQL data (usable in
-   ``ORDER BY``, comparisons, further computation). The group provenance
-   of each (exposure, outcome, effect) triple is unaffected and remains
-   available for :sqlfunc:`probability_evaluate`, :sqlfunc:`shapley`,
-   etc.
+   evaluated like any provenance circuit; a cast to ``NUMERIC`` keeps it
+   one. To get its *value* as a plain number, wrap it in :sqlfunc:`plain`
+   as in ``evidence_weight_value``: the value in the database as it is,
+   as ordinary SQL data (usable in ``ORDER BY``, comparisons, further
+   computation). The group provenance of each (exposure, outcome, effect)
+   triple is unaffected and remains available for
+   :sqlfunc:`probability_evaluate`, :sqlfunc:`shapley`, etc.
 
 
 Step 17: Richer Aggregates -- ``DISTINCT``, ``string_agg``, ``FILTER``

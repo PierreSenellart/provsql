@@ -232,7 +232,7 @@ SELECT exposure, outcome, effect FROM f
 GROUP BY exposure, outcome, effect
 HAVING COUNT(*) >= 2;
 
--- Step 11: sr_counting to inspect zero vs. non-zero provenance
+-- Step 11: sr_counting over the view, which lists replicated findings only
 ALTER TABLE finding ADD COLUMN cnt int DEFAULT 1;
 SELECT create_provenance_mapping('count_mapping', 'finding', 'cnt');
 
@@ -246,7 +246,7 @@ SELECT remove_provenance('result_replicated');
 SELECT * FROM result_replicated ORDER BY exposure, outcome, effect;
 DROP TABLE result_replicated;
 
--- Step 12: Probability of replication (single-study findings → 0 via f_replicated)
+-- Step 12: Probability of replication (single-study findings are not listed)
 CREATE TABLE result_replication AS
 SELECT exposure, outcome, effect,
     ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
@@ -330,20 +330,18 @@ FROM result_banzhaf_all ORDER BY bv DESC, study;
 DROP TABLE result_banzhaf_all;
 DROP TABLE target_token;
 
--- Step 16: arithmetic on aggregate results – the product of two aggregates is
--- carried as a gate, and so is the rounding of it (round, floor, ceil and abs
--- are gate operations), so both columns keep their provenance and are stored
--- as agg_token; an explicit cast is what reads the plain value, and what an
--- ORDER BY on a stored column needs, agg_token having no order of its own
--- (its value is one per world).  The cast has to be one PostgreSQL keeps: a
--- ::numeric on a rounding that is already numeric is a no-op it elides.
+-- Step 16: arithmetic on aggregate results, the page's query.  The product of
+-- two aggregates is carried as a gate and stays an agg_token; plain() reads its
+-- value in the database as it is, which the ORDER BY sorts on without warning.
+-- The two token columns are rounded (through numeric, round having no double
+-- precision form), so that their text is the same on every PostgreSQL version.
 SET client_min_messages TO ERROR;
 CREATE TABLE result_agg_arith AS
 SELECT exposure, outcome, effect,
-       (COUNT(*))::bigint AS n_studies,
+       COUNT(*)           AS n_studies,
        ROUND((MAX(reliability))::numeric, 2) AS top_reliability,
        ROUND((COUNT(*) * MAX(reliability))::numeric, 4) AS evidence_weight,
-       (COUNT(*) * MAX(reliability))::numeric AS evidence_weight_value
+       plain(COUNT(*) * MAX(reliability)) AS evidence_weight_value
 FROM f
 GROUP BY exposure, outcome, effect;
 RESET client_min_messages;

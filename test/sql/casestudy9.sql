@@ -23,11 +23,14 @@ INSERT INTO cs9_deal VALUES
 SELECT add_provenance('cs9_deal');
 DO $$ BEGIN PERFORM set_prob(provenance(), win_prob) FROM cs9_deal; END $$;
 
--- Step 2: expected revenue given some deal closes (North 155.59) and the
--- forecast counting nothing as 0 (North 154.50 = 80*.9 + 45*.5 + 120*.3 + 30*.8).
+-- Step 2: the pipeline when every deal closes (North 275 (*)), expected revenue
+-- given some deal closes (North 155.59), and the forecast counting nothing as 0
+-- (North 154.50 = 80*.9 + 45*.5 + 120*.3 + 30*.8).
 CREATE TABLE cs9_r AS
-  SELECT region, round(expected(sum(amount))::numeric, 2) AS if_any_closes,
-         round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast
+  SELECT region, sum(amount) AS pipeline,
+         round(expected(sum(amount))::numeric, 2) AS if_any_closes,
+         round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast,
+         round(avg(amount), 1) AS avg_deal
   FROM cs9_deal GROUP BY region;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
@@ -62,7 +65,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
-  SELECT region, round(expected(rk)::numeric, 4) AS expected_rank
+  SELECT region, rk, round(expected(rk)::numeric, 4) AS expected_rank
   FROM (SELECT region, rank() OVER (ORDER BY sum(amount) DESC) AS rk
         FROM cs9_deal GROUP BY region) t;
 SELECT remove_provenance('cs9_r');
@@ -119,10 +122,11 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region, amount DESC;
 DROP TABLE cs9_r;
 
--- Step 11: expected standard deviation, over the worlds with two deals or
--- more (North 33.31).
+-- Step 11: the standard deviation when every deal closes (North 40.1 (*)), and
+-- its expectation over the worlds with two deals or more (North 33.31).
 CREATE TABLE cs9_r AS
-  SELECT region, round(expected(stddev(amount))::numeric, 2) AS expected_sd
+  SELECT region, round(stddev(amount), 1) AS sd,
+         round(expected(stddev(amount))::numeric, 2) AS expected_sd
   FROM cs9_deal GROUP BY region;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;

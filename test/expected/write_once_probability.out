@@ -9,6 +9,7 @@ set_now|reads_back
 t|t
 (1 row)
 NOTICE:  refused: probability of gate <token> is already set to 0.5
+NOTICE:  hint: Use provsql.replace_input() to give a tuple a different probability: it mints a fresh input gate and returns it, for the row's provsql column to carry.
 NOTICE:  refused: ProvSQL: set_prob: probability 1.5 is outside [0, 1]
 NOTICE:  refused: ProvSQL: set_prob: NaN is not a probability
 add_provenance
@@ -68,3 +69,4 @@ bid
 NOTICE:  infos now (1, 2)
 NOTICE:  text now first
 NOTICE:  refused: replace_input: <token> is a gate of type one, not an input
+NOTICE:  hint: Only a leaf carries a probability of its own; a derived gate's is computed from its leaves.
