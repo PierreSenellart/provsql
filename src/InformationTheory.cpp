@@ -194,15 +194,18 @@ double entropyOfView(const DensityView &view)
 
 /* Histogram plug-in estimate of the (differential) entropy from raw
  * draws: Scott-rule bin width, H^ = -sum (n_i/m) ln(n_i / (m h)).  A
- * degenerate sample (zero spread) is a point mass: Shannon entropy 0. */
-double entropyFromSamples(std::vector<double> xs, const std::string &what)
+ * degenerate sample (zero spread) is a point mass: Shannon entropy 0.
+ * Draws with no value are missing observations; a NaN drawn (a NaN in the
+ * data) cannot be binned, and makes the estimate NaN. */
+double entropyFromSamples(const std::vector<std::optional<double>> &draws,
+                          const std::string &what)
 {
-  xs.erase(std::remove_if(xs.begin(), xs.end(),
-                          [](double v) { return std::isnan(v); }),
-           xs.end());
+  const std::vector<double> xs = definedDraws(draws);
   const std::size_t m = xs.size();
   if (m == 0)
-    throw CircuitException(what + ": no defined Monte Carlo draws");
+    throw NoValueException(what);
+  for (double v : xs)
+    if (std::isnan(v)) return v;
   double mean = 0.0;
   for (double v : xs) mean += v;
   mean /= static_cast<double>(m);
@@ -340,11 +343,15 @@ double computeMutualInformation(const GenericCircuit &gc, gate_t x_root,
   std::vector<std::pair<double, double>> pairs;
   pairs.reserve(xs.size());
   for (std::size_t i = 0; i < xs.size(); ++i)
-    if (!std::isnan(xs[i]) && !std::isnan(ys[i]))
-      pairs.emplace_back(xs[i], ys[i]);
+    if (xs[i] && ys[i]) {
+      /* A NaN drawn (a NaN in the data) cannot be binned. */
+      if (std::isnan(*xs[i]) || std::isnan(*ys[i]))
+        return std::numeric_limits<double>::quiet_NaN();
+      pairs.emplace_back(*xs[i], *ys[i]);
+    }
   const std::size_t m = pairs.size();
   if (m == 0)
-    throw CircuitException("mutual_information: no defined Monte Carlo draws");
+    throw NoValueException("mutual_information");
 
   double xlo = pairs[0].first, xhi = xlo, ylo = pairs[0].second, yhi = ylo;
   for (const auto &[a, b] : pairs) {
@@ -408,6 +415,10 @@ Datum rv_entropy(PG_FUNCTION_ARGS)
 
     return Float8GetDatum(
       provsql::computeEntropy(gc, root_gate, event_opt));
+  } catch (const provsql::NoValueException &) {
+    /* Defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_entropy: %s", e.what());
@@ -432,6 +443,10 @@ Datum rv_kl(PG_FUNCTION_ARGS)
     auto gc = getJointCircuit(*p, *q, p_gate, q_gate);
 
     return Float8GetDatum(provsql::computeKL(gc, p_gate, q_gate));
+  } catch (const provsql::NoValueException &) {
+    /* Defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_kl: %s", e.what());
@@ -457,6 +472,10 @@ Datum rv_mutual_information(PG_FUNCTION_ARGS)
 
     return Float8GetDatum(
       provsql::computeMutualInformation(gc, x_gate, y_gate));
+  } catch (const provsql::NoValueException &) {
+    /* Defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_mutual_information: %s", e.what());

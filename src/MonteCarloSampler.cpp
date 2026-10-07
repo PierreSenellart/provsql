@@ -40,16 +40,22 @@ std::mt19937_64 seedRng()
 
 namespace {
 
-bool applyCmp(double l, ComparisonOperator op, double r)
+/** @brief A comparison in this world: not true where a side has no value
+ *  (SQL's NULL), and in PostgreSQL's order of floats (NaN equal to NaN and
+ *  above every number) where both have one. */
+bool applyCmp(std::optional<double> lo, ComparisonOperator op,
+              std::optional<double> ro)
 {
-  // IEEE 754 semantics: any comparison involving NaN is false except !=.
+  if(!lo || !ro) return false;
+  const double l = *lo, r = *ro;
+  const bool lt = sql_less(l, r), gt = sql_less(r, l);
   switch(op) {
-    case ComparisonOperator::LT: return l < r;
-    case ComparisonOperator::LE: return l <= r;
-    case ComparisonOperator::EQ: return l == r;
-    case ComparisonOperator::NE: return l != r;
-    case ComparisonOperator::GE: return l >= r;
-    case ComparisonOperator::GT: return l > r;
+    case ComparisonOperator::LT: return lt;
+    case ComparisonOperator::LE: return !gt;
+    case ComparisonOperator::EQ: return !lt && !gt;
+    case ComparisonOperator::NE: return lt || gt;
+    case ComparisonOperator::GE: return !lt;
+    case ComparisonOperator::GT: return gt;
   }
   return false;
 }
@@ -97,7 +103,10 @@ public:
   }
 
   bool evalBool(gate_t g);
-  double evalScalar(gate_t g);
+  /// The value of @p g in this world; empty where it has none (an
+  /// aggregate over no row, a NULL, a division by zero) -- a NaN is a
+  /// value, the one a float can hold.
+  std::optional<double> evalScalar(gate_t g);
   double evalWeight(gate_t g);
 
   /// Read the inputs from @p world instead of drawing them (enumeration
@@ -117,7 +126,7 @@ private:
   const GenericCircuit &gc_;
   std::mt19937_64 &rng_;
   std::unordered_map<gate_t, bool> bool_cache_;
-  std::unordered_map<gate_t, double> scalar_cache_;
+  std::unordered_map<gate_t, std::optional<double>> scalar_cache_;
   const std::unordered_map<gate_t, bool> *fixed_ = nullptr;
   // Per-gate_rv Distribution, constructed once and reused across iterations
   // (NOT cleared in resetIteration): sampling then never re-parses the spec
@@ -179,9 +188,7 @@ bool Sampler::evalBool(gate_t g)
         throw CircuitException(
                 "gate_cmp: unsupported operator OID " +
                 std::to_string(gc_.getInfos(g).first));
-      double l = evalScalar(wires[0]);
-      double r = evalScalar(wires[1]);
-      result = applyCmp(l, op, r);
+      result = applyCmp(evalScalar(wires[0]), op, evalScalar(wires[1]));
       break;
     }
     case gate_mulinput:
@@ -225,12 +232,12 @@ bool Sampler::evalBool(gate_t g)
   return result;
 }
 
-double Sampler::evalScalar(gate_t g)
+std::optional<double> Sampler::evalScalar(gate_t g)
 {
   auto it = scalar_cache_.find(g);
   if(it != scalar_cache_.end()) return it->second;
 
-  double result = 0.0;
+  std::optional<double> result = 0.0;
   const auto type = gc_.getGateType(g);
   const auto &wires = gc_.getWires(g);
 
@@ -239,7 +246,7 @@ double Sampler::evalScalar(gate_t g)
       /* The NULL value (a NULL branch of a CASE): undefined, as an aggregate
        * over no row */
       if(gc_.getUUID(g) == PROVSQL_GATE_NULL_UUID)
-        result = std::numeric_limits<double>::quiet_NaN();
+        result = std::nullopt;
       else
         result = parseDoubleStrict(gc_.getExtra(g));
       break;
@@ -280,19 +287,42 @@ double Sampler::evalScalar(gate_t g)
       if(wires.empty())
         throw CircuitException("gate_arith must have at least one child");
       auto op = static_cast<provsql_arith_op>(gc_.getInfos(g).first);
+      // Arithmetic is strict: an operand with no value in this world leaves
+      // the result without one.  PERCENTILE reads its wires itself (a row
+      // with no value is skipped there, as SQL skips a NULL).
+      std::vector<double> v;
+      if(op != PROVSQL_ARITH_PERCENTILE) {
+        v.reserve(wires.size());
+        bool undefined = false;
+        for(gate_t c : wires) {
+          auto x = evalScalar(c);
+          if(!x) { undefined = true; break; }
+          v.push_back(*x);
+        }
+        if(undefined) {
+          result = std::nullopt;
+          break;
+        }
+      }
       switch(op) {
         case PROVSQL_ARITH_PLUS:
-          result = 0.0;
-          for(gate_t c : wires) result += evalScalar(c);
+        {
+          double r = 0.0;
+          for(double x : v) r += x;
+          result = r;
           break;
+        }
         case PROVSQL_ARITH_TIMES:
-          result = 1.0;
-          for(gate_t c : wires) result *= evalScalar(c);
+        {
+          double r = 1.0;
+          for(double x : v) r *= x;
+          result = r;
           break;
+        }
         case PROVSQL_ARITH_MINUS:
           if(wires.size() != 2)
             throw CircuitException("gate_arith MINUS must be binary");
-          result = evalScalar(wires[0]) - evalScalar(wires[1]);
+          result = v[0] - v[1];
           break;
         case PROVSQL_ARITH_DIV:
         case PROVSQL_ARITH_INTDIV:
@@ -302,8 +332,8 @@ double Sampler::evalScalar(gate_t g)
                     std::string("gate_arith ")
                     + (op == PROVSQL_ARITH_DIV ? "DIV" : "INTDIV")
                     + " must be binary");
-          const double num = evalScalar(wires[0]);
-          const double den = evalScalar(wires[1]);
+          const double num = v[0];
+          const double den = v[1];
           // A divisor that is zero in THIS world leaves the world without a
           // value, as SQL leaves the query without a result there: the draw is
           // a missing observation and the moment is taken over the worlds that
@@ -312,10 +342,9 @@ double Sampler::evalScalar(gate_t g)
           // expected(sum(a)/sum(b)) came back Infinity for data whose divisor
           // cancels in one world only, where the same division under a HAVING
           // answers over the other worlds (having_semantics declines this one).
-          // NaN is this sampler's marker for such a world (see POW below), and
-          // the moment estimators skip those draws.
+          // The moment estimators skip a world with no value.
           if(den == 0.0)
-            result = std::numeric_limits<double>::quiet_NaN();
+            result = std::nullopt;
           else if(op == PROVSQL_ARITH_INTDIV)
             result = std::trunc(num / den);
           else
@@ -325,36 +354,43 @@ double Sampler::evalScalar(gate_t g)
         case PROVSQL_ARITH_NEG:
           if(wires.size() != 1)
             throw CircuitException("gate_arith NEG must be unary");
-          result = -evalScalar(wires[0]);
+          result = -v[0];
           break;
         case PROVSQL_ARITH_MAX:
           // n-ary order statistic: max over the sampled children.  Shared
           // base RVs stay coupled through scalar_cache_, so max(x, y) with x,y
           // over the same leaf draws them jointly (correct correlation).
-          result = evalScalar(wires[0]);
-          for(std::size_t i = 1; i < wires.size(); ++i)
-            result = std::max(result, evalScalar(wires[i]));
+          // In PostgreSQL's order of floats, where NaN is the greatest.
+        {
+          double r = v[0];
+          for(std::size_t i = 1; i < v.size(); ++i)
+            if(sql_less(r, v[i])) r = v[i];
+          result = r;
           break;
+        }
         case PROVSQL_ARITH_MIN:
-          result = evalScalar(wires[0]);
-          for(std::size_t i = 1; i < wires.size(); ++i)
-            result = std::min(result, evalScalar(wires[i]));
+        {
+          double r = v[0];
+          for(std::size_t i = 1; i < v.size(); ++i)
+            if(sql_less(v[i], r)) r = v[i];
+          result = r;
           break;
+        }
         case PROVSQL_ARITH_POW:
         {
           if(wires.size() != 2)
             throw CircuitException("gate_arith POW must be binary");
-          const double base = evalScalar(wires[0]);
-          const double expo = evalScalar(wires[1]);
+          const double base = v[0];
+          const double expo = v[1];
           result = std::pow(base, expo);
           // std::pow is real-valued except for a negative base with a
           // non-integer exponent.  A NaN there is a domain violation,
           // not an undefined world: raise with the fix rather than let
           // the moment estimators silently drop the draw as a missing
           // observation (which would report a biased, implicitly
-          // conditioned answer).  NaN operands (undefined worlds, e.g.
-          // empty-group aggregates) still propagate as NaN.
-          if(std::isnan(result) && !std::isnan(base) && !std::isnan(expo))
+          // conditioned answer).  A NaN operand (a NaN in the data) gives
+          // NaN, as in SQL.
+          if(std::isnan(*result) && !std::isnan(base) && !std::isnan(expo))
             throw CircuitException(
                     "pow: negative base drawn with a non-integer exponent ("
                     + std::to_string(base) + " ^ " + std::to_string(expo)
@@ -366,12 +402,11 @@ double Sampler::evalScalar(gate_t g)
         {
           if(wires.size() != 1)
             throw CircuitException("gate_arith LN must be unary");
-          const double x = evalScalar(wires[0]);
+          const double x = v[0];
           // Same rationale as POW: a negative draw is a domain
           // violation, raised rather than silently conditioned away.
           // x = 0 legitimately yields -Infinity (a boundary value of
-          // probability zero for continuous arguments); NaN operands
-          // propagate as undefined worlds.
+          // probability zero for continuous arguments).
           if(x < 0.0)
             throw CircuitException(
                     "ln: negative draw (" + std::to_string(x)
@@ -383,7 +418,7 @@ double Sampler::evalScalar(gate_t g)
         case PROVSQL_ARITH_EXP:
           if(wires.size() != 1)
             throw CircuitException("gate_arith EXP must be unary");
-          result = std::exp(evalScalar(wires[0]));
+          result = std::exp(v[0]);
           break;
         case PROVSQL_ARITH_ROUND:
         {
@@ -394,11 +429,11 @@ double Sampler::evalScalar(gate_t g)
           // with it, which is why the moment evaluators sample it).
           if(wires.empty() || wires.size() > 2)
             throw CircuitException("gate_arith ROUND takes one or two wires");
-          const double x = evalScalar(wires[0]);
+          const double x = v[0];
           if(wires.size() == 1) {
             result = std::round(x);
           } else {
-            const double d = evalScalar(wires[1]);
+            const double d = v[1];
             if(std::isnan(x) || std::isnan(d)) { result = x + d; break; }
             const double f = std::pow(10.0, d);
             result = std::round(x * f) / f;
@@ -408,28 +443,27 @@ double Sampler::evalScalar(gate_t g)
         case PROVSQL_ARITH_FLOOR:
           if(wires.size() != 1)
             throw CircuitException("gate_arith FLOOR must be unary");
-          result = std::floor(evalScalar(wires[0]));
+          result = std::floor(v[0]);
           break;
         case PROVSQL_ARITH_CEIL:
           if(wires.size() != 1)
             throw CircuitException("gate_arith CEIL must be unary");
-          result = std::ceil(evalScalar(wires[0]));
+          result = std::ceil(v[0]);
           break;
         case PROVSQL_ARITH_ABS:
           if(wires.size() != 1)
             throw CircuitException("gate_arith ABS must be unary");
-          result = std::fabs(evalScalar(wires[0]));
+          result = std::fabs(v[0]);
           break;
         case PROVSQL_ARITH_ASFLOAT8:
           if(wires.size() != 1)
             throw CircuitException("gate_arith ASFLOAT8 must be unary");
-          result = evalScalar(wires[0]);   /* already a double */
+          result = v[0];   /* already a double */
           break;
         case PROVSQL_ARITH_ASFLOAT4:
           if(wires.size() != 1)
             throw CircuitException("gate_arith ASFLOAT4 must be unary");
-          result = static_cast<double>(
-                     static_cast<float>(evalScalar(wires[0])));
+          result = static_cast<double>(static_cast<float>(v[0]));
           break;
         case PROVSQL_ARITH_PERCENTILE:
         {
@@ -437,9 +471,10 @@ double Sampler::evalScalar(gate_t g)
           // rows: wires are interleaved [ind_1, x_1, ..., ind_n, x_n],
           // the fraction is text-encoded in extra.  Per draw, the values
           // whose 0/1 presence indicator draws 1 are sorted and linearly
-          // interpolated at the fraction; a draw with no present row is
-          // NaN (undefined world, skipped by the moment estimators like
-          // an empty-group avg).
+          // interpolated at the fraction, NULL values skipped and NaN
+          // sorted last as SQL does; a draw with no present value has no
+          // value (skipped by the moment estimators like an empty-group
+          // avg).
           if(wires.size() < 2 || wires.size() % 2 != 0)
             throw CircuitException(
                     "gate_arith PERCENTILE must have interleaved "
@@ -453,21 +488,19 @@ double Sampler::evalScalar(gate_t g)
                     "fraction): " + gc_.getExtra(g));
           }
           std::vector<double> members;
-          bool has_nan = false;
           for(std::size_t i = 0; i < wires.size(); i += 2) {
-            if(evalScalar(wires[i]) >= 0.5) {
-              const double x = evalScalar(wires[i + 1]);
-              if(std::isnan(x))
-                has_nan = true;
-              else
-                members.push_back(x);
+            const auto present = evalScalar(wires[i]);
+            if(present && *present >= 0.5) {
+              const auto x = evalScalar(wires[i + 1]);
+              if(x)
+                members.push_back(*x);
             }
           }
-          if(has_nan || members.empty()) {
-            result = std::numeric_limits<double>::quiet_NaN();
+          if(members.empty()) {
+            result = std::nullopt;
             break;
           }
-          std::sort(members.begin(), members.end());
+          std::sort(members.begin(), members.end(), sql_less<double>);
           const double pos = fraction * (members.size() - 1);
           const std::size_t lo = static_cast<std::size_t>(pos);
           const double frac = pos - static_cast<double>(lo);
@@ -517,10 +550,13 @@ double Sampler::evalScalar(gate_t g)
         const auto &sm = gc_.getWires(child);
         if(sm.size() != 2) continue;
         if(!evalBool(sm[0])) continue;
+        // A row whose value is NULL contributes nothing, as in SQL.
+        const auto x = evalScalar(sm[1]);
+        if(!x) continue;
         if(op == AggregationOperator::COUNT) {
-          agg->add(AggValue(static_cast<long>(evalScalar(sm[1]))));
+          agg->add(AggValue(static_cast<long>(*x)));
         } else {
-          agg->add(AggValue(evalScalar(sm[1])));
+          agg->add(AggValue(*x));
         }
       }
       AggValue r = agg->finalize();
@@ -534,13 +570,11 @@ double Sampler::evalScalar(gate_t g)
         case ValueType::NONE:
           // No contributor survived this iteration -- either no row of the
           // group is present in this world, or every contributed value was
-          // NULL.  SUM / AVG / MIN / MAX are then SQL NULL, so they surface
-          // NaN, which compares false under IEEE on any enclosing gate_cmp
-          // (the truth value of a comparison against NULL) and is skipped as
-          // a missing observation by the moment averagers in
-          // Expectation::mc_raw_moment / mc_central_moment, making those
-          // estimators conditional on the worlds where the aggregate is
-          // defined.
+          // NULL.  SUM / AVG / MIN / MAX are then SQL NULL: no value, which
+          // no enclosing gate_cmp holds on (the truth value of a comparison
+          // against NULL) and which the moment averagers in Expectation skip
+          // as a missing observation, making those estimators conditional on
+          // the worlds where the aggregate is defined.
           //
           // COUNT has no NULL to report -- an empty set genuinely counts 0 --
           // but 0 is the right answer only where a row exists to carry it.
@@ -553,13 +587,13 @@ double Sampler::evalScalar(gate_t g)
           // there would let a true-on-zero predicate such as
           // `count(*) <= k` hold in a world that contributes no row,
           // inflating the estimate by the probability that the group is
-          // empty; NaN keeps the enclosing comparison false, which is how
-          // this sampler declines a world.
-          result =
-            (op == AggregationOperator::COUNT &&
+          // empty; no value keeps the enclosing comparison false, which is
+          // how this sampler declines a world.
+          if(op == AggregationOperator::COUNT &&
              (gc_.getInfos(g).second & PROVSQL_AGG_SCALAR_FLAG) != 0)
-            ? 0.0
-            : std::numeric_limits<double>::quiet_NaN();
+            result = 0.0;
+          else
+            result = std::nullopt;
           break;
         default:
           throw CircuitException(
@@ -582,7 +616,8 @@ double Sampler::evalScalar(gate_t g)
         throw CircuitException(
                 "gate_semimod must have exactly two children "
                 "[k_gate, value_gate]");
-      result = evalBool(wires[0]) ? evalScalar(wires[1]) : 0.0;
+      result = evalBool(wires[0]) ? evalScalar(wires[1])
+                                  : std::optional<double>(0.0);
       break;
     }
     case gate_mixture:
@@ -670,7 +705,14 @@ std::unique_ptr<Distribution> Sampler::buildRvDistribution(
 {
   const auto &w = gc_.getWires(leaf);
   auto resolve = [&](const DistributionParam &p) {
-    return p.wire_slot < 0 ? p.literal : evalScalar(w[p.wire_slot]);
+    if(p.wire_slot < 0) return p.literal;
+    const auto x = evalScalar(w[p.wire_slot]);
+    if(!x)
+      throw CircuitException(
+              "gate_rv " + std::string(tmpl.family->name)
+              + ": a parameter has no value in a drawn world (a NULL, or "
+              "an aggregate over no row)");
+    return *x;
   };
   p1 = resolve(tmpl.p1);
   p2 = resolve(tmpl.p2);
@@ -859,13 +901,13 @@ std::vector<double> monteCarloJointDistribution(
   return probs;
 }
 
-std::vector<double> monteCarloScalarSamples(
+std::vector<std::optional<double>> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples)
 {
   std::mt19937_64 rng = seedRng();
   Sampler sampler(gc, rng);
 
-  std::vector<double> out;
+  std::vector<std::optional<double>> out;
   out.reserve(samples);
   for(unsigned i = 0; i < samples; ++i) {
     sampler.resetIteration();
@@ -875,6 +917,16 @@ std::vector<double> monteCarloScalarSamples(
       throw CircuitException(
               "Interrupted after " + std::to_string(i + 1) + " samples");
   }
+  return out;
+}
+
+std::vector<double>
+definedDraws(const std::vector<std::optional<double>> &samples)
+{
+  std::vector<double> out;
+  out.reserve(samples.size());
+  for(const auto &x : samples)
+    if(x) out.push_back(*x);
   return out;
 }
 
@@ -948,7 +1000,7 @@ enumerateBooleanProbability(const GenericCircuit &gc, gate_t root,
   return total;
 }
 
-std::optional<std::vector<std::pair<double, double>>>
+std::optional<std::vector<std::pair<double, std::optional<double>>>>
 enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
                       std::optional<gate_t> event, unsigned max_inputs)
 {
@@ -960,7 +1012,7 @@ enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
   Sampler sampler(gc, rng);
   std::unordered_map<gate_t, bool> world;
   sampler.fixInputs(&world);
-  std::vector<std::pair<double, double>> out;
+  std::vector<std::pair<double, std::optional<double>>> out;
   const std::uint64_t n_worlds = std::uint64_t(1) << inputs.size();
   for(std::uint64_t w = 0; w < n_worlds; ++w) {
     double p = 1.0;
@@ -982,14 +1034,15 @@ enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
   return out;
 }
 
-std::pair<std::vector<double>, std::vector<double>>
+std::pair<std::vector<std::optional<double>>,
+          std::vector<std::optional<double>>>
 monteCarloScalarPairSamples(const GenericCircuit &gc, gate_t root_a,
                             gate_t root_b, unsigned samples)
 {
   std::mt19937_64 rng = seedRng();
   Sampler sampler(gc, rng);
 
-  std::vector<double> out_a, out_b;
+  std::vector<std::optional<double>> out_a, out_b;
   out_a.reserve(samples);
   out_b.reserve(samples);
   for(unsigned i = 0; i < samples; ++i) {
@@ -1101,8 +1154,11 @@ WeightedPosterior importanceSampleConditional(
     const double w = sampler.evalWeight(evidence);
     ++out.attempted;
     if(w > 0.0) {
-      const double x = sampler.evalScalar(root);
-      out.particles.push_back({x, w});
+      /* A draw where the root has no value is a missing observation: it
+       * weighs in the evidence, not in the posterior statistics. */
+      const auto x = sampler.evalScalar(root);
+      if(x)
+        out.particles.push_back({*x, w});
       out.weight_sum += w;
       out.weight_sq_sum += w * w;
     }

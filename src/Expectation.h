@@ -37,6 +37,21 @@
 namespace provsql {
 
 /**
+ * @brief The quantity asked for has a value in no world (an aggregate over a
+ *        group empty in every world of positive probability): SQL's NULL,
+ *        which the SQL entry points return.
+ *
+ * Distinct from a NaN, which is a value (a float can hold one).
+ */
+class NoValueException : public CircuitException
+{
+public:
+/** @brief Construct for the quantity @p what. */
+explicit NoValueException(const std::string &what)
+  : CircuitException(what + ": the value is defined in no world") {}
+};
+
+/**
  * @brief Compute @f$E[X]@f$ (or @f$E[X \mid A]@f$ if @p event_root is set)
  *        over the scalar sub-circuit rooted at @p root.
  *

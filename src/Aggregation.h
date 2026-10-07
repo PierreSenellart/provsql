@@ -28,6 +28,7 @@ extern "C" {
 #include "c_cpp_compatibility.h"
 
 #include <variant>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <cassert>
@@ -106,6 +107,19 @@ enum class ValueType {
   ARRAY_STRING, ///< Array of strings
   NONE          ///< No value (NULL)
 };
+
+/**
+ * @brief The order PostgreSQL gives numbers: for floats, NaN equals NaN and
+ *        is greater than every other value (where IEEE comparisons are all
+ *        false).
+ */
+template <class T> inline bool sql_less(T a, T b) { return a < b; }
+/** @brief @c sql_less for @c double, with PostgreSQL's place for NaN. */
+template <> inline bool sql_less<double>(double a, double b) {
+  if (std::isnan(b)) return !std::isnan(a);
+  if (std::isnan(a)) return false;
+  return a < b;
+}
 
 /**
  * @brief A dynamically-typed aggregate value.

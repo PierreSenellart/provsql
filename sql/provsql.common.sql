@@ -7370,8 +7370,8 @@ CREATE AGGREGATE min(random_variable) (
 -- The moment statistics are built from indicator-weighted power sums with
 -- existing gate_arith opcodes (e.g. covar_pop = SXY/N - (SX/N)(SY/N)); a
 -- world where the statistic is undefined (N = 0, or N = 1 for the sample
--- forms) evaluates to NaN, the established undefined-world convention the
--- moment estimators skip.  percentile_cont is the one gate the arithmetic
+-- forms) divides by zero, which leaves the world without a value, as SQL
+-- gives NULL there; the moment estimators skip such worlds.  percentile_cont is the one gate the arithmetic
 -- cannot express: it mints the PROVSQL_ARITH_PERCENTILE gate_arith
 -- (interleaved [ind_1, x_1, ...] wires, fraction in extra) that the Monte
 -- Carlo sampler evaluates by sorting each draw's present values and
@@ -7507,8 +7507,8 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Sample-variance gate @f$(SXX - SX^2/N) / (N - 1)@f$ from the
- *  power-sum tokens (NaN in a world with @f$N \le 1@f$, the undefined-world
- *  convention). */
+ *  power-sum tokens (no value in a world with @f$N \le 1@f$, where it
+ *  divides by zero, as SQL gives NULL there). */
 CREATE OR REPLACE FUNCTION rv_stat_var_samp_token(
   n_tok uuid, s_tok uuid, ss_tok uuid)
   RETURNS uuid AS
@@ -7590,8 +7590,8 @@ $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
 
 /** @brief Final function for @c corr(random_variable, random_variable):
  *  @f$\mathrm{covar\_pop} / \sqrt{\max(v_x v_y, 0)}@f$ (a zero-variance
- *  world divides to @f$\pm\infty@f$ / NaN, the undefined-world convention,
- *  matching SQL's NULL for a zero-stddev input). */
+ *  world divides by zero and has no value, matching SQL's NULL for a
+ *  zero-stddev input). */
 CREATE OR REPLACE FUNCTION corr_rv_ffunc(state uuid[])
   RETURNS random_variable AS
 $$
@@ -7736,7 +7736,7 @@ CREATE AGGREGATE rv_stddev_samp_impl(random_variable, random_variable) (
  * (two percentiles of the same group at different fractions are distinct
  * gates).  Per Monte Carlo draw, the sampler collects the values whose
  * indicator draws 1, sorts them, and linearly interpolates at the
- * fraction; a draw with no present row is NaN (undefined world).
+ * fraction; a draw with no present value has no value (SQL's NULL).
  */
 CREATE OR REPLACE FUNCTION rv_percentile_make(fraction double precision,
                                               pairs uuid[])
@@ -8279,7 +8279,8 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
  * The variance / raw-moment / central-moment SQL functions need an
  * extra @p k integer argument that does not fit that dispatcher's
  * signature, so they go through this dedicated entry point.  Returns
- * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE.
+ * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE; NULL
+ * when the value is defined in no world.
  */
 CREATE OR REPLACE FUNCTION rv_moment(
   token uuid, k integer, central boolean,

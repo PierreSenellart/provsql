@@ -518,6 +518,10 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
     Oid type = get_fn_expr_argtype(fcinfo->flinfo, 3);
 
     return provenance_evaluate_compiled_internal(*DatumGetUUIDP(token), table, semiring, type);
+  } catch(const provsql::NoValueException &) {
+    /* An expectation defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch(const CircuitRefusal &r) {
     provsql_cancel_if_interrupted();
     provsql_unsupported(r.scope(), r.tag(), "%s", r.what());

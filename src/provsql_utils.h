@@ -125,7 +125,7 @@ typedef enum provsql_arith_op {
                                 ///< the values whose indicator draws 1 are
                                 ///< sorted and linearly interpolated at the
                                 ///< fraction (SQL @c percentile_cont); an
-                                ///< empty draw is NaN (undefined world).
+                                ///< empty draw has no value (SQL NULL).
   PROVSQL_ARITH_INTDIV = 11,///< binary, child0 / child1 truncated toward
                             ///< zero: SQL's division of two integers
   PROVSQL_ARITH_ROUND = 12, ///< child0 rounded half away from zero, to

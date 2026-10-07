@@ -1837,8 +1837,13 @@ bool inline_fast_path(GenericCircuit &gc,
      * collapse that would silently return the product of the marginals. */
     if (!allow_mc) return false;
     auto draws = monteCarloScalarSamples(gc, info.scalar, samples);
-    for (double s : draws) {
-      auto it = std::upper_bound(ts.begin(), ts.end(), s);
+    /* A draw with no value, or a NaN, falls in no interval (every cmp on
+     * it is false, or ordered as SQL orders NaN): decline rather than bin
+     * it into one. */
+    for (const auto &d : draws)
+      if (!d || std::isnan(*d)) return false;
+    for (const auto &d : draws) {
+      auto it = std::upper_bound(ts.begin(), ts.end(), *d);
       std::size_t idx = static_cast<std::size_t>(it - ts.begin());
       ++interval_probs[idx];
     }

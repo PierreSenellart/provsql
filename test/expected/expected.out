@@ -23,3 +23,29 @@ remove_provenance
 avg_expected
 5.109393
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|e_sum|e_min|e_count|e_avg|e_arith
+1|||||
+(1 row)
+remove_provenance
+
+(1 row)
+x|e_window_avg|e_window_sum
+10||
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|e_range|e_avg1
+1|NaN|NaN
+2|NaN|NaN
+3|0.6667|3.0000
+(3 rows)

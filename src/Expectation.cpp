@@ -424,8 +424,10 @@ constexpr unsigned kEnumerateMaxInputs = 20;
  *        (@c enumerateScalarWorlds), or @c std::nullopt when they cannot be
  *        enumerated.
  *
- * The worlds where @p g is undefined (NaN: an aggregate over no row) are left
- * out, as the samplers leave out such draws.  NaN when it is never defined.
+ * The worlds where @p g has no value (an aggregate over no row) are left
+ * out, as the samplers leave out such draws.
+ *
+ * @throws NoValueException when it has a value in no world.
  */
 std::optional<double> enumerated_moment(const GenericCircuit &gc, gate_t g,
                                         unsigned k, double mu,
@@ -438,11 +440,11 @@ std::optional<double> enumerated_moment(const GenericCircuit &gc, gate_t g,
     throw CircuitException(what + ": conditioning event is infeasible");
   double total = 0.0, mass = 0.0;
   for (const auto &w : *worlds) {
-    if (std::isnan(w.second)) continue;
-    total += w.first * std::pow(w.second - mu, static_cast<double>(k));
+    if (!w.second) continue;
+    total += w.first * std::pow(*w.second - mu, static_cast<double>(k));
     mass += w.first;
   }
-  if (!(mass > 0.0)) return std::numeric_limits<double>::quiet_NaN();
+  if (!(mass > 0.0)) throw NoValueException(what);
   return total / mass;
 }
 
@@ -453,19 +455,18 @@ double mc_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
     return *m;
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
-  // NaN samples come from sampling-undefined worlds, e.g. an
-  // agg(SUM/AVG/MIN/MAX) over an empty group (SQL NULL).  Treat them
-  // as missing observations of the moment rather than poisoning the
-  // mean; only return NaN if every sample was undefined.
+  // A draw with no value (an agg(SUM/AVG/MIN/MAX) over an empty group,
+  // SQL NULL) is a missing observation of the moment; a NaN is a value
+  // and propagates, as in SQL.
   double total = 0.0;
-  std::size_t finite_count = 0;
-  for (double x : samples) {
-    if (std::isnan(x)) continue;
-    total += std::pow(x, static_cast<double>(k));
-    ++finite_count;
+  std::size_t defined_count = 0;
+  for (const auto &x : samples) {
+    if (!x) continue;
+    total += std::pow(*x, static_cast<double>(k));
+    ++defined_count;
   }
-  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
-  return total / static_cast<double>(finite_count);
+  if (defined_count == 0) throw NoValueException(what);
+  return total / static_cast<double>(defined_count);
 }
 
 double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
@@ -476,15 +477,14 @@ double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
   double total = 0.0;
-  std::size_t finite_count = 0;
-  for (double x : samples) {
-    if (std::isnan(x)) continue;
-    const double d = x - mu;
-    total += std::pow(d, static_cast<double>(k));
-    ++finite_count;
+  std::size_t defined_count = 0;
+  for (const auto &x : samples) {
+    if (!x) continue;
+    total += std::pow(*x - mu, static_cast<double>(k));
+    ++defined_count;
   }
-  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
-  return total / static_cast<double>(finite_count);
+  if (defined_count == 0) throw NoValueException(what);
+  return total / static_cast<double>(defined_count);
 }
 
 /// Minimum accepted-sample count for conditional MC moments.  Below
@@ -531,18 +531,17 @@ double mc_conditional_raw_moment(const GenericCircuit &gc, gate_t g,
   auto cs = monteCarloConditionalScalarSamples(
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);
-  // Mirror the unconditional path: NaN observations (sampling-
-  // undefined worlds, typically empty-group SQL NULLs from
-  // gate_agg) are excluded from the mean.
+  // Mirror the unconditional path: draws with no value (typically
+  // empty-group SQL NULLs from gate_agg) are excluded from the mean.
   double total = 0.0;
-  std::size_t finite_count = 0;
-  for (double x : cs.accepted) {
-    if (std::isnan(x)) continue;
-    total += std::pow(x, static_cast<double>(k));
-    ++finite_count;
+  std::size_t defined_count = 0;
+  for (const auto &x : cs.accepted) {
+    if (!x) continue;
+    total += std::pow(*x, static_cast<double>(k));
+    ++defined_count;
   }
-  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
-  return total / static_cast<double>(finite_count);
+  if (defined_count == 0) throw NoValueException(what);
+  return total / static_cast<double>(defined_count);
 }
 
 double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
@@ -556,15 +555,14 @@ double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);
   double total = 0.0;
-  std::size_t finite_count = 0;
-  for (double x : cs.accepted) {
-    if (std::isnan(x)) continue;
-    const double d = x - mu;
-    total += std::pow(d, static_cast<double>(k));
-    ++finite_count;
+  std::size_t defined_count = 0;
+  for (const auto &x : cs.accepted) {
+    if (!x) continue;
+    total += std::pow(*x - mu, static_cast<double>(k));
+    ++defined_count;
   }
-  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
-  return total / static_cast<double>(finite_count);
+  if (defined_count == 0) throw NoValueException(what);
+  return total / static_cast<double>(defined_count);
 }
 
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
@@ -583,18 +581,18 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
  * raw moment / central moment / quantile.
  * -------------------------------------------------------------------- */
 
-/* Self-normalised weighted raw moment Σ w x^k / Σ w.  NaN particle values
- * (sampling-undefined worlds, e.g. an empty-group aggregate) are skipped,
- * mirroring the unconditional MC path. */
+/* Self-normalised weighted raw moment Σ w x^k / Σ w.  The particles are
+ * the draws where the root has a value (a draw with none, e.g. an
+ * empty-group aggregate, is left out by importanceSampleConditional,
+ * mirroring the unconditional MC path). */
 double weightedRawMoment(const WeightedPosterior &post, unsigned k)
 {
   double sw = 0.0, swx = 0.0;
   for (const auto &[x, w] : post.particles) {
-    if (std::isnan(x)) continue;
     sw  += w;
     swx += w * std::pow(x, static_cast<double>(k));
   }
-  if (sw <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+  if (sw <= 0.0) throw NoValueException("Posterior moment");
   return swx / sw;
 }
 
@@ -604,11 +602,10 @@ double weightedCentralMoment(const WeightedPosterior &post, unsigned k,
 {
   double sw = 0.0, swd = 0.0;
   for (const auto &[x, w] : post.particles) {
-    if (std::isnan(x)) continue;
     sw  += w;
     swd += w * std::pow(x - mu, static_cast<double>(k));
   }
-  if (sw <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+  if (sw <= 0.0) throw NoValueException("Posterior moment");
   return swd / sw;
 }
 
@@ -618,14 +615,10 @@ double weightedCentralMoment(const WeightedPosterior &post, unsigned k,
 double weightedQuantile(WeightedPosterior post, double p)
 {
   auto &pts = post.particles;
-  pts.erase(std::remove_if(pts.begin(), pts.end(),
-                           [](const std::pair<double, double> &pw) {
-                             return std::isnan(pw.first);
-                           }),
-            pts.end());
-  if (pts.empty()) return std::numeric_limits<double>::quiet_NaN();
-  std::sort(pts.begin(), pts.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
+  if (pts.empty()) throw NoValueException("Posterior quantile");
+  std::sort(pts.begin(), pts.end(), [](const auto &a, const auto &b) {
+    return sql_less(a.first, b.first);
+  });
   double total = 0.0;
   for (const auto &pw : pts) total += pw.second;
   if (!(total > 0.0)) return pts.front().first;
@@ -2063,17 +2056,15 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
 namespace {
 
 /* Empirical p-quantile with the linear-interpolation convention
- * PostgreSQL's percentile_cont uses (type 7: h = p·(n-1)).  NaN
- * observations (sampling-undefined worlds, e.g. empty-group SQL NULLs
- * from gate_agg) are dropped like the MC moment estimators do; NaN if
- * every sample was undefined. */
-double empirical_quantile(std::vector<double> xs, double p)
+ * PostgreSQL's percentile_cont uses (type 7: h = p·(n-1)), in its order of
+ * floats (NaN last).  Draws with no value (e.g. empty-group SQL NULLs from
+ * gate_agg) are dropped like the MC moment estimators do. */
+double empirical_quantile(const std::vector<std::optional<double>> &draws,
+                          double p)
 {
-  xs.erase(std::remove_if(xs.begin(), xs.end(),
-                          [](double x) { return std::isnan(x); }),
-           xs.end());
-  if (xs.empty()) return std::numeric_limits<double>::quiet_NaN();
-  std::sort(xs.begin(), xs.end());
+  std::vector<double> xs = definedDraws(draws);
+  if (xs.empty()) throw NoValueException("Quantile");
+  std::sort(xs.begin(), xs.end(), sql_less<double>);
   if (p <= 0.0) return xs.front();
   if (p >= 1.0) return xs.back();
   const double h = p * static_cast<double>(xs.size() - 1);
@@ -2397,6 +2388,12 @@ Datum rv_moment(PG_FUNCTION_ARGS)
     else
       result = provsql::compute_raw_moment(gc, root_gate, k, event_opt);
     return Float8GetDatum(result);
+  } catch (const provsql::NoValueException &) {
+    /* A value defined in no world (an aggregate over a group empty in
+     * every world of positive probability): SQL's NULL, as agg_raw_moment
+     * answers for the same case. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_moment: %s", e.what());
@@ -2441,6 +2438,9 @@ Datum rv_quantile(PG_FUNCTION_ARGS)
 
     return Float8GetDatum(
       provsql::compute_quantile(gc, root_gate, p, event_opt));
+  } catch (const provsql::NoValueException &) {
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_quantile: %s", e.what());

@@ -142,7 +142,7 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root);
  * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and a
  * contributor-free iteration finalises to the value the exact evaluator uses
  * (0 for a @e scalar @c COUNT, whose single row exists over empty input;
- * NaN -> comparison false for every other case, SQL's NULL or a grouped
+ * no value -> comparison false for every other case, SQL's NULL or a grouped
  * aggregation's absent row), and @c gate_arith over them is covered too.
  *
  * @c COUNT reaches this arm only as a scalar aggregation.  Its value-support
@@ -216,9 +216,18 @@ std::vector<double> monteCarloJointDistribution(
  * decide a sub-expression.  Returning the raw draws (rather than a
  * single statistic) lets callers compute any combination of moments
  * from a single sampling pass.
+ *
+ * A draw is empty where @p root has no value in the world drawn (an
+ * aggregate over no row, a NULL, a division by zero), which callers skip as
+ * a missing observation; a NaN is a value (a float can hold one, and SQL
+ * computes with it).
  */
-std::vector<double> monteCarloScalarSamples(
+std::vector<std::optional<double>> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples);
+
+/** @brief The draws of @p samples that have a value, in order. */
+std::vector<double>
+definedDraws(const std::vector<std::optional<double>> &samples);
 
 /**
  * @brief The possible worlds of a circuit whose only random sources are
@@ -226,12 +235,12 @@ std::vector<double> monteCarloScalarSamples(
  *
  * For each assignment of the inputs reachable from @p root and @p event
  * (at most @p max_inputs of them) in which @p event holds (when given), its
- * probability and the value of @p root there (NaN where it is undefined, as
+ * probability and the value of @p root there (empty where it has none, as
  * an aggregate over no row).  @c std::nullopt when the circuit has another
  * random source (a @c gate_rv, a mixture, an observation, a
  * @c gate_mulinput), an input without a probability, or more inputs.
  */
-std::optional<std::vector<std::pair<double, double>>>
+std::optional<std::vector<std::pair<double, std::optional<double>>>>
 enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
                       std::optional<gate_t> event, unsigned max_inputs);
 
@@ -261,9 +270,11 @@ enumerateBooleanProbability(const GenericCircuit &gc, gate_t root,
  * roots against it, so any stochastic leaf shared between @p root_a and
  * @p root_b produces a single draw both observe: the returned pairs are
  * samples from the JOINT distribution of (A, B).  Backs the
- * mutual-information plug-in estimator.
+ * mutual-information plug-in estimator.  A draw is empty where its root has
+ * no value, as in @c monteCarloScalarSamples.
  */
-std::pair<std::vector<double>, std::vector<double>>
+std::pair<std::vector<std::optional<double>>,
+          std::vector<std::optional<double>>>
 monteCarloScalarPairSamples(const GenericCircuit &gc, gate_t root_a,
                             gate_t root_b, unsigned samples);
 
@@ -275,10 +286,11 @@ monteCarloScalarPairSamples(const GenericCircuit &gc, gate_t root_a,
  * @c attempted is the total number of iterations -- equal to @c samples
  * unless the pass was interrupted -- so the caller can derive the
  * empirical acceptance rate as
- * <tt>accepted.size() / attempted</tt> for diagnostics.
+ * <tt>accepted.size() / attempted</tt> for diagnostics.  An accepted draw
+ * is empty where @c root has no value, as in @c monteCarloScalarSamples.
  */
 struct ConditionalScalarSamples {
-  std::vector<double> accepted;
+  std::vector<std::optional<double>> accepted;
   unsigned attempted;
 };
 
@@ -317,8 +329,8 @@ ConditionalScalarSamples monteCarloConditionalScalarSamples(
  *        @c ConditionalScalarSamples.
  */
 struct ConditionalScalarPairSamples {
-  std::vector<double> xs;
-  std::vector<double> ys;
+  std::vector<std::optional<double>> xs;
+  std::vector<std::optional<double>> ys;
   unsigned attempted;
 };
 
@@ -384,8 +396,8 @@ try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
  * generalisation of rejection conditioning, which is the 0/1-weight case).
  *
  * @c particles holds one @c (x, w) pair per prior draw with @b positive
- * weight (@c x = the queried root's value, @c w = the product of the
- * evidence factors); the caller derives any weighted posterior statistic
+ * weight where the queried root has a value (@c x = that value, @c w = the
+ * product of the evidence factors); the caller derives any weighted posterior statistic
  * (mean, variance, quantile) from them.  @c weight_sum / @c weight_sq_sum
  * accumulate over @b all @c attempted draws (a zero-weight draw contributes
  * 0), so @c evidence() is the marginal likelihood @c P(data) and
