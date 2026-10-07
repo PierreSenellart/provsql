@@ -11908,6 +11908,192 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance over a subset semiring, as a bitmask (internal)
+ *
+ * Bit @f$i@f$ stands for the label of rank @f$i@f$ of the enum type of
+ * @p element_one; bit 63 for the unrestricted element of @c consent.
+ * @p semiring is @c subset, @c clearance or @c consent.
+ */
+CREATE OR REPLACE FUNCTION subset_evaluate(
+  token UUID, token2value regclass, semiring TEXT, element_one ANYENUM)
+  RETURNS bigint AS
+  'provsql', 'provenance_evaluate_compiled' LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief The labels of the enum type of @p element_one a bitmask holds (internal) */
+CREATE OR REPLACE FUNCTION subset_labels(mask bigint, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief The settling level of a bitmask of clearance levels (internal) */
+CREATE OR REPLACE FUNCTION subset_settling(mask bigint, element_one ANYENUM)
+  RETURNS ANYENUM AS
+  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Membership of a label, given as text, in a subset annotation (internal)
+ *
+ * The enum type is that of the @c value column of @p token2value.
+ */
+CREATE OR REPLACE FUNCTION subset_member(
+  token UUID, token2value regclass, semiring TEXT, label TEXT)
+  RETURNS boolean AS
+  'provsql', 'subset_member' LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the subsets of the labels of a user enum
+ *
+ * The powerset Boolean algebra: alternatives combine by union, joins by
+ * intersection, negation (@c EXCEPT, @c NOT @c EXISTS) by difference.
+ * A mapping value is a set of labels (an array of the enum), or a single
+ * label standing for itself.  The result is the set of labels whose world
+ * contains the tuple.  The third argument is a sample value of the enum,
+ * used only for type inference.  At most 63 labels.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to labels or arrays of labels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION sr_subset(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT provsql.subset_labels(
+    provsql.subset_evaluate(token, token2value, 'subset', element_one),
+    element_one);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance as the set of clearance levels a tuple is visible at
+ *
+ * The labels of the enum are clearance levels, in increasing order.  A
+ * single level in the mapping makes a tuple visible at that level and every
+ * one above it; an array is an arbitrary set of levels (compartments).  The
+ * result is the set of levels at which the query, run over the tuples
+ * visible at that level, returns the tuple: unlike :sqlfunc:`sr_minmax`,
+ * negation is exact, so a tuple can be visible at a level and not at a
+ * higher one.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION sr_clearance(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT provsql.subset_labels(
+    provsql.subset_evaluate(token, token2value, 'clearance', element_one),
+    element_one);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Whether a tuple is visible at a clearance level
+ *
+ * Membership of @p level in :sqlfunc:`sr_clearance`; the level is given as
+ * text, of the enum type of the @c value column of the mapping.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param level The clearance level.
+ */
+CREATE OR REPLACE FUNCTION visible_at(
+  token UUID, token2value regclass, level TEXT)
+  RETURNS boolean AS
+$$
+  SELECT provsql.subset_member(token, token2value, 'clearance', level);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The level from which the visibility of a tuple no longer changes
+ *
+ * The lowest clearance level @c settles_at such that the tuple is visible
+ * at every level from it to the top, or at none of them; @c visible_at_top
+ * says which.  Meaningful for hierarchical levels.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION clearance_settling(
+  token UUID, token2value regclass, element_one ANYENUM,
+  OUT settles_at ANYENUM, OUT visible_at_top boolean) AS
+$$
+  SELECT provsql.subset_settling(m, element_one),
+         enum_last(element_one) = ANY(provsql.subset_labels(m, element_one))
+    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over consented purposes
+ *
+ * The labels of the enum are purposes; the mapping gives the purposes each
+ * tuple is consented for (a purpose or an array of purposes).  The result
+ * gives the purposes for which the query, run over the tuples consented for
+ * that purpose, returns the tuple, and whether the query over the whole
+ * database (@c unrestricted) returns it.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION sr_consent(
+  token UUID, token2value regclass, element_one ANYENUM,
+  OUT purposes ANYARRAY, OUT unrestricted boolean) AS
+$$
+  SELECT provsql.subset_labels(m, element_one), m < 0
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Whether a tuple may be used for a purpose
+ *
+ * True when the query returns the tuple both over the whole database and
+ * over the tuples consented for @p purpose, given as text, of the enum type
+ * of the @c value column of the mapping.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param purpose The purpose.
+ */
+CREATE OR REPLACE FUNCTION consented_for(
+  token UUID, token2value regclass, purpose TEXT)
+  RETURNS boolean AS
+$$
+  SELECT provsql.subset_member(token, token2value, 'consent', purpose);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The purposes a tuple may be used for
+ *
+ * The purposes for which :sqlfunc:`consented_for` holds: empty when the
+ * query over the whole database does not return the tuple.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION consent_purposes(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT CASE WHEN m < 0 THEN provsql.subset_labels(m, element_one)
+              ELSE provsql.subset_labels(0, element_one) END
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The purposes for which consent changes the answer
+ *
+ * The purposes whose consented tuples give a different answer about the
+ * tuple than the whole database: the tuple is returned for the purpose but
+ * not over the whole database (only possible through a negation reading a
+ * tuple the purpose was not consented for), or the reverse (the purpose
+ * lacks consent for a tuple the answer needs).
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION consent_conflicts(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT CASE WHEN m < 0 THEN provsql.subset_labels(~m, element_one)
+              ELSE provsql.subset_labels(m, element_one) END
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
 /** @} */
 
 /** @defgroup choose_aggregate choose aggregate
