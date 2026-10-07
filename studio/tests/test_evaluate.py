@@ -456,6 +456,75 @@ def test_evaluate_maxmin_returns_most_permissive(client, classification_mapping)
     assert data["result"] == "top_secret"
 
 
+@pytest.fixture
+def consent_mapping(client):
+    """An enum-array mapping over personnel: everyone consented for
+    billing, those of classification above restricted also for
+    analytics."""
+    setup = (
+        "DROP TABLE IF EXISTS personnel_consent;"
+        " DROP TYPE IF EXISTS studio_purpose;"
+        " CREATE TYPE studio_purpose AS ENUM ('billing', 'analytics');"
+        " CREATE TABLE personnel_consent AS"
+        "   SELECT CASE WHEN classification <= 'restricted'"
+        "               THEN '{billing}'::studio_purpose[]"
+        "               ELSE '{billing,analytics}' END AS value,"
+        "          provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_consent');"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_consent"
+    client.post("/api/exec", json={
+        "sql": "DROP TABLE personnel_consent; DROP TYPE studio_purpose",
+        "mode": "circuit"})
+
+
+def test_mappings_flags_enum_array_carrier(client, consent_mapping):
+    """An array-of-enum mapping surfaces as is_enum_array, which the
+    eval-strip filter uses for the subset semirings."""
+    rows = client.get("/api/provenance_mappings").get_json()
+    entry = next(
+        r for r in rows
+        if r["qname"] == f"provsql_test.{consent_mapping}"
+    )
+    assert entry["is_enum"] is False
+    assert entry["is_enum_array"] is True
+
+
+def test_evaluate_clearance_up_set(client, classification_mapping):
+    """sr_clearance reads a single level as itself and every level
+    above: a union of all personnel is visible from the lowest level."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "clearance",
+        "mapping": f"provsql_test.{classification_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["result"] == (
+        "{unclassified,restricted,confidential,secret,top_secret,unavailable}")
+
+
+def test_evaluate_consent_flags_whole_database(client, consent_mapping):
+    """sr_consent over an enum-array mapping: Dave (Paris) is returned
+    for analytics only because Nancy, restricted, is not consented for
+    it; over the whole database Nancy hides him, which is flagged."""
+    root = _root_uuid(client, """
+        SELECT 1 AS k FROM personnel p
+        WHERE p.name = 'Dave' AND NOT EXISTS (
+          SELECT 1 FROM personnel q
+          WHERE q.city = p.city AND q.classification <= 'restricted')
+    """)
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "consent",
+        "mapping": f"provsql_test.{consent_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["result"] == "{analytics} (not in the whole database)"
+
+
 def test_evaluate_minmax_rejects_non_enum_mapping(client, mapping):
     """sr_minmax requires a user-defined enum carrier. A text-typed
     mapping (`personnel_names.value`) must be rejected at the 400

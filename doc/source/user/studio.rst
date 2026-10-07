@@ -345,7 +345,10 @@ custom and “Other” entries below:
     :sqlfunc:`sr_interval_num` or :sqlfunc:`sr_interval_int` according
     to the mapping's multirange type (PostgreSQL 14+).
   * *User-enum*: ``minmax`` (:sqlfunc:`sr_minmax`) and ``maxmin``
-    (:sqlfunc:`sr_maxmin`), over any user-defined enum.
+    (:sqlfunc:`sr_maxmin`), over any user-defined enum; ``subset``,
+    ``clearance`` and ``consent`` (:sqlfunc:`sr_subset`,
+    :sqlfunc:`sr_clearance`, :sqlfunc:`sr_consent`), over an enum or an
+    array of one.
 
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema.

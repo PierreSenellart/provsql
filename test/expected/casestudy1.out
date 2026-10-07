@@ -92,3 +92,14 @@ Paris|0.4100
 saved_prob
 0.2600
 (1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|levels|at_unclassified|settles_at|visible_at_top|minmax
+Beijing|{}|f|unclassified|f|unavailable
+Nairobi|{unclassified}|t|restricted|f|unclassified
+Paris|{restricted}|f|confidential|f|restricted
+(3 rows)

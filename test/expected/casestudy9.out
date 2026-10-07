@@ -130,3 +130,11 @@ West|310 k€
 remove_provenance
 
 (1 row)
+name|purposes|unrestricted|for_marketing|conflicts|allowed
+North|{analytics,marketing}|f|f|{analytics,marketing}|{}
+South|{forecasting,analytics,marketing}|t|t|{}|{forecasting,analytics,marketing}
+West|{}|f|f|{}|{}
+(3 rows)
+remove_provenance
+
+(1 row)

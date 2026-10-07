@@ -362,6 +362,56 @@ These two functions cover any user enum: security lattices,
 fuzzy-discrete trust levels, three-valued logic, project-specific
 orderings.
 
+Subset, Clearance and Consent Semirings (m-semirings)
+------------------------------------------------------
+
+:sqlfunc:`sr_subset` evaluates the provenance over the sets of labels of
+a user enum (at most 63 labels): union for ⊕, intersection for ⊗, set
+difference for monus. A label stands for a world; the mapping gives the
+labels (an enum array, or a single label) whose world contains each
+tuple, and the result is the set of labels whose world returns the row.
+Unlike :sqlfunc:`sr_minmax`, negation (``EXCEPT``, ``NOT EXISTS``) is
+exact.
+
+:sqlfunc:`sr_clearance` reads the labels as clearance levels in
+increasing order: a single level in the mapping makes a tuple visible at
+that level and every one above (an array is any set of levels, for
+compartments). It returns the levels at which a user sees the row, which
+need not be upward-closed: a row hidden at ``confidential`` by an open
+investigation can reappear at ``secret``, where the resolution is
+visible.
+
+.. code-block:: postgresql
+
+    SELECT name,
+           sr_clearance(provenance(), 'clearance_map', 'public'::level),
+           visible_at(provenance(), 'clearance_map', 'confidential'),
+           (clearance_settling(provenance(), 'clearance_map', 'public'::level)).*
+    FROM eligible;
+
+:sqlfunc:`visible_at` tests one level, given as text; for
+hierarchical levels, :sqlfunc:`clearance_settling` gives the level from
+which visibility no longer changes up to the top, and whether the row is
+visible there.
+
+:sqlfunc:`sr_consent` reads the labels as purposes, the mapping giving
+the purposes each tuple is consented for. It returns the purposes for
+which the query, run over the tuples consented for that purpose, returns
+the row, and whether the query over the whole database returns it.
+:sqlfunc:`consented_for` keeps a row for a purpose only when both hold,
+so that no purpose sees a row that exists only because a negation could
+not see a tuple:
+
+.. code-block:: postgresql
+
+    SELECT name FROM customer c
+    WHERE NOT EXISTS (SELECT * FROM purchase p WHERE p.cust = c.id)
+      AND consented_for(provenance(), 'consent_map', 'marketing');
+
+:sqlfunc:`consent_purposes` lists the purposes a row may be used for, and
+:sqlfunc:`consent_conflicts` those whose answer differs from the whole
+database.
+
 .. _custom-semirings:
 
 Custom Semirings with :sqlfunc:`provenance_evaluate`
@@ -487,7 +537,8 @@ The following compiled semirings are Boolean-faithful and run on
 any circuit, including rewritten ones: :sqlfunc:`sr_boolean`,
 :sqlfunc:`sr_boolexpr`, :sqlfunc:`sr_formula`,
 :sqlfunc:`sr_temporal`, :sqlfunc:`sr_interval_num`,
-:sqlfunc:`sr_interval_int`.  The following are not, and refuse on
+:sqlfunc:`sr_interval_int`, :sqlfunc:`sr_subset`,
+:sqlfunc:`sr_clearance`, :sqlfunc:`sr_consent`.  The following are not, and refuse on
 rewritten circuits: :sqlfunc:`sr_counting`, :sqlfunc:`sr_how`,
 :sqlfunc:`sr_why`, :sqlfunc:`sr_which`, :sqlfunc:`sr_tropical`,
 :sqlfunc:`sr_viterbi`, :sqlfunc:`sr_lukasiewicz`,

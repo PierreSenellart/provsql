@@ -12008,6 +12008,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to levels or arrays of levels.
  * @param element_one Sample value of the carrier enum (any value works).
+ * @param settles_at The settling level.
+ * @param visible_at_top Whether the tuple is visible at the top level.
  */
 CREATE OR REPLACE FUNCTION clearance_settling(
   token UUID, token2value regclass, element_one ANYENUM,
@@ -12029,6 +12031,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to purposes or arrays of purposes.
  * @param element_one Sample value of the carrier enum (any value works).
+ * @param purposes The purposes for which the query returns the tuple.
+ * @param unrestricted Whether the query over the whole database returns it.
  */
 CREATE OR REPLACE FUNCTION sr_consent(
   token UUID, token2value regclass, element_one ANYENUM,

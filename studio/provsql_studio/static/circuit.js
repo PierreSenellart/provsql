@@ -1685,6 +1685,21 @@
                      needsMapping: true,  types: null,    acceptsEnum: true,
                      hint: 'Expects a user-defined enum carrier; alternatives combine to enum-max, joins to enum-min.',
                      booleanCompatible: false, absorptive: true, aggCompatible: false },
+    // Sets of labels of a user enum: the mapping's value is the enum or
+    // an array of it (`acceptsEnumSet`, matched against `is_enum` or
+    // `is_enum_array`).
+    'subset':      { label: 'Subset (sets of enum labels)', group: 'enum',
+                     needsMapping: true,  types: null,    acceptsEnumSet: true,
+                     hint: 'Expects an enum or enum-array carrier; the labels whose world returns the row, exact under negation.',
+                     booleanCompatible: true, absorptive: true, aggCompatible: false },
+    'clearance':   { label: 'Clearance (levels a row is visible at)', group: 'enum',
+                     needsMapping: true,  types: null,    acceptsEnumSet: true,
+                     hint: 'Expects an enum (a level and those above) or enum-array carrier; the levels at which the row is visible.',
+                     booleanCompatible: true, absorptive: true, aggCompatible: false },
+    'consent':     { label: 'Consent (purposes)', group: 'enum',
+                     needsMapping: true,  types: null,    acceptsEnumSet: true,
+                     hint: 'Expects an enum or enum-array carrier of purposes; the purposes for which the row is returned.',
+                     booleanCompatible: true, absorptive: true, aggCompatible: false },
   };
   const _COMPILED_GROUPS = [
     ['bool', 'Boolean'],
@@ -2414,6 +2429,10 @@
       const spec = _COMPILED_REGISTRY[sel.value];
       return !!(spec && spec.acceptsEnum);
     }
+    function expectsEnumSetCarrier() {
+      const spec = _COMPILED_REGISTRY[sel.value];
+      return !!(spec && spec.acceptsEnumSet);
+    }
 
     // Render the mapping <option>s from the cached list, filtered by the
     // current semiring's expected value type set. Polymorphic semirings
@@ -2432,9 +2451,12 @@
       }
       const expectedTypes = expectedValueTypes();
       const wantEnum = expectsEnumCarrier();
+      const wantEnumSet = expectsEnumSetCarrier();
       let list;
       if (wantEnum) {
         list = _mappings.filter(m => m.is_enum);
+      } else if (wantEnumSet) {
+        list = _mappings.filter(m => m.is_enum || m.is_enum_array);
       } else if (expectedTypes) {
         list = _mappings.filter(m => expectedTypes.includes(m.value_base_type));
       } else {
@@ -2443,7 +2465,9 @@
       if (!list.length) {
         const accepted = wantEnum
           ? 'a user-defined enum carrier'
-          : (expectedTypes || []).join(', ');
+          : wantEnumSet
+            ? 'a user-defined enum or enum-array carrier'
+            : (expectedTypes || []).join(', ');
         map.innerHTML =
           `<option value="">(no compatible mappings : expected ${escapeHtml(accepted)})</option>`;
         map.disabled = true;

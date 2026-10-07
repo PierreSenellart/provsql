@@ -338,7 +338,8 @@ Per-semiring decisions (see each override under
 
 - ``true`` : ``Boolean``, ``BoolExpr``, ``Formula`` (symbolic
   serialisation, semantically opaque), ``IntervalUnion`` (covers
-  ``sr_temporal``, ``sr_interval_num``, ``sr_interval_int``).
+  ``sr_temporal``, ``sr_interval_num``, ``sr_interval_int``),
+  ``Subset`` (covers ``sr_subset``, ``sr_clearance``, ``sr_consent``).
 - ``false`` : every other compiled semiring (``Counting``,
   ``How``, ``Why``, ``Which``, ``Tropical``, ``Viterbi``,
   ``Lukasiewicz``, ``MinMax``) ; their algebras carry information

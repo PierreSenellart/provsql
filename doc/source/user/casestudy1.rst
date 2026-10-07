@@ -7,7 +7,7 @@ Case Study: Intelligence Agency
 This case study largely extends the scenario of the paper that first
 presented ProvSQL :cite:`DBLP:journals/pvldb/SenellartJMR18`. Through a
 security-classification scenario, it demonstrates custom semirings,
-where-provenance, probability computation with several algorithms, and
+clearance levels under negation, where-provenance, probability computation with several algorithms, and
 circuit export.
 
 The Scenario
@@ -24,6 +24,8 @@ from *unclassified* to *top secret*. Your tasks:
 * track where in the database each output value originated,
 * compute the probability that a city remains a single-agent post
   after accounting for possible-world uncertainty.
+* find at which clearance levels an analyst would wrongly conclude
+  that a city has a single agent.
 
 
 Setup
@@ -633,3 +635,48 @@ the circuit, and it still evaluates to ``0.26``:
     SELECT ROUND(probability_evaluate(prov)::numeric, 4) AS prob
     FROM nairobi_token;
 
+
+Step 17: Clearance Levels of a Negation
+---------------------------------------
+
+An analyst runs the query of Step 5 seeing only the agents at or below
+their own clearance. At which levels does a city look single-agent?
+:sqlfunc:`sr_minmax` (Step 4) cannot answer this for a query with
+``EXCEPT``: it returns a single level, read as "from that level up", but
+an analyst with more clearance sees more agents and may no longer see
+the city as single-agent. :sqlfunc:`sr_clearance` returns the set of
+levels at which the query returns the row, with negation read exactly.
+Juma's row has a new token since Step 16, so the mapping is rebuilt
+first:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS personnel_level;
+    SELECT create_provenance_mapping('personnel_level',
+                                     'personnel', 'classification');
+
+    SELECT city,
+           sr_clearance(provenance(), 'personnel_level',
+                        'unclassified'::classification_level) AS levels,
+           visible_at(provenance(), 'personnel_level', 'unclassified')
+             AS at_unclassified,
+           (clearance_settling(provenance(), 'personnel_level',
+                               'unclassified'::classification_level)).*
+    FROM (
+        SELECT DISTINCT city FROM personnel
+      EXCEPT
+        SELECT p1.city
+        FROM personnel p1
+        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
+        GROUP BY p1.city
+    ) t
+    ORDER BY city;
+
+Nairobi looks single-agent only at ``unclassified``, where Paul is
+hidden, and Paris only at ``restricted``, where Nancy is the one agent
+visible; Beijing never does. :sqlfunc:`sr_minmax` would answer
+``unclassified`` and ``restricted``, suggesting every higher level too.
+:sqlfunc:`visible_at` tests a single level, given as text, and
+:sqlfunc:`clearance_settling` gives the level from which the answer no
+longer changes (``restricted`` for Nairobi, ``confidential`` for Paris)
+and that answer at the top level.

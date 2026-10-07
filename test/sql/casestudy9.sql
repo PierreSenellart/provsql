@@ -147,6 +147,39 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
+-- Step 13: the regions with no big deal (>= 100), for each purpose.  South:
+-- every purpose.  North: analytics and marketing only, because Fjordline's
+-- deal (120, forecasting only) is hidden from them; over all deals it is
+-- there, so North is not consented for marketing and both purposes conflict.
+-- West: Sierra (150) is consented for everything, no purpose.
+CREATE TYPE cs9_purpose AS ENUM ('forecasting', 'analytics', 'marketing');
+CREATE TABLE cs9_consent (customer text PRIMARY KEY, purposes cs9_purpose[] NOT NULL);
+INSERT INTO cs9_consent VALUES
+  ('Arctis', '{forecasting,analytics,marketing}'), ('Borealis', '{forecasting,analytics}'),
+  ('Fjordline', '{forecasting}'), ('Glacier', '{forecasting,analytics,marketing}'),
+  ('Meridian', '{forecasting,analytics,marketing}'), ('Solstice', '{forecasting}'),
+  ('Tropica', '{forecasting,analytics,marketing}'), ('Zenith', '{forecasting,analytics,marketing}'),
+  ('Canyon', '{forecasting,analytics,marketing}'), ('Horizon', '{forecasting,analytics}'),
+  ('Mesa', '{forecasting,analytics,marketing}'), ('Sierra', '{forecasting,analytics,marketing}');
+CREATE TABLE cs9_deal_consent AS
+  SELECT d.provsql AS provenance, c.purposes AS value
+  FROM cs9_deal d JOIN cs9_consent c USING (customer);
+CREATE TABLE cs9_r AS
+  SELECT r.name,
+         (sr_consent(provenance(), 'cs9_deal_consent', 'forecasting'::cs9_purpose)).*,
+         consented_for(provenance(), 'cs9_deal_consent', 'marketing') AS for_marketing,
+         consent_conflicts(provenance(), 'cs9_deal_consent',
+                           'forecasting'::cs9_purpose) AS conflicts,
+         consent_purposes(provenance(), 'cs9_deal_consent',
+                          'forecasting'::cs9_purpose) AS allowed
+  FROM cs9_region r
+  WHERE NOT EXISTS (SELECT * FROM cs9_deal d
+                    WHERE d.region = r.name AND d.amount >= 100);
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY name;
+DROP TABLE cs9_r, cs9_deal_consent, cs9_consent;
+DROP TYPE cs9_purpose;
+
 SELECT remove_provenance('cs9_deal');
 DROP TABLE cs9_deal;
 DROP TABLE cs9_region;

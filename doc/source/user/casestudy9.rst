@@ -11,7 +11,8 @@ distribution. It demonstrates aggregates and their expected values,
 ``ROLLUP`` subtotals, shares of a total, ranking and top-k over aggregates,
 comparisons with a target, percentages with a ``NULLIF`` divisor,
 aggregates of aggregates, grouping by an aggregate's value, ``DISTINCT
-ON``, and :sqlfunc:`plain` for a value meant without provenance.
+ON``, :sqlfunc:`plain` for a value meant without provenance, and the
+purposes an answer may serve under the customers' consent.
 
 The Scenario
 ------------
@@ -29,7 +30,8 @@ Your tasks:
 * find which region is likely to lead, and each region's likely rank,
 * check each region against its target,
 * describe the deals that close: their share of big deals, their spread,
-  the largest one per region.
+  the largest one per region,
+* use each answer only for the purposes its customers consented to.
 
 Setup
 -----
@@ -65,6 +67,8 @@ This creates two tables:
   revenue target, in thousands of euros
 * ``deal`` -- twelve open deals, each with a customer, a region, a quarter,
   an amount in thousands of euros, and its win probability ``win_prob``
+* ``consent`` -- the purposes (``forecasting``, ``analytics``,
+  ``marketing``) each customer consented to the use of their data for
 
 
 Step 1: The Pipeline
@@ -329,3 +333,41 @@ and the warning goes away:
 
 See :doc:`aggregation` for the aggregates and their values in every world,
 and :ref:`plain-sql` for :sqlfunc:`plain`.
+
+
+Step 13: Purposes a Result May Serve
+------------------------------------
+
+Marketing plans a campaign in the regions with no big deal (100 k€ or
+more). Each customer consented to some purposes only, and an answer may
+serve a purpose only if the deals it reads may. Map each deal to its
+customer's purposes, and evaluate with :sqlfunc:`sr_consent`:
+
+.. code-block:: postgresql
+
+    CREATE TABLE deal_consent AS
+      SELECT d.provsql AS provenance, c.purposes AS value
+      FROM deal d JOIN consent c USING (customer);
+
+    SELECT r.name,
+           (sr_consent(provenance(), 'deal_consent',
+                       'forecasting'::purpose)).*,
+           consented_for(provenance(), 'deal_consent', 'marketing')
+             AS for_marketing,
+           consent_conflicts(provenance(), 'deal_consent',
+                             'forecasting'::purpose) AS conflicts
+    FROM region r
+    WHERE NOT EXISTS (SELECT * FROM deal d
+                      WHERE d.region = r.name AND d.amount >= 100)
+    ORDER BY r.name;
+
+``purposes`` lists the purposes for which the query, run over the deals
+consented for that purpose, returns the region; ``unrestricted`` says
+whether the query over all deals does. South has no big deal, for every
+purpose. North looks free of big deals to analytics and marketing only
+because Fjordline's deal, consented for forecasting alone, is hidden from
+them: over all deals, North has one. :sqlfunc:`consented_for` keeps a
+region for a purpose only when both hold, so the campaign gets South
+alone, and :sqlfunc:`consent_conflicts` names the purposes for which North
+would have been answered wrongly. :sqlfunc:`consent_purposes` lists the
+purposes a row may be used for.

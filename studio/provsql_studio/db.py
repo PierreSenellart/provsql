@@ -1096,6 +1096,16 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                "boolean_rewrite_compatible": False, "absorptive": True},
     "maxmin": {"func": "sr_maxmin", "accepts_enum": True,
                "boolean_rewrite_compatible": False, "absorptive": True},
+    # Sets of labels of a user enum (powerset Boolean algebra). The
+    # mapping's `value` column is the enum or an array of it
+    # (`accepts_enum_set`); the third argument is synthesised the same
+    # way, from the enum (the array's element type).
+    "subset":    {"func": "sr_subset", "accepts_enum_set": True,
+                  "boolean_rewrite_compatible": True, "absorptive": True},
+    "clearance": {"func": "sr_clearance", "accepts_enum_set": True,
+                  "boolean_rewrite_compatible": True, "absorptive": True},
+    "consent":   {"func": "sr_consent", "accepts_enum_set": True,
+                  "boolean_rewrite_compatible": True, "absorptive": True},
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -1148,7 +1158,8 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
         SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible,
                format_type(va.atttypid, va.atttypmod) AS value_type,
                format_type(va.atttypid, NULL)         AS value_base_type,
-               t.typtype = 'e'                        AS is_enum
+               t.typtype = 'e'                        AS is_enum,
+               COALESCE(et.typtype = 'e', false)      AS is_enum_array
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute va
@@ -1156,6 +1167,7 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
          AND va.attname = 'value'
          AND NOT va.attisdropped
         JOIN pg_type t ON t.oid = va.atttypid
+        LEFT JOIN pg_type et ON et.oid = t.typelem AND t.typcategory = 'A'
         WHERE c.relkind IN ('r', 'v', 'm')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
           AND n.nspname NOT LIKE 'pg_%'
@@ -1176,7 +1188,8 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     # in `qname` for the API call so the regclass cast is unambiguous.
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql_text)
-        for schema, name, visible, value_type, value_base_type, is_enum in cur.fetchall():
+        for (schema, name, visible, value_type, value_base_type, is_enum,
+             is_enum_array) in cur.fetchall():
             out.append({
                 "schema": schema,
                 "name": name,
@@ -1185,6 +1198,7 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
                 "value_type": str(value_type),
                 "value_base_type": str(value_base_type),
                 "is_enum": bool(is_enum),
+                "is_enum_array": bool(is_enum_array),
             })
     return out
 
@@ -1667,6 +1681,28 @@ def evaluate_circuit(
                 fn, sql.Literal(token), sql.Literal(mapping),
                 sql.SQL(base_type),
             )
+        elif spec.get("accepts_enum_set"):
+            # `base_type` is the enum (the element type of an array
+            # column), from `format_type`: safe to splice.  The label
+            # array is cast to text; sr_consent's record becomes its
+            # purposes, flagged when the whole database does not return
+            # the row.
+            if semiring == "consent":
+                sql_stmt = sql.SQL(
+                    "SELECT purposes::text || CASE WHEN unrestricted THEN ''"
+                    " ELSE ' (not in the whole database)' END"
+                    " FROM {}({}::uuid, {}::regclass, enum_first(NULL::{}))"
+                ).format(
+                    fn, sql.Literal(token), sql.Literal(mapping),
+                    sql.SQL(base_type),
+                )
+            else:
+                sql_stmt = sql.SQL(
+                    "SELECT {}({}::uuid, {}::regclass, enum_first(NULL::{}))::text"
+                ).format(
+                    fn, sql.Literal(token), sql.Literal(mapping),
+                    sql.SQL(base_type),
+                )
         elif spec.get("nonneg"):
             # The nonnegative (absorptive) min-plus variant.
             sql_stmt = sql.SQL(
@@ -2278,6 +2314,28 @@ def _mapping_value_info(pool: ConnectionPool, mapping: str) -> tuple[str, bool]:
     return str(row[0]), bool(row[1])
 
 
+def _mapping_enum_carrier(pool: ConnectionPool, mapping: str) -> str | None:
+    """The enum type of `mapping.value` (its element type, for an array
+    of an enum), as `format_type` prints it, or None when the column is
+    neither: the carrier of the subset semirings."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT format_type(CASE WHEN t.typtype = 'e' THEN t.oid
+                                    ELSE et.oid END, NULL)
+            FROM pg_attribute va
+            JOIN pg_type t ON t.oid = va.atttypid
+            LEFT JOIN pg_type et ON et.oid = t.typelem AND t.typcategory = 'A'
+            WHERE va.attrelid = %s::regclass AND va.attname = 'value'
+              AND NOT va.attisdropped
+              AND (t.typtype = 'e' OR et.typtype = 'e')
+            """,
+            (mapping,),
+        )
+        row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
 def _resolve_compiled_semiring(
     pool: ConnectionPool, semiring: str, spec: dict, mapping: str
 ) -> tuple[str, str | None]:
@@ -2305,6 +2363,14 @@ def _resolve_compiled_semiring(
                 )
     accepted = spec.get("types")
     accepts_enum = bool(spec.get("accepts_enum"))
+    if spec.get("accepts_enum_set"):
+        enum_type = _mapping_enum_carrier(pool, mapping)
+        if enum_type is None:
+            raise ValueError(
+                f"semiring {semiring!r} expects a mapping whose value is an "
+                f"enum or an array of an enum"
+            )
+        return spec["func"], enum_type
     if accepted is None and not accepts_enum and spec["func"] is not None:
         # Polymorphic kernel, single function : nothing to validate.
         return spec["func"], None
