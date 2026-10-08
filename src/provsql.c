@@ -10308,7 +10308,8 @@ static Node *scalar_distinct_mutator(Node *node, void *cx) {
  * its WHERE keeps none, a Var of that row on an outer subquery reads an empty
  * row.  The FROM, the WHERE and the aggregates without @c DISTINCT move to one
  * more subquery, and the query is the cross join of these subqueries, without
- * aggregation.
+ * aggregation.  A @c HAVING, which filters the one row, becomes the
+ * @c WHERE of that cross join.
  */
 static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
   scalar_distinct_ctx c;
@@ -10323,6 +10324,8 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     te->expr = (Expr *)scalar_distinct_mutator((Node *)te->expr, &c);
   }
+  if (q->havingQual != NULL)
+    q->havingQual = scalar_distinct_mutator(q->havingQual, &c);
 
   foreach (lc, q->jointree->fromlist) {
     Node *item = (Node *)lfirst(lc);
@@ -10361,6 +10364,9 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
       colnames = lappend(colnames, makeString(pstrdup(name)));
     }
     o->hasAggs = true;
+    /* One level deeper than the query it comes from: its references to the
+     * queries around (a correlated subquery) reach one level further. */
+    IncrementVarSublevelsUp((Node *)o, 1, 1);
 
     rte->rtekind = RTE_SUBQUERY;
     rte->subquery = o;
@@ -10382,7 +10388,8 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
 #endif
 
   q->rtable = new_rtable;
-  q->jointree = makeFromExpr(from, NULL);
+  q->jointree = makeFromExpr(from, q->havingQual);
+  q->havingQual = NULL;
   q->hasAggs = false;
 }
 
@@ -10698,9 +10705,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 
       /* A query without GROUP BY returns one row, even when its WHERE keeps
        * none: the columns of the outer subqueries would then be read from an
-       * empty row.  The query becomes a cross join of one-row subqueries. */
+       * empty row (PostgreSQL leaves that row's values undefined: a token
+       * read there was garbage).  The query becomes a cross join of one-row
+       * subqueries, its HAVING the WHERE of that join. */
       if (q->groupClause == NIL && q->groupingSets == NIL &&
-          q->havingQual == NULL && !q->hasSubLinks)
+          !q->hasSubLinks)
         scalar_distinct_as_cross_join(q, rtable_base, n_aggs);
 
       return q;

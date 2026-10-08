@@ -53,3 +53,14 @@ expected beside DISTINCT|1|1.333333
 expected beside DISTINCT|2|1.000000
 expected beside DISTINCT||1.333333
 (3 rows)
+remove_provenance
+
+(1 row)
+q|present
+HAVING fails|f
+HAVING on another aggregate|t
+correlated, empty|f
+correlated, one value|t
+empty, HAVING holds|t
+scalar DISTINCT subquery, empty|f
+(6 rows)
