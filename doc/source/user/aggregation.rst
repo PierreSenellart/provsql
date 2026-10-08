@@ -337,7 +337,7 @@ partition gives each row the probability of being among them:
     WHERE rk <= 3;
 
 ``row_number`` is tracked as ``rank``; where the ``ORDER BY`` of the window
-leaves ties, the value is the rank, and a ``WARNING`` says so.
+leaves ties, in any world, the value is the rank, and a ``WARNING`` says so.
 ``cume_dist()``, ``percent_rank()`` and ``ntile()`` are tracked as well.
 Rows that tie on the ``ORDER BY`` of an ``ntile`` share the bucket of their
 rank, where SQL may split them between two buckets; a ``WARNING`` says so
@@ -346,7 +346,10 @@ when it does.
 The other window functions run with a ``WARNING``, their value untracked:
 ``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``,
 ``ROWS`` and ``GROUPS`` frames with an offset, and windows over aggregate
-results other than the ranks below.
+results other than the ranks below. A second ``WARNING`` says when the order
+they read is not determined: ``lag`` and ``lead`` with rows tying on the
+``ORDER BY``; ``first_value``, ``last_value`` and ``nth_value`` with tying
+rows of different values.
 
 The circuit of a running aggregate, whose frame moves with the current
 row, is quadratic in the size of the partition.

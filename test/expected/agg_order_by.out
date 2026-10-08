@@ -78,6 +78,62 @@ total ORDER BY|2|["x", "x"] (*)
 q|d|v
 peers equal|2|x,x (*)
 (1 row)
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks aob
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: a window function reads rows whose order the query does not determine (lag or lead with rows tying on its ORDER BY, first_value, last_value or nth_value with tying rows of different values): the order of the database as it is is read in every world
+DETAIL:  provsql-reason: window-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks aob
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: a window function reads rows whose order the query does not determine (lag or lead with rows tying on its ORDER BY, first_value, last_value or nth_value with tying rows of different values): the order of the database as it is is read in every world
+DETAIL:  provsql-reason: window-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks aob
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: a window function reads rows whose order the query does not determine (lag or lead with rows tying on its ORDER BY, first_value, last_value or nth_value with tying rows of different values): the order of the database as it is is read in every world
+DETAIL:  provsql-reason: window-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks aob
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: window function: provenance not tracked, although the statement tracks aob
+DETAIL:  provsql-reason: window-not-tracked; scope: gap
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-as-rank; scope: deliberate
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

@@ -7982,8 +7982,11 @@ CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUI
  * @param rank the agg_token of the rank of the row
  * @param row_number the row number of the row among those of the database
  *        as it is, or NULL for a row absent from it (no check then)
+ * @param tied whether the row ties on the <tt>ORDER BY</tt> with another row
+ *        of any world, which warns as well
  */
-CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
+CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint,
+                                              tied boolean DEFAULT false)
   RETURNS agg_token
   AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE PARALLEL SAFE;
 
@@ -8020,9 +8023,11 @@ CREATE AGGREGATE order_determined(nvals integer, VARIADIC "any") (
  *
  * Returns @p val, with a warning, once per statement, when @p determined
  * (from @c order_determined) is false: the order of the rows in the
- * database as it is is the one read in every world.
+ * database as it is is the one read in every world.  @p is_window for a
+ * window function (@c lag, @c first_value, ...), which warns as such.
  */
-CREATE OR REPLACE FUNCTION order_checked(val anyelement, determined boolean)
+CREATE OR REPLACE FUNCTION order_checked(val anyelement, determined boolean,
+                                         is_window boolean DEFAULT false)
   RETURNS anyelement
   AS 'provsql','order_checked' LANGUAGE C VOLATILE PARALLEL SAFE;
 

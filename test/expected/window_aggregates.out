@@ -320,6 +320,8 @@ add_provenance
 add_provenance
 
 (1 row)
+WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-as-rank; scope: deliberate
 remove_provenance
 
 (1 row)

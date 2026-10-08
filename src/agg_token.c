@@ -574,7 +574,8 @@ PG_FUNCTION_INFO_V1(row_number_as_rank);
  * The rank is what is tracked.  Its SQL arguments are @c rank, the
  * @c agg_token of the rank of the row, and @c row_number, the row number of
  * the row among those of the database as it is, or NULL for a row absent
- * from it; when the two differ, a warning says so, once per statement.
+ * from it; when the two differ, or when @c tied says the row ties with a row
+ * of any world, a warning says so, once per statement.
  *
  * @return @c rank.
  */
@@ -588,6 +589,16 @@ row_number_as_rank(PG_FUNCTION_ARGS)
   if (PG_ARGISNULL(0))
     PG_RETURN_NULL();
   rank = (agg_token *) PG_GETARG_POINTER(0);
+  /* A tie with a row of any world, those absent from the database as it is
+   * included: the row number SQL would give is not determined there. */
+  if (PG_NARGS() > 2 && !PG_ARGISNULL(2) && PG_GETARG_BOOL(2) &&
+      warned != GetCurrentStatementStartTimestamp()) {
+    warned = GetCurrentStatementStartTimestamp();
+    provsql_warning_tagged(PROVSQL_DELIBERATE, "row-number-as-rank",
+                           "row_number() / LIMIT / DISTINCT ON is tracked as "
+                           "rank() (WITH TIES), which it differs from when "
+                           "rows tie on the ORDER BY");
+  }
   /* No row number: a row absent from the database as it is, which SQL does
    * not number (see make_rank_expression). */
   if (PG_ARGISNULL(1))
@@ -758,6 +769,15 @@ order_checked(PG_FUNCTION_ARGS)
   if (!PG_ARGISNULL(1) && !PG_GETARG_BOOL(1) &&
       warned != GetCurrentStatementStartTimestamp()) {
     warned = GetCurrentStatementStartTimestamp();
+    if (PG_NARGS() > 2 && !PG_ARGISNULL(2) && PG_GETARG_BOOL(2))
+      provsql_warning_tagged(PROVSQL_DELIBERATE, "window-order-undetermined",
+                             "a window function reads rows whose order the "
+                             "query does not determine (lag or lead with "
+                             "rows tying on its ORDER BY, first_value, "
+                             "last_value or nth_value with tying rows of "
+                             "different values): the order of the database "
+                             "as it is is read in every world");
+    else
     provsql_warning_tagged(PROVSQL_DELIBERATE, "aggregate-order-undetermined",
                            "an order-dependent aggregate reads rows whose "
                            "order the query does not determine (without "

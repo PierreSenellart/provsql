@@ -4783,8 +4783,8 @@ static Expr *make_order_check(const constants_t *constants, Aggref *agg_ref) {
 #endif
   return (Expr *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
                               agg_ref->aggtype,
-                              list_make2(agg_ref, chk), InvalidOid,
-                              agg_ref->aggcollid, COERCE_EXPLICIT_CALL);
+                              list_make2(agg_ref, chk), agg_ref->aggcollid,
+                              InvalidOid, COERCE_EXPLICIT_CALL);
 }
 
 /**
@@ -12193,6 +12193,169 @@ static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
   return count;
 }
 
+/**
+ * @brief Append to @p q a copy of the window of @p wf whose frame is the
+ *        peers of the current row, and return its @c winref (0 if none).
+ */
+static Index peers_window(Query *q, WindowFunc *wf) {
+  WindowClause *wc = window_clause_of(q, wf->winref);
+  WindowClause *frame;
+  Index winref = 0;
+  ListCell *lc;
+
+  if (wc == NULL)
+    return 0;
+  foreach (lc, q->windowClause)
+    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+  frame = (WindowClause *)copyObject(wc);
+  frame->name = NULL;
+  frame->refname = NULL;
+  frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
+                        FRAMEOPTION_BETWEEN |
+                        FRAMEOPTION_START_CURRENT_ROW |
+                        FRAMEOPTION_END_CURRENT_ROW;
+  frame->startOffset = NULL;
+  frame->endOffset = NULL;
+  frame->winref = winref + 1;
+  q->windowClause = lappend(q->windowClause, frame);
+  return frame->winref;
+}
+
+/**
+ * @brief Whether the current row ties on the @c ORDER @c BY of @p wf with
+ *        another row of its partition, as @c "count(*) > 1" over its peers.
+ *
+ * Counted over every row of the partition, those absent from the database
+ * as it is included: a tie there leaves the row number undetermined in the
+ * worlds where both rows are present.  Without @c ORDER @c BY, every row of
+ * the partition is a peer.
+ */
+static Expr *peers_in_any_world(Query *q, WindowFunc *wf) {
+  Index winref = peers_window(q, wf);
+  WindowFunc *count;
+  Oid gt;
+
+  if (winref == 0)
+    return (Expr *)makeBoolConst(false, false);
+  count = makeNode(WindowFunc);
+  count->winfnoid = F_COUNT_;
+  count->wintype = INT8OID;
+  count->winref = winref;
+  count->winstar = true;
+  count->winagg = true;
+  count->location = -1;
+  gt = OpernameGetOprid(list_make1(makeString(">")), INT8OID, INT8OID);
+  return make_opclause(gt, BOOLOID, false, (Expr *)count,
+                       (Expr *)makeConst(INT8OID, -1, InvalidOid,
+                                         sizeof(int64), Int64GetDatum(1),
+                                         false, FLOAT8PASSBYVAL),
+                       InvalidOid, InvalidOid);
+}
+
+/**
+ * @brief An untracked window function @p wf, with a warning where the order
+ *        it reads is not determined, or @p wf itself.
+ *
+ * @c lag and @c lead read the rows strictly before or after, which the
+ * order leaves open wherever two rows of the partition tie on it: like
+ * @c row_number, any peers.  @c first_value, @c last_value and
+ * @c nth_value over a frame determined by values (@c RANGE, @c GROUPS, the
+ * whole partition) read a determined set of rows, in an order open only
+ * among peers: they are determined where peers have the same value of what
+ * is read.  Both are checked over every row of the partition, those absent
+ * from the database as it is included.  Over a @c ROWS frame other than the
+ * whole partition, the frame itself is not determined: left as it is.
+ */
+static Node *window_order_check(const constants_t *constants, Query *q,
+                                WindowFunc *wf) {
+  char *name;
+  Expr *determined = NULL;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      wf->winfnoid >= FirstNormalObjectId ||
+      (name = get_func_name(wf->winfnoid)) == NULL)
+    return (Node *)wf;
+  if (strcmp(name, "lag") == 0 || strcmp(name, "lead") == 0) {
+    determined = makeBoolExpr(NOT_EXPR,
+                              list_make1(peers_in_any_world(q, wf)), -1);
+  } else if (strcmp(name, "first_value") == 0 ||
+             strcmp(name, "last_value") == 0 ||
+             strcmp(name, "nth_value") == 0) {
+    WindowClause *wc = window_clause_of(q, wf->winref);
+    Index winref;
+    WindowFunc *chk;
+
+    if (wc == NULL || wf->args == NIL ||
+        ((wc->frameOptions & FRAMEOPTION_ROWS) &&
+         !((wc->frameOptions & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
+           (wc->frameOptions & FRAMEOPTION_END_UNBOUNDED_FOLLOWING))))
+      return (Node *)wf;
+    winref = peers_window(q, wf);
+    if (winref == 0)
+      return (Node *)wf;
+    chk = makeNode(WindowFunc);
+    chk->winfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+    chk->wintype = BOOLOID;
+    chk->inputcollid = wf->inputcollid;
+    chk->args = list_make2(makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                                     Int32GetDatum(1), false, true),
+                           copyObject(linitial(wf->args)));
+    chk->winref = winref;
+    chk->winagg = true;
+    chk->location = -1;
+    determined = (Expr *)chk;
+  }
+  pfree(name);
+  if (determined == NULL)
+    return (Node *)wf;
+  return (Node *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              wf->wintype,
+                              list_make3(wf, determined,
+                                         makeBoolConst(true, false)),
+                              wf->wincollid, InvalidOid, COERCE_EXPLICIT_CALL);
+}
+
+/**
+ * @brief The tracked window aggregate @p e of @p wf, an order-dependent one
+ *        (@c array_agg, @c string_agg, ...), with a warning where the order
+ *        of its frame is not determined.
+ *
+ * Its frame is read in the order of the window, open only among peers:
+ * determined where peers have the same value of what is aggregated, checked
+ * over every row of the partition.
+ */
+static Expr *window_aggregate_order_check(const constants_t *constants,
+                                          Query *q, WindowFunc *wf, Expr *e) {
+  Index winref;
+  WindowFunc *chk;
+  List *args;
+  ListCell *lc;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      wf->args == NIL || (winref = peers_window(q, wf)) == 0)
+    return e;
+  args = list_make1(makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                              Int32GetDatum(list_length(wf->args)), false,
+                              true));
+  foreach (lc, wf->args)
+    args = lappend(args, copyObject(lfirst(lc)));
+  chk = makeNode(WindowFunc);
+  chk->winfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+  chk->wintype = BOOLOID;
+  chk->inputcollid = wf->inputcollid;
+  chk->args = args;
+  chk->aggfilter = (Expr *)copyObject(wf->aggfilter);
+  chk->winref = winref;
+  chk->winagg = true;
+  chk->location = -1;
+  return (Expr *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              exprType((Node *)e),
+                              list_make2(e, chk), InvalidOid, InvalidOid,
+                              COERCE_EXPLICIT_CALL);
+}
+
 /** @brief Context for @c window_aggregation_mutator. */
 typedef struct window_aggregation_context {
   const constants_t *constants; ///< Extension OID cache
@@ -12415,7 +12578,8 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
         FuncExpr *check = makeNode(FuncExpr);
         check->funcid = c->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK;
         check->funcresulttype = c->constants->OID_TYPE_AGG_TOKEN;
-        check->args = list_make2(e, actual_row_number(c, wf));
+        check->args = list_make3(e, actual_row_number(c, wf),
+                                 peers_in_any_world(c->q, wf));
         check->location = -1;
         e = (Expr *)check;
       }
@@ -12424,8 +12588,10 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
                                              c->prov_atts);
     if (e == NULL) {
       c->untracked = true;
-      return node;
+      return window_order_check(c->constants, c->q, wf);
     }
+    if (wf->winagg && aggregate_order_dependent(wf->winfnoid))
+      e = window_aggregate_order_check(c->constants, c->q, wf, e);
     return (Node *)e;
   }
   return expression_tree_mutator(node, window_aggregation_mutator, ctx);
