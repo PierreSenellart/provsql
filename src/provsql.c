@@ -2432,6 +2432,18 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     first = false;
     appendStringInfoString(&cols, quote_identifier(name));
     appendStringInfo(&coldef, "%s %s", quote_identifier(name), format_type_be(typid));
+    /* The rounds are driven through temporary tables, which cannot hold a
+     * column of a pseudo-type: the record[] path that SEARCH and CYCLE add
+     * is one. */
+    if (get_typtype(typid) == TYPTYPE_PSEUDO)
+      provsql_unsupported_hint(
+        PROVSQL_GAP, "recursion-pseudo-type-column",
+        "Build the path as an array of the column's own type instead of a "
+        "SEARCH or CYCLE clause, e.g. ARRAY[node] in the base term and "
+        "path || node in the recursive one.",
+        "recursive query over provenance-tracked relations with a column of "
+        "type %s (as SEARCH and CYCLE clauses add) not supported",
+        format_type_be(typid));
   }
 
   if (provsql_verbose >= 20)
@@ -16269,6 +16281,7 @@ typedef struct oj_renum_ctx {
   int npairs;
   Index from[2];
   Index to[2];
+  int sublevels_up;   ///< Depth of the sublink being walked (0 outside)
 } oj_renum_ctx;
 
 static Node *oj_renum_mut(Node *node, void *cx) {
@@ -16277,7 +16290,7 @@ static Node *oj_renum_mut(Node *node, void *cx) {
     return NULL;
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    if (v->varlevelsup == 0) {
+    if (v->varlevelsup == (Index) c->sublevels_up) {
       int i;
       for (i = 0; i < c->npairs; ++i)
         if (v->varno == c->from[i]) {
@@ -16294,6 +16307,15 @@ static Node *oj_renum_mut(Node *node, void *cx) {
         }
     }
     return node;
+  }
+  /* A sublink of the condition (NOT IN, EXISTS) reads the two relations one
+   * level up: renumber those references too. */
+  if (IsA(node, Query)) {
+    Query *res;
+    c->sublevels_up++;
+    res = query_tree_mutator((Query *)node, oj_renum_mut, cx, 0);
+    c->sublevels_up--;
+    return (Node *)res;
   }
   return expression_tree_mutator(node, oj_renum_mut, cx);
 }
@@ -16356,6 +16378,7 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
   rctx.npairs = 2;
   rctx.from[0] = R_idx; rctx.to[0] = 1;
   rctx.from[1] = S_idx; rctx.to[1] = 2;
+  rctx.sublevels_up = 0;
   theta2 = oj_renum_mut(copyObject(theta), &rctx);
   IncrementVarSublevelsUp(theta2, depth, 1);
 
@@ -16370,6 +16393,9 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
   je->rtindex = 3;
   fe->fromlist = list_make1(je);
   sub->jointree = fe;
+  /* Without the flag the planner leaves a sublink of the condition
+   * unplanned, and fails costing it. */
+  sub->hasSubLinks = checkExprHasSubLink(theta2);
 
   if (select_r)
     for (i = 0; i < Rc->n; ++i) {

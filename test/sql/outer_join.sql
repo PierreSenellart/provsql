@@ -658,3 +658,46 @@ RESET client_min_messages;
 DROP TABLE oj_r;
 SELECT remove_provenance('oj_sales');
 DROP TABLE oj_sales;
+
+-- A sublink in the ON condition of an outer join (NOT IN, EXISTS, NOT
+-- EXISTS; LEFT, RIGHT, FULL; reading one side or both): the condition is
+-- copied into the subqueries the join is lowered to, with its sublinks.  The rows present in the database as
+-- it is are those of SQL.
+CREATE TABLE oj_q(id int);
+CREATE TABLE oj_a(parentid int);
+CREATE TABLE oj_h(postid int);
+INSERT INTO oj_q VALUES (1), (2);
+INSERT INTO oj_a VALUES (1), (2);
+INSERT INTO oj_h VALUES (2);
+SELECT add_provenance('oj_q');
+SELECT add_provenance('oj_a');
+SELECT add_provenance('oj_h');
+CREATE TABLE oj_r AS
+  SELECT 'not in' AS c, q.id, a.parentid, present(provenance()) AS present
+  FROM oj_q q LEFT JOIN oj_a a
+    ON q.id = a.parentid AND NOT q.id IN (SELECT postid FROM oj_h)
+  UNION ALL
+  SELECT 'exists', q.id, a.parentid, present(provenance())
+  FROM oj_q q LEFT JOIN oj_a a
+    ON q.id = a.parentid AND EXISTS (SELECT 1 FROM oj_h h WHERE h.postid = q.id)
+  UNION ALL
+  SELECT 'right in', q.id, a.parentid, present(provenance())
+  FROM oj_q q RIGHT JOIN oj_a a
+    ON q.id = a.parentid AND q.id IN (SELECT postid FROM oj_h)
+  UNION ALL
+  SELECT 'full not in', q.id, a.parentid, present(provenance())
+  FROM oj_q q FULL JOIN oj_a a
+    ON q.id = a.parentid AND NOT q.id IN (SELECT postid FROM oj_h)
+  UNION ALL
+  SELECT 'both sides', q.id, a.parentid, present(provenance())
+  FROM oj_q q LEFT JOIN oj_a a
+    ON q.id = a.parentid
+   AND NOT EXISTS (SELECT 1 FROM oj_h h
+                   WHERE h.postid = q.id AND h.postid = a.parentid);
+SELECT remove_provenance('oj_r');
+SELECT c, id, parentid FROM oj_r WHERE present ORDER BY c, id, parentid;
+DROP TABLE oj_r;
+SELECT remove_provenance('oj_q');
+SELECT remove_provenance('oj_a');
+SELECT remove_provenance('oj_h');
+DROP TABLE oj_q, oj_a, oj_h;

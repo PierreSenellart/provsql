@@ -241,3 +241,23 @@ rmv_t_rows
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: recursive query over provenance-tracked relations with a column of type record[] (as SEARCH and CYCLE clauses add) not supported
+DETAIL:  provsql-reason: recursion-pseudo-type-column; scope: gap
+HINT:  Build the path as an array of the column's own type instead of a SEARCH or CYCLE clause, e.g. ARRAY[node] in the base term and path || node in the recursive one.
+ERROR:  ProvSQL: recursive query over provenance-tracked relations with a column of type record[] (as SEARCH and CYCLE clauses add) not supported
+DETAIL:  provsql-reason: recursion-pseudo-type-column; scope: gap
+HINT:  Build the path as an array of the column's own type instead of a SEARCH or CYCLE clause, e.g. ARRAY[node] in the base term and path || node in the recursive one.
+remove_provenance
+
+(1 row)
+node|path
+1|{1}
+2|{1,2}
+3|{1,3}
+(3 rows)
+remove_provenance
+
+(1 row)

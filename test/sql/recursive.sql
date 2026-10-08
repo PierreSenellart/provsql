@@ -510,3 +510,33 @@ RESET provsql.active;
 DROP TABLE rmv_t;
 SELECT remove_provenance('rmv');
 DROP TABLE rmv;
+
+-- SEARCH and CYCLE clauses add a path column of type record[], which the
+-- temporary tables the rounds go through cannot hold: refused with the cause
+-- and the way out, a path of the column's own type, which works.
+CREATE TABLE rsc(node int, parent int);
+INSERT INTO rsc VALUES (1, NULL), (2, 1), (3, 1);
+SELECT add_provenance('rsc');
+WITH RECURSIVE t AS (
+  SELECT node, parent FROM rsc WHERE parent IS NULL
+  UNION ALL
+  SELECT n.node, n.parent FROM t JOIN rsc n ON n.parent = t.node)
+SEARCH DEPTH FIRST BY node SET path
+SELECT node FROM t;
+WITH RECURSIVE t AS (
+  SELECT node, parent FROM rsc WHERE parent IS NULL
+  UNION ALL
+  SELECT n.node, n.parent FROM t JOIN rsc n ON n.parent = t.node)
+CYCLE node SET is_cycle USING cpath
+SELECT node FROM t;
+CREATE TABLE rsc_r AS
+  WITH RECURSIVE t AS (
+    SELECT node, ARRAY[node] AS path FROM rsc WHERE parent IS NULL
+    UNION ALL
+    SELECT n.node, t.path || n.node FROM t JOIN rsc n ON n.parent = t.node)
+  SELECT node, path FROM t;
+SELECT remove_provenance('rsc_r');
+SELECT node, path FROM rsc_r ORDER BY path;
+DROP TABLE rsc_r;
+SELECT remove_provenance('rsc');
+DROP TABLE rsc;
