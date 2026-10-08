@@ -5764,4 +5764,44 @@ $$
     FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
 $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
 
+
+/** @brief Transition function of order_determined (internal) */
+CREATE OR REPLACE FUNCTION order_determined_transfn(internal, integer, VARIADIC "any")
+  RETURNS internal
+  AS 'provsql','order_determined_transfn' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Final function of order_determined (internal) */
+CREATE OR REPLACE FUNCTION order_determined_finalfn(internal)
+  RETURNS boolean
+  AS 'provsql','order_determined_finalfn' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Whether an order-dependent aggregate reads its rows in an order the
+ *        query determines (internal)
+ *
+ * Called by the query rewriter beside @c array_agg, @c string_agg, the
+ * @c json_agg family and @c xmlagg over provenance-tracked relations, with
+ * the aggregate's own arguments (the first @p nvals ones) and @c ORDER
+ * @c BY, over every row of the group, those present only in other worlds
+ * included: false when two rows tie on the @c ORDER @c BY (or there is
+ * none) with different values.
+ */
+CREATE AGGREGATE order_determined(nvals integer, VARIADIC "any") (
+  SFUNC = order_determined_transfn,
+  STYPE = internal,
+  FINALFUNC = order_determined_finalfn
+);
+
+/**
+ * @brief The value of an order-dependent aggregate, with a warning where its
+ *        order is not determined (internal)
+ *
+ * Returns @p val, with a warning, once per statement, when @p determined
+ * (from @c order_determined) is false: the order of the rows in the
+ * database as it is is the one read in every world.
+ */
+CREATE OR REPLACE FUNCTION order_checked(val anyelement, determined boolean)
+  RETURNS anyelement
+  AS 'provsql','order_checked' LANGUAGE C VOLATILE PARALLEL SAFE;
+
 SELECT reset_constants_cache();

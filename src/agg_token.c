@@ -15,6 +15,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_collation.h"
 #include "utils/uuid.h"
 #include "utils/numeric.h"
 #include "utils/fmgrprotos.h"
@@ -22,6 +23,9 @@
 #include "access/xact.h"
 #include "executor/spi.h"
 #include "access/htup_details.h"
+#include "utils/datum.h"
+#include "utils/typcache.h"
+#include "utils/lsyscache.h"
 
 #include "provsql_utils.h"
 #include "agg_token.h"
@@ -600,4 +604,168 @@ row_number_as_rank(PG_FUNCTION_ARGS)
                            "rows tie on the ORDER BY");
   }
   PG_RETURN_POINTER(rank);
+}
+
+/** @brief Transition state of @c order_determined. */
+typedef struct order_determined_state {
+  int nvals;            ///< Number of aggregated arguments
+  int nargs;            ///< Aggregated arguments, then the sort keys
+  bool have_prev;       ///< A row was read
+  bool determined;      ///< No two peers so far with different values
+  Datum *prev;          ///< The previous row's arguments
+  bool *prevnull;       ///< Which of them are NULL
+  int16 *typlen;        ///< Their type lengths
+  bool *typbyval;       ///< Whether passed by value
+  FmgrInfo **keyeq;     ///< Equality of each sort key (NULL for a value)
+} order_determined_state;
+
+/** @brief Whether two values of the same type are the same value, written the
+ *  same way: equal bytes, after decompression for a varlena. */
+static bool
+same_value(Datum a, Datum b, int16 typlen, bool typbyval)
+{
+  if (typlen == -1) {
+    struct varlena *va = pg_detoast_datum_packed((struct varlena *) DatumGetPointer(a));
+    struct varlena *vb = pg_detoast_datum_packed((struct varlena *) DatumGetPointer(b));
+    Size la = VARSIZE_ANY_EXHDR(va), lb = VARSIZE_ANY_EXHDR(vb);
+
+    return la == lb && memcmp(VARDATA_ANY(va), VARDATA_ANY(vb), la) == 0;
+  }
+  return datumIsEqual(a, b, typbyval, typlen);
+}
+
+PG_FUNCTION_INFO_V1(order_determined_transfn);
+/**
+ * @brief Transition of @c order_determined(nvals, v_1, ..., v_nvals,
+ *        k_1, ..., k_m): reads the rows of a group in the order of its sort
+ *        keys @c k, and records whether two consecutive rows tie on the keys
+ *        (are peers) with different values @c v.
+ *
+ * The aggregate it accompanies reads its rows in an order the query then
+ * does not determine.  Without sort keys, every row is a peer of every
+ * other.  Two NULLs are peers, as they sort together.
+ */
+Datum
+order_determined_transfn(PG_FUNCTION_ARGS)
+{
+  MemoryContext aggcxt, old;
+  order_determined_state *st;
+  int i;
+  bool peers = true, same = true;
+
+  if (!AggCheckCallContext(fcinfo, &aggcxt))
+    elog(ERROR, "order_determined_transfn called in non-aggregate context");
+
+  if (PG_ARGISNULL(0)) {
+    old = MemoryContextSwitchTo(aggcxt);
+    st = palloc0(sizeof(order_determined_state));
+    st->nvals = PG_GETARG_INT32(1);
+    st->nargs = PG_NARGS() - 2;
+    st->determined = true;
+    st->prev = palloc0(st->nargs * sizeof(Datum));
+    st->prevnull = palloc0(st->nargs * sizeof(bool));
+    st->typlen = palloc0(st->nargs * sizeof(int16));
+    st->typbyval = palloc0(st->nargs * sizeof(bool));
+    st->keyeq = palloc0(st->nargs * sizeof(FmgrInfo *));
+    for (i = 0; i < st->nargs; ++i) {
+      Oid t = get_fn_expr_argtype(fcinfo->flinfo, i + 2);
+      get_typlenbyval(t, &st->typlen[i], &st->typbyval[i]);
+      if (i >= st->nvals) {
+        TypeCacheEntry *tce = lookup_type_cache(t, TYPECACHE_EQ_OPR_FINFO);
+        if (OidIsValid(tce->eq_opr_finfo.fn_oid))
+          st->keyeq[i] = &tce->eq_opr_finfo;
+      }
+    }
+    MemoryContextSwitchTo(old);
+  } else
+    st = (order_determined_state *) PG_GETARG_POINTER(0);
+
+  if (!st->determined)
+    PG_RETURN_POINTER(st);
+
+  if (st->have_prev) {
+    for (i = st->nvals; i < st->nargs && peers; ++i) {
+      bool n = PG_ARGISNULL(i + 2);
+      if (n != st->prevnull[i])
+        peers = false;
+      else if (!n)
+        peers = st->keyeq[i] != NULL
+          ? DatumGetBool(FunctionCall2Coll(st->keyeq[i],
+                                           OidIsValid(PG_GET_COLLATION())
+                                             ? PG_GET_COLLATION()
+                                             : DEFAULT_COLLATION_OID,
+                                           st->prev[i], PG_GETARG_DATUM(i + 2)))
+          : same_value(st->prev[i], PG_GETARG_DATUM(i + 2), st->typlen[i],
+                       st->typbyval[i]);
+    }
+    if (peers) {
+      for (i = 0; i < st->nvals && same; ++i) {
+        bool n = PG_ARGISNULL(i + 2);
+        if (n != st->prevnull[i])
+          same = false;
+        else if (!n)
+          same = same_value(st->prev[i], PG_GETARG_DATUM(i + 2),
+                            st->typlen[i], st->typbyval[i]);
+      }
+      if (!same) {
+        st->determined = false;
+        PG_RETURN_POINTER(st);
+      }
+    }
+  }
+
+  old = MemoryContextSwitchTo(aggcxt);
+  for (i = 0; i < st->nargs; ++i) {
+    if (st->have_prev && !st->prevnull[i] && !st->typbyval[i])
+      pfree(DatumGetPointer(st->prev[i]));
+    st->prevnull[i] = PG_ARGISNULL(i + 2);
+    st->prev[i] = st->prevnull[i]
+      ? (Datum) 0
+      : datumCopy(PG_GETARG_DATUM(i + 2), st->typbyval[i], st->typlen[i]);
+  }
+  MemoryContextSwitchTo(old);
+  st->have_prev = true;
+  PG_RETURN_POINTER(st);
+}
+
+PG_FUNCTION_INFO_V1(order_determined_finalfn);
+/** @brief Final function of @c order_determined: whether no two peers have
+ *  different values. */
+Datum
+order_determined_finalfn(PG_FUNCTION_ARGS)
+{
+  if (PG_ARGISNULL(0))
+    PG_RETURN_BOOL(true);
+  PG_RETURN_BOOL(((order_determined_state *) PG_GETARG_POINTER(0))->determined);
+}
+
+PG_FUNCTION_INFO_V1(order_checked);
+/**
+ * @brief The value of an order-dependent aggregate, with a warning, once per
+ *        statement, where @p determined says its order is not determined.
+ *
+ * The rows tie on its @c ORDER @c BY (or it has none) with different
+ * values: SQL leaves their order open, and the order of the database as it
+ * is is the one read in every world.
+ *
+ * @return its first argument.
+ */
+Datum
+order_checked(PG_FUNCTION_ARGS)
+{
+  static TimestampTz warned = 0;
+
+  if (!PG_ARGISNULL(1) && !PG_GETARG_BOOL(1) &&
+      warned != GetCurrentStatementStartTimestamp()) {
+    warned = GetCurrentStatementStartTimestamp();
+    provsql_warning_tagged(PROVSQL_DELIBERATE, "aggregate-order-undetermined",
+                           "an order-dependent aggregate reads rows whose "
+                           "order the query does not determine (without "
+                           "ORDER BY, or tying on it, with different values): "
+                           "their order in the database as it is is read in "
+                           "every world");
+  }
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }

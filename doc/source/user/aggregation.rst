@@ -68,6 +68,12 @@ over an exact argument (an integer, a ``numeric``), as the arithmetic over
 sums and counts that defines them. Over a floating-point argument, they are
 read as a plain value, with a warning.
 
+``array_agg``, ``string_agg``, the ``json_agg`` family and ``xmlagg`` read
+their rows in order. Where the query does not determine that order (no
+``ORDER BY``, or rows tying on it with different values, in any world), a
+``WARNING`` says so, and the order of the database as it is is read in
+every world.
+
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -79,7 +85,7 @@ both in the same query and over subquery results:
 
     SELECT dept, COUNT(*) * 10 FROM employees GROUP BY dept;
     SELECT dept, SUM(salary) + 1000 FROM employees GROUP BY dept;
-    SELECT dept, string_agg(name, ', ') || ' (team)' FROM employees GROUP BY dept;
+    SELECT dept, string_agg(name, ', ' ORDER BY name) || ' (team)' FROM employees GROUP BY dept;
     SELECT cnt::numeric FROM (SELECT COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, COALESCE(cnt, 0) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, GREATEST(cnt, 3) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;

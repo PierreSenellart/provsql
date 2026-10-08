@@ -60,6 +60,10 @@ for func, url in sorted(sql_map_entries.items()):
 
 # 6. Check: every Doxygen SQL function is in the map (or explicitly excluded)
 INTERNAL_FUNCTIONS = {
+    # tie check of the order-dependent aggregates (array_agg, string_agg, ...),
+    # inserted by the rewriter.
+    'order_determined', 'order_determined_transfn', 'order_determined_finalfn',
+    'order_checked',
     # bitmask helpers behind the subset semirings (sr_subset, sr_clearance,
     # sr_consent and their predicates); users call those.
     'subset_evaluate', 'subset_labels', 'subset_member', 'subset_settling',

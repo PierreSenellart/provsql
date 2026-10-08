@@ -35,3 +35,52 @@ Berlin|Susan (*)
 New York|Paul (*)
 Paris|Nancy (*)
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|d|v
+no ORDER BY|1|a,b,c (*)
+(1 row)
+q|d|v
+peers differ|1|{a,b,c} (*)
+(1 row)
+q|d|v
+tie in another world only|1|a (*)
+(1 row)
+q|d|v
+total ORDER BY|1|["a", "b", "c"] (*)
+total ORDER BY|2|["x", "x"] (*)
+(2 rows)
+q|d|v
+peers equal|2|x,x (*)
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

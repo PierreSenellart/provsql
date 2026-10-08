@@ -1294,7 +1294,7 @@ INSERT INTO ssw VALUES (1,1,1,1,1),(2,1,2,1,2),(3,1,3,1,1),(4,1,4,1,3),
   (5,1,1,2,3),(6,1,2,2,1),(7,1,3,2,5),(8,1,4,2,6);
 SELECT add_provenance('ssw');
 CREATE TABLE ssw_r AS
-  SELECT p, k, json_agg(sub) AS rows
+  SELECT p, k, json_agg(sub ORDER BY t, pos) AS rows
   FROM (SELECT p, k, t, pos FROM ssw w
         WHERE EXISTS (SELECT 1 FROM ssw WHERE pos = 1 AND t = 1
                                          AND p = w.p AND k = w.k)

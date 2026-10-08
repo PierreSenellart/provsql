@@ -4695,6 +4695,98 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
   return expr_s;
 }
 
+/** @brief Whether @p aggfnoid is one of PostgreSQL's aggregates whose
+ *  result depends on the order it reads its rows in. */
+static bool aggregate_order_dependent(Oid aggfnoid) {
+  char *name;
+  bool dep;
+
+  if (aggfnoid >= FirstNormalObjectId)
+    return false;
+  name = get_func_name(aggfnoid);
+  if (name == NULL)
+    return false;
+  dep = strcmp(name, "array_agg") == 0 || strcmp(name, "string_agg") == 0 ||
+        strncmp(name, "json_agg", 8) == 0 ||
+        strncmp(name, "jsonb_agg", 9) == 0 ||
+        strncmp(name, "json_object_agg", 15) == 0 ||
+        strncmp(name, "jsonb_object_agg", 16) == 0 ||
+        strcmp(name, "xmlagg") == 0;
+  pfree(name);
+  return dep;
+}
+
+/**
+ * @brief @c order_checked(agg, order_determined(...)) for an order-dependent
+ *        aggregate @p agg_ref, or @c NULL.
+ *
+ * The check reads the aggregate's arguments, sorted by its @c ORDER @c BY,
+ * over every row of the group its own @c FILTER keeps -- those present only
+ * in other worlds included, which the value shown leaves out -- and the
+ * value is returned with a warning where two rows tie on the @c ORDER
+ * @c BY (or there is none) with different values.
+ */
+static Expr *make_order_check(const constants_t *constants, Aggref *agg_ref) {
+  Aggref *chk;
+  List *args = NIL, *types = NIL;
+  ListCell *lc;
+  int nvals = 0;
+  AttrNumber resno = 1;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !aggregate_order_dependent(agg_ref->aggfnoid))
+    return NULL;
+  foreach (lc, agg_ref->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    ++nvals;
+  }
+  args = lappend(args, makeTargetEntry(
+    (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                      Int32GetDatum(nvals), false, true), resno++, NULL, false));
+  types = lappend_oid(types, INT4OID);
+  foreach (lc, agg_ref->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    args = lappend(args, makeTargetEntry((Expr *)copyObject(te->expr), resno++,
+                                         NULL, false));
+    types = lappend_oid(types, exprType((Node *)te->expr));
+  }
+  foreach (lc, agg_ref->aggorder) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    TargetEntry *key = get_sortgroupclause_tle(sgc, agg_ref->args);
+    TargetEntry *te = makeTargetEntry((Expr *)copyObject(key->expr), resno++,
+                                      NULL, false);
+    te->ressortgroupref = sgc->tleSortGroupRef;
+    args = lappend(args, te);
+    types = lappend_oid(types, exprType((Node *)key->expr));
+  }
+
+  chk = makeNode(Aggref);
+  chk->aggfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+  chk->aggtype = BOOLOID;
+  chk->aggtranstype = InvalidOid;
+  chk->aggargtypes = types;
+  chk->args = args;
+  chk->aggorder = (List *)copyObject(agg_ref->aggorder);
+  chk->aggfilter = (Expr *)copyObject(agg_ref->aggfilter);
+  chk->inputcollid = agg_ref->inputcollid;
+  chk->aggkind = AGGKIND_NORMAL;
+  chk->aggsplit = AGGSPLIT_SIMPLE;
+  chk->agglevelsup = agg_ref->agglevelsup;
+  chk->location = -1;
+#if PG_VERSION_NUM >= 140000
+  chk->aggno = chk->aggtransno = -1;
+#endif
+  return (Expr *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              agg_ref->aggtype,
+                              list_make2(agg_ref, chk), InvalidOid,
+                              agg_ref->aggcollid, COERCE_EXPLICIT_CALL);
+}
+
 /**
  * @brief Build the provenance expression for a single aggregate function.
  *
@@ -4745,6 +4837,9 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     /* Read before the displayed value is rewritten below, which replaces the
      * agg_token Var the predicate looks for */
     bool nested = nested_agg_trackable(constants, q, agg_ref);
+    /* The value shown, through the tie check of an order-dependent
+     * aggregate */
+    Expr *shown = NULL;
 
     /* Aggregates that return random_variable (sum_rv, avg_rv, and any
      * future RV-returning aggregate) get a different rewrite: instead
@@ -4822,6 +4917,10 @@ static Expr *make_aggregation_expression(const constants_t *constants,
         aggregation_function != F_COUNT_ANY)
       agg->aggfilter = filter;
 
+    /* Built before the value shown is restricted to the database as it is:
+     * the tie check reads the rows of every world. */
+    shown = make_order_check(constants, agg_ref);
+
     /* The value shown is the one plain SQL computes: over the rows that hold
      * in the database as it is, not over those kept only for their
      * provenance (see plain_row_token). */
@@ -4891,7 +4990,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
                     Int32GetDatum(agg_ref->aggtype), false, true);
 
     plus->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
-    plus->args = list_make5(fn, typ, agg_ref, agg,
+    plus->args = list_make5(fn, typ, shown ? shown : (Expr *)agg_ref, agg,
                             makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
                                       BoolGetDatum(is_scalar), false, true));
     plus->location = -1;
