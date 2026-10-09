@@ -81,3 +81,25 @@ SELECT g, ROUND(e_range::numeric, 4) AS e_range, ROUND(e_avg1::numeric, 4) AS e_
 FROM expected_result ORDER BY g;
 DROP TABLE expected_result;
 DROP TABLE expected_nan;
+
+-- A product of two aggregates over the same rows is not a product of
+-- independent factors: an aggregate's dependence on the rows was not seen
+-- (an empty footprint), and the expectation was E[factor] * E[sum].  By the
+-- worlds: the factor is 1 only where the table is empty, where the sum has
+-- no value, so 0; and count(*) * sum(num) is 24/8 over the 7/8 of worlds
+-- with a row, 3.428571.
+CREATE TABLE expected_prod(num numeric);
+INSERT INTO expected_prod VALUES (1), (2), (0);
+SELECT add_provenance('expected_prod');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM expected_prod; END $$;
+CREATE TABLE expected_result AS
+SELECT expected((CASE (SELECT count(t1.num) FROM expected_prod t1)
+                   WHEN 0 THEN 1 ELSE 0 END) * sum(t2.num)) AS e_factor,
+       (SELECT expected(count(*) * sum(num)) FROM expected_prod) AS e_prod
+FROM expected_prod t2;
+SELECT remove_provenance('expected_result');
+SELECT ROUND(e_factor::numeric, 6) AS e_factor, ROUND(e_prod::numeric, 6) AS e_prod
+FROM expected_result;
+DROP TABLE expected_result;
+SELECT remove_provenance('expected_prod');
+DROP TABLE expected_prod;

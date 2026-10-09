@@ -41,8 +41,9 @@ mv2_rows|mv2_source_tokens
 mv2_rows_refreshed|mv2_source_tokens
 3|3
 (1 row)
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks ci_src_a
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 x|n
 1|1
 2|1
@@ -59,4 +60,43 @@ opaque
 (1 row)
 t4_cleaned_up|t4_ancestry_cleaned_up
 t|t
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks ci_ug
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
+format_type
+integer[]
+(1 row)
+user_id|groups|s
+1|{1,2,3}|1,2,3
+2|{4}|4
+(2 rows)
+user_id
+1
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks ci_ug
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
+user_id|groups
+1|{1,2,3}
+2|{4}
+(2 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks ci_ug_into
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+user_id|groups
+1|{1,2,3}
+2|{4}
+(2 rows)
+remove_provenance
+
 (1 row)
