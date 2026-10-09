@@ -39,6 +39,14 @@ extern "C" {
 #include "common/relpath.h"
 #include "utils/palloc.h"
 #include "provsql_mmap.h"
+
+/* Whether the message being applied comes from the replay spool, which only
+   the build with a separate worker has. */
+#ifdef PROVSQL_INPROCESS_STORE
+#define PROVSQL_FROM_SPOOL false
+#else
+#define PROVSQL_FROM_SPOOL provsql_worker_from_spool
+#endif
 #include "provsql_shmem.h"
 }
 
@@ -580,7 +588,7 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
       char return_value = static_cast<char>(result);
 
       /* A message of the replay spool has nobody waiting for its answer */
-      if(!provsql_worker_from_spool &&
+      if(!PROVSQL_FROM_SPOOL &&
          (!WRITEB(&return_value, char) || !WRITEB(&existing, double)))
         provsql_error("Cannot write response to pipe (message type P)");
       break;
