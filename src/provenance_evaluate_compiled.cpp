@@ -263,8 +263,8 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   // empty and every leaf falls back to the semiring's one (the
   // absent-mapping convention).
   if (!OidIsValid(table)) {
-    if (SPI_exec("SELECT ''::text AS value, NULL::uuid AS provenance WHERE false",
-                 0) != SPI_OK_SELECT) {
+    if (SPI_execute("SELECT ''::text AS value, NULL::uuid AS provenance WHERE false",
+                    true, 0) != SPI_OK_SELECT) {
       SPI_finish();
       throw CircuitException("Join query failed");
     }
@@ -343,7 +343,10 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
                      "SELECT value, provenance FROM %s t JOIN tmp_uuids u ON t.provenance = u.id", qualified);
   }
 
-  if (SPI_exec(join_query.data, 0) != SPI_OK_SELECT) {
+  /* Read-only unless it reads the temporary table just filled: an sr_*
+   * evaluation is PARALLEL SAFE, and a parallel worker can only run a
+   * read-only command. */
+  if (SPI_execute(join_query.data, !drop_table, 0) != SPI_OK_SELECT) {
     if(drop_table)
       SPI_exec(drop_temp_table, 0);
     SPI_finish();

@@ -2084,7 +2084,8 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
         throw CircuitRefusal(
           PROVSQL_GAP, "recursion-expansion-too-large",
           "the Boolean circuit of this recursion on cyclic data would have "
-          "about " + fmt_num(e.expanded_gates) + " gates, too many to build "
+          "about " + std::to_string(static_cast<long long>(e.expanded_gates))
+          + " gates, too many to build "
           "for an exact probability; ask for an approximation instead "
           "('additive' or 'relative', or 'monte-carlo'), which solves the "
           "recursion in each sampled world");
