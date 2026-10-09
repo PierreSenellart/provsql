@@ -107,6 +107,13 @@ static void provsql_rmgr_redo(XLogReaderState *record)
   in_redo = false;
 }
 
+/** @brief End of WAL replay: the replay spool reaches the disk before the
+ *  end-of-recovery checkpoint. */
+static void provsql_rmgr_cleanup(void)
+{
+  provsql_replay_spool_close();
+}
+
 static void provsql_rmgr_desc(StringInfo buf, XLogReaderState *record)
 {
   const char *data = XLogRecGetData(record);
@@ -131,7 +138,7 @@ static const RmgrData provsql_rmgr = {
   .rm_desc     = provsql_rmgr_desc,
   .rm_identify = provsql_rmgr_identify,
   .rm_startup  = NULL,
-  .rm_cleanup  = NULL,
+  .rm_cleanup  = provsql_rmgr_cleanup,
   .rm_mask     = NULL,
   .rm_decode   = NULL,
 };

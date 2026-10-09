@@ -298,6 +298,18 @@ bool provsql_worker_read(void *dst, size_t n);
 /** @brief Whether the worker's read buffer holds unread bytes, which
  *         @c poll() cannot see. */
 bool provsql_worker_buffered(void);
+/** @brief Whether store messages spooled during crash recovery remain to be
+ *  applied (they come before the pipe). */
+bool provsql_worker_spooled(void);
+/** @brief Whether the message being applied comes from the replay spool: it
+ *  is not answered, nobody waits for it. */
+extern bool provsql_worker_from_spool;
+/** @brief Where WAL replay writes the store messages while the worker is not
+ *  running, relative to the data directory. */
+#define PROVSQL_REPLAY_SPOOL "global/provsql_replay_spool"
+/** @brief Sync and close the replay spool at the end of WAL replay (the
+ *  resource manager's cleanup). */
+void provsql_replay_spool_close(void);
 
 /** @brief Read one value of @p type from the background-to-main pipe. */
 #define READM(var, type) provsql_worker_read(&var, sizeof(type))

@@ -27,6 +27,8 @@
 #include "provsql_utils.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <poll.h>
 #include <math.h>
@@ -35,6 +37,7 @@
 #include "postgres.h"
 #include "access/xact.h"
 #include "postmaster/bgworker.h"
+#include "storage/fd.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/array.h"
@@ -77,14 +80,68 @@ unsigned bufferpos=0;
 static char worker_buffer[WORKER_READ_BUFFER]; // flawfinder: ignore
 static size_t worker_buffer_pos = 0, worker_buffer_len = 0;
 
+/* Store messages WAL replay could not hand to the worker, which was not
+   running yet: read from the spool file when the worker starts, and served
+   before anything from the pipe (see provsql_replay_store_message). */
+static char *spool_data = NULL;
+static size_t spool_pos = 0, spool_len = 0;
+bool provsql_worker_from_spool = false;
+
+bool provsql_worker_spooled(void)
+{
+  return spool_pos < spool_len;
+}
+
 bool provsql_worker_buffered(void)
 {
-  return worker_buffer_pos < worker_buffer_len;
+  return provsql_worker_spooled() || worker_buffer_pos < worker_buffer_len;
+}
+
+/* Take the spool file into memory and remove it; called by the worker under
+   the store lock, before it announces itself ready. */
+static void provsql_take_replay_spool(void)
+{
+  int fd = open(PROVSQL_REPLAY_SPOOL, O_RDONLY | PG_BINARY, 0);
+  struct stat st;
+
+  if(fd < 0)
+    return;
+  if(fstat(fd, &st) == 0 && st.st_size > 0) {
+    spool_data = malloc((size_t) st.st_size);
+    if(spool_data == NULL || !provsql_read_all(fd, spool_data, (size_t) st.st_size)) {
+      close(fd);
+      provsql_error("Cannot read the replay spool %s", PROVSQL_REPLAY_SPOOL);
+    }
+    spool_len = (size_t) st.st_size;
+    spool_pos = 0;
+    provsql_log("replaying %zu bytes of store messages spooled during "
+                "crash recovery", spool_len);
+  }
+  close(fd);
 }
 
 bool provsql_worker_read(void *dst, size_t n)
 {
   char *p = dst;
+
+  while(n > 0 && spool_pos < spool_len) {
+    size_t take = spool_len - spool_pos < n ? spool_len - spool_pos : n;
+    memcpy(p, spool_data + spool_pos, take);
+    spool_pos += take;
+    p += take;
+    n -= take;
+    if(spool_pos == spool_len) {
+      /* Applied in full (a message is never split between the spool and
+         the pipe): the file can go.  Should the worker die before, its
+         next start applies the spool again, which the store's writes
+         allow (a gate, an annotation or a probability written twice with
+         the same value). */
+      free(spool_data);
+      spool_data = NULL;
+      spool_pos = spool_len = 0;
+      unlink(PROVSQL_REPLAY_SPOOL);
+    }
+  }
 
   while(n > 0) {
     size_t avail = worker_buffer_len - worker_buffer_pos;
@@ -152,6 +209,12 @@ PGDLLEXPORT void provsql_mmap_worker(Datum ignored)
   initialize_provsql_mmap();
   close(provsql_shared_state->pipebmw);
   close(provsql_shared_state->pipembr);
+  /* From here on, WAL replay writes to the pipe; what it wrote before is in
+     the spool, which is applied first. */
+  provsql_shmem_lock_exclusive();
+  provsql_take_replay_spool();
+  provsql_shared_state->worker_ready = true;
+  provsql_shmem_unlock();
   provsql_log("%s initialized", MyBgworkerEntry->bgw_name);
 
   provsql_mmap_main_loop();
@@ -338,6 +401,26 @@ void provsql_circuit_cleanup_request(bool dry_run, const pg_uuid_t *roots,
 #endif
 }
 
+#ifndef PROVSQL_INPROCESS_STORE
+/* The replay spool, open in the startup process while it writes to it */
+static int replay_spool_fd = -1;
+#endif
+
+void provsql_replay_spool_close(void)
+{
+#ifndef PROVSQL_INPROCESS_STORE
+  /* Synced before the end-of-recovery checkpoint, after which the WAL it
+     comes from is not replayed again: the spool is all that is left of it
+     until the worker applies it. */
+  if(replay_spool_fd >= 0) {
+    if(pg_fsync(replay_spool_fd) != 0)
+      provsql_error("Cannot sync the replay spool %s", PROVSQL_REPLAY_SPOOL);
+    close(replay_spool_fd);
+    replay_spool_fd = -1;
+  }
+#endif
+}
+
 void provsql_replay_store_message(const char *data, size_t len)
 {
 #ifdef PROVSQL_INPROCESS_STORE
@@ -354,6 +437,35 @@ void provsql_replay_store_message(const char *data, size_t len)
      lock is held across the whole write so the (possibly chunked)
      message stays one message. */
   provsql_shmem_lock_exclusive();
+
+  /* After a crash, PostgreSQL starts the background workers only once
+     recovery is over: nothing reads the pipe, which fills, and a message
+     that is answered waits for ever, so recovery never ends.  Until the
+     worker announces itself, the message goes to a spool file the worker
+     applies first when it starts. */
+  if(!provsql_shared_state->worker_ready) {
+    if(replay_spool_fd < 0) {
+      replay_spool_fd = open(PROVSQL_REPLAY_SPOOL,
+                             O_WRONLY | O_CREAT | O_APPEND | PG_BINARY,
+                             S_IRUSR | S_IWUSR);
+      if(replay_spool_fd < 0) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot open the replay spool %s", PROVSQL_REPLAY_SPOOL);
+      }
+    }
+    while(left > 0) {
+      ssize_t w = write(replay_spool_fd, p, left);
+      if(w <= 0) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot write to the replay spool %s",
+                      PROVSQL_REPLAY_SPOOL);
+      }
+      p += w;
+      left -= (size_t) w;
+    }
+    provsql_shmem_unlock();
+    return;
+  }
 
   while(left > 0) {
     size_t chunk = left > PIPE_BUF ? PIPE_BUF : left;

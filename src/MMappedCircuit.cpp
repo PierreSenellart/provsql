@@ -579,7 +579,9 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
       auto result = circuit->setProb(token, prob, &existing);
       char return_value = static_cast<char>(result);
 
-      if(!WRITEB(&return_value, char) || !WRITEB(&existing, double))
+      /* A message of the replay spool has nobody waiting for its answer */
+      if(!provsql_worker_from_spool &&
+         (!WRITEB(&return_value, char) || !WRITEB(&existing, double)))
         provsql_error("Cannot write response to pipe (message type P)");
       break;
     }
@@ -886,6 +888,7 @@ void provsql_mmap_main_loop()
       }
     }
 
+    provsql_worker_from_spool = provsql_worker_spooled();
     if(!READM(c, char))
       break;
     Oid db_oid, db_tablespace;
