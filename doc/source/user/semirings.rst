@@ -344,8 +344,8 @@ PostgreSQL ``ENUM`` type. The carrier order comes from
   availability / trust shape: alternatives combine to the most
   permissive label, joins combine to the strictest label.
 
-The third argument to both functions is a sample value of the carrier
-enum, used only for type inference; its value is ignored. Given a
+The third argument to both functions gives the carrier enum: only its
+type is used, so it is written ``NULL::`` followed by the enum. Given a
 ``classification_level`` enum ordered from ``unclassified`` to
 ``not_available``, where ``not_available`` is the top of the enum and
 plays the role of the semiring 𝟘 (no derivation possible):
@@ -355,7 +355,7 @@ plays the role of the semiring 𝟘 (no derivation possible):
     SELECT create_provenance_mapping('personnel_level', 'personnel', 'classification');
 
     SELECT city, sr_minmax(provenance(), 'personnel_level',
-                           'unclassified'::classification_level) AS clearance
+                           NULL::classification_level) AS clearance
     FROM (SELECT DISTINCT city FROM personnel) t;
 
 These two functions cover any user enum: security lattices,
@@ -384,9 +384,9 @@ visible.
 .. code-block:: postgresql
 
     SELECT name,
-           sr_clearance(provenance(), 'clearance_map', 'public'::level),
+           sr_clearance(provenance(), 'clearance_map', NULL::level),
            visible_at(provenance(), 'clearance_map', 'confidential'),
-           (clearance_settling(provenance(), 'clearance_map', 'public'::level)).*
+           (clearance_settling(provenance(), 'clearance_map', NULL::level)).*
     FROM eligible;
 
 :sqlfunc:`visible_at` tests one level, given as text; for

@@ -468,11 +468,11 @@ customer's purposes, and evaluate with :sqlfunc:`sr_consent`:
 
     SELECT r.name,
            (sr_consent(provenance(), 'deal_consent',
-                       'forecasting'::purpose)).*,
+                       NULL::purpose)).*,
            consented_for(provenance(), 'deal_consent', 'marketing')
              AS for_marketing,
            consent_conflicts(provenance(), 'deal_consent',
-                             'forecasting'::purpose) AS conflicts
+                             NULL::purpose) AS conflicts
     FROM region r
     WHERE NOT EXISTS (SELECT * FROM deal d
                       WHERE d.region = r.name AND d.amount >= 100)

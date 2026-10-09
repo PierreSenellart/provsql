@@ -714,6 +714,10 @@ Datum plain_truth(PG_FUNCTION_ARGS)
  */
 Datum subset_labels(PG_FUNCTION_ARGS)
 {
+  /* Not STRICT: the enum argument is read for its type only, and may be
+   * NULL. */
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
   uint64_t mask = static_cast<uint64_t>(PG_GETARG_INT64(0));
   Oid enum_oid = get_fn_expr_argtype(fcinfo->flinfo, 1);
   semiring::EnumLabels labels(enum_oid);
@@ -738,6 +742,10 @@ Datum subset_labels(PG_FUNCTION_ARGS)
  */
 Datum subset_settling(PG_FUNCTION_ARGS)
 {
+  /* Not STRICT: the enum argument is read for its type only, and may be
+   * NULL. */
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
   uint64_t mask = static_cast<uint64_t>(PG_GETARG_INT64(0));
   semiring::EnumLabels labels(get_fn_expr_argtype(fcinfo->flinfo, 1));
   std::size_t n = labels.oids.size();

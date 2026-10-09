@@ -5589,12 +5589,12 @@ CREATE OR REPLACE FUNCTION subset_evaluate(
 /** @brief The labels of the enum type of @p element_one a bitmask holds (internal) */
 CREATE OR REPLACE FUNCTION subset_labels(mask bigint, element_one ANYENUM)
   RETURNS ANYARRAY AS
-  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 /** @brief The settling level of a bitmask of clearance levels (internal) */
 CREATE OR REPLACE FUNCTION subset_settling(mask bigint, element_one ANYENUM)
   RETURNS ANYENUM AS
-  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 /** @brief Membership of a label, given as text, in a subset annotation (internal)
  *
@@ -5624,8 +5624,9 @@ CREATE OR REPLACE FUNCTION sr_subset(
 $$
   SELECT provsql.subset_labels(
     provsql.subset_evaluate(token, token2value, 'subset', element_one),
-    element_one);
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    element_one)
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance as the set of clearance levels a tuple is visible at
  *
@@ -5647,8 +5648,9 @@ CREATE OR REPLACE FUNCTION sr_clearance(
 $$
   SELECT provsql.subset_labels(
     provsql.subset_evaluate(token, token2value, 'clearance', element_one),
-    element_one);
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    element_one)
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Whether a tuple is visible at a clearance level
  *
@@ -5684,8 +5686,9 @@ CREATE OR REPLACE FUNCTION clearance_settling(
 $$
   SELECT provsql.subset_settling(m, element_one),
          enum_last(element_one) = ANY(provsql.subset_labels(m, element_one))
-    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over consented purposes
  *
@@ -5706,8 +5709,9 @@ CREATE OR REPLACE FUNCTION sr_consent(
   OUT purposes ANYARRAY, OUT unrestricted boolean) AS
 $$
   SELECT provsql.subset_labels(m, element_one), m < 0
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Whether a tuple may be used for a purpose
  *
@@ -5741,8 +5745,9 @@ CREATE OR REPLACE FUNCTION consent_purposes(
 $$
   SELECT CASE WHEN m < 0 THEN provsql.subset_labels(m, element_one)
               ELSE provsql.subset_labels(0, element_one) END
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief The purposes for which consent changes the answer
  *
@@ -5762,8 +5767,9 @@ CREATE OR REPLACE FUNCTION consent_conflicts(
 $$
   SELECT CASE WHEN m < 0 THEN provsql.subset_labels(~m, element_one)
               ELSE provsql.subset_labels(m, element_one) END
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 
 /** @brief Transition function of order_determined (internal) */
@@ -5807,4 +5813,41 @@ CREATE OR REPLACE FUNCTION order_checked(val anyelement, determined boolean,
   RETURNS anyelement
   AS 'provsql','order_checked' LANGUAGE C VOLATILE PARALLEL SAFE;
 
+-- sr_minmax / sr_maxmin no longer STRICT, so that their enum argument, used
+-- only for its type, can be given as NULL::type; a NULL token or mapping
+-- still gives NULL.
+CREATE OR REPLACE FUNCTION sr_minmax(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  IF token IS NULL OR token2value IS NULL THEN
+    RETURN NULL;
+  END IF;
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'minmax',
+    element_one
+  );
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION sr_maxmin(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  IF token IS NULL OR token2value IS NULL THEN
+    RETURN NULL;
+  END IF;
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'maxmin',
+    element_one
+  );
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+
 SELECT reset_constants_cache();
+

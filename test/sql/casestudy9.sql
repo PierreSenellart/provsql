@@ -241,12 +241,12 @@ CREATE TABLE cs9_deal_consent AS
   FROM cs9_deal d JOIN cs9_consent c USING (customer);
 CREATE TABLE cs9_r AS
   SELECT r.name,
-         (sr_consent(provenance(), 'cs9_deal_consent', 'forecasting'::cs9_purpose)).*,
+         (sr_consent(provenance(), 'cs9_deal_consent', NULL::cs9_purpose)).*,
          consented_for(provenance(), 'cs9_deal_consent', 'marketing') AS for_marketing,
          consent_conflicts(provenance(), 'cs9_deal_consent',
-                           'forecasting'::cs9_purpose) AS conflicts,
+                           NULL::cs9_purpose) AS conflicts,
          consent_purposes(provenance(), 'cs9_deal_consent',
-                          'forecasting'::cs9_purpose) AS allowed
+                          NULL::cs9_purpose) AS allowed
   FROM cs9_region r
   WHERE NOT EXISTS (SELECT * FROM cs9_deal d
                     WHERE d.region = r.name AND d.amount >= 100);
