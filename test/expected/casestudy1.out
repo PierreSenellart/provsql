@@ -103,11 +103,27 @@ Beijing|{}|f|unclassified|f|unavailable
 Nairobi|{unclassified}|t|restricted|f|unclassified
 Paris|{restricted}|f|confidential|f|restricted
 (3 rows)
+name|city|shared_with
+Juma|Nairobi|{mi6,dgse}
+Paul|Nairobi|{mi6}
+David|Paris|{dgse,bnd}
+Ellen|Beijing|{bnd}
+Aaheli|Paris|{}
+Nancy|Paris|{mi6,dgse,bnd}
+Jing|Beijing|{dgse}
+(7 rows)
+create_provenance_mapping
+
+(1 row)
 remove_provenance
 
 (1 row)
-city|allies
-Beijing|{bnd,dgse}
-Nairobi|{dgse}
-Paris|{mi6}
-(3 rows)
+city|agents|allies
+Beijing|2|{}
+Beijing|1|{bnd,dgse}
+Nairobi|2|{mi6}
+Nairobi|1|{dgse}
+Paris|3|{}
+Paris|2|{bnd,dgse}
+Paris|1|{mi6}
+(7 rows)

@@ -149,8 +149,8 @@ over the ``classification_level`` enum:
   you need clearance for the more-classified one (you must be able to
   access both records to establish the join).
 
-The third argument is a sample value of the carrier enum (used only
-for type inference); its value is ignored:
+The third argument gives the carrier enum: only its type is used, so it is
+written ``NULL::classification_level``:
 
 .. code-block:: postgresql
 
@@ -160,7 +160,7 @@ for type inference); its value is ignored:
 
     SELECT p1.city,
            sr_minmax(provenance(), 'personnel_level',
-                     'unclassified'::classification_level) AS min_clearance
+                     NULL::classification_level) AS min_clearance
     FROM personnel p1
     JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
     GROUP BY p1.city
@@ -668,11 +668,11 @@ first:
 
     SELECT city,
            sr_clearance(provenance(), 'personnel_level',
-                        'unclassified'::classification_level) AS levels,
+                        NULL::classification_level) AS levels,
            visible_at(provenance(), 'personnel_level', 'unclassified')
              AS at_unclassified,
            (clearance_settling(provenance(), 'personnel_level',
-                               'unclassified'::classification_level)).*
+                               NULL::classification_level)).*
     FROM (
         SELECT DISTINCT city FROM personnel
       EXCEPT
@@ -698,42 +698,49 @@ Step 18: What Allied Services Conclude
 
 The agency shares some personnel files with allied services. Each ally
 sees some of the agents, and unlike clearance levels, the allies are not
-ordered. Which allies would see a city as single-agent?
-:sqlfunc:`sr_subset` reads the labels of an enum as worlds, here one per
-ally. The mapping gives the allies each file is shared with, and the
-result is the set of allies whose view returns the row:
+ordered. Record, for each agent, the allies the file is shared with, in a
+new column whose type is an array over an enum of the allies:
 
 .. code-block:: postgresql
 
     DROP TABLE IF EXISTS personnel_shared;
+    ALTER TABLE personnel DROP COLUMN IF EXISTS shared_with;
     DROP TYPE IF EXISTS ally;
     CREATE TYPE ally AS ENUM ('bnd', 'dgse', 'mi6');
-    CREATE TABLE personnel_shared AS
-      SELECT provsql AS provenance,
-             CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
-                       WHEN 'Paul'   THEN '{mi6}'
-                       WHEN 'David'  THEN '{dgse,bnd}'
-                       WHEN 'Ellen'  THEN '{bnd}'
-                       WHEN 'Aaheli' THEN '{}'
-                       WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
-                       WHEN 'Jing'   THEN '{dgse}' END::ally[] AS value
-      FROM personnel;
+    ALTER TABLE personnel ADD COLUMN shared_with ally[];
+    UPDATE personnel
+    SET shared_with = CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
+                                WHEN 'Paul'   THEN '{mi6}'
+                                WHEN 'David'  THEN '{dgse,bnd}'
+                                WHEN 'Ellen'  THEN '{bnd}'
+                                WHEN 'Aaheli' THEN '{}'
+                                WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
+                                WHEN 'Jing'   THEN '{dgse}' END::ally[];
 
-    SELECT city,
-           sr_subset(provenance(), 'personnel_shared', 'mi6'::ally) AS allies
-    FROM (
-        SELECT DISTINCT city FROM personnel
-      EXCEPT
-        SELECT p1.city
-        FROM personnel p1
-        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
-        GROUP BY p1.city
-    ) t
-    ORDER BY city;
+    SELECT name, city, shared_with FROM personnel ORDER BY id;
 
-The third argument only names the enum. No city has a single agent, yet
-each looks so to some ally: Nairobi to the DGSE, which has Juma's file
-but not Paul's; Paris to MI6, which has Nancy's alone (Aaheli's file is
-shared with no one); Beijing to both the BND and the DGSE, each with one
-of its two agents. The set difference of ``EXCEPT`` is read exactly, ally
-by ally.
+How many agents does each ally see in each city? :sqlfunc:`sr_subset` reads
+the labels of an enum as worlds, here one per ally, through a mapping that
+gives the allies of each row; it returns the set of allies whose view
+returns the result row. Build the mapping from the new column:
+
+.. code-block:: postgresql
+
+    SELECT create_provenance_mapping('personnel_shared',
+                                     'personnel', 'shared_with');
+
+Grouping the cities by their number of agents gives one row per number a
+city can show, and :sqlfunc:`sr_subset` the allies to which it shows that
+number:
+
+.. code-block:: postgresql
+
+    SELECT city, n AS agents,
+           sr_subset(provenance(), 'personnel_shared', NULL::ally) AS allies
+    FROM (SELECT city, count(*) AS n FROM personnel GROUP BY city) t
+    GROUP BY city, n
+    ORDER BY city, agents DESC;
+
+No ally sees all of Paris: the BND and the DGSE see two of its agents, MI6
+only Nancy. Paris thus looks single-agent to MI6, Nairobi to the DGSE, and
+Beijing to both the BND and the DGSE.

@@ -43,7 +43,7 @@ SELECT create_provenance_mapping('agents_level', 'agents', 'classification');
 CREATE TABLE result_cs1_security AS
 SELECT p1.city,
     sr_minmax(provenance(), 'agents_level',
-              'unclassified'::classification_level) AS min_clearance
+              NULL::classification_level) AS min_clearance
 FROM agents p1
 JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city;
@@ -219,12 +219,12 @@ SELECT create_provenance_mapping('agents_level', 'agents', 'classification');
 CREATE TABLE result_cs1_clearance AS
 SELECT city,
     sr_clearance(provenance(), 'agents_level',
-                 'unclassified'::classification_level) AS levels,
+                 NULL::classification_level) AS levels,
     visible_at(provenance(), 'agents_level', 'unclassified') AS at_unclassified,
     (clearance_settling(provenance(), 'agents_level',
-                        'unclassified'::classification_level)).*,
+                        NULL::classification_level)).*,
     sr_minmax(provenance(), 'agents_level',
-              'unclassified'::classification_level) AS minmax
+              NULL::classification_level) AS minmax
 FROM (
     SELECT DISTINCT city FROM agents
   EXCEPT
@@ -237,36 +237,34 @@ SELECT * FROM result_cs1_clearance ORDER BY city;
 DROP TABLE result_cs1_clearance;
 
 -- Step 18: the allied services each personnel file is shared with; the
--- services whose view of the files makes a city look single-agent.  MI6 sees
--- Juma and Paul, DGSE only Juma: Nairobi single-agent for DGSE.  Paris: MI6
--- sees Nancy alone (David with DGSE and BND, Aaheli shared with none).
--- Beijing: Ellen for BND, Jing for DGSE, both single-agent.  Over all files,
--- no city is.
+-- number of agents each ally sees per city, by grouping on count(*).
+-- Nairobi: MI6 sees Juma and Paul (2), DGSE only Juma (1).  Paris: BND and
+-- DGSE see David and Nancy (2), MI6 Nancy alone (1), none all three (Aaheli
+-- shared with none).  Beijing: Ellen for BND, Jing for DGSE (1 each).
 CREATE TYPE cs1_ally AS ENUM ('bnd', 'dgse', 'mi6');
-CREATE TABLE agents_shared AS
-  SELECT provsql AS provenance,
-         CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
-                   WHEN 'Paul'   THEN '{mi6}'
-                   WHEN 'David'  THEN '{dgse,bnd}'
-                   WHEN 'Ellen'  THEN '{bnd}'
-                   WHEN 'Aaheli' THEN '{}'
-                   WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
-                   WHEN 'Jing'   THEN '{dgse}' END::cs1_ally[] AS value
-  FROM agents;
+ALTER TABLE agents ADD COLUMN shared_with cs1_ally[];
+UPDATE agents
+SET shared_with = CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
+                            WHEN 'Paul'   THEN '{mi6}'
+                            WHEN 'David'  THEN '{dgse,bnd}'
+                            WHEN 'Ellen'  THEN '{bnd}'
+                            WHEN 'Aaheli' THEN '{}'
+                            WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
+                            WHEN 'Jing'   THEN '{dgse}' END::cs1_ally[];
+SET provsql.active = off;
+SELECT name, city, shared_with FROM agents ORDER BY id;
+RESET provsql.active;
+SELECT create_provenance_mapping('agents_shared', 'agents', 'shared_with');
 CREATE TABLE result_cs1_allies AS
-SELECT city,
+SELECT city, n AS agents,
     sr_subset(provenance(), 'agents_shared', 'mi6'::cs1_ally) AS allies
-FROM (
-    SELECT DISTINCT city FROM agents
-  EXCEPT
-    SELECT p1.city FROM agents p1
-      JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
-    GROUP BY p1.city
-) t;
+FROM (SELECT city, count(*) AS n FROM agents GROUP BY city) t
+GROUP BY city, n;
 SELECT remove_provenance('result_cs1_allies');
-SELECT * FROM result_cs1_allies ORDER BY city;
+SELECT * FROM result_cs1_allies ORDER BY city, agents DESC;
 DROP TABLE result_cs1_allies;
 DROP TABLE agents_shared;
+ALTER TABLE agents DROP COLUMN shared_with;
 DROP TYPE cs1_ally;
 
 -- Clean up
