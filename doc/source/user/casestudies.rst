@@ -164,7 +164,7 @@ Setup and basics
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "✓", "✓", "", ""
    "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", "", ""
    "Hand-built mapping table", "", "✓", "", "", "", "✓", "", "", "", ""
-   "``setup_search_path``", "(✓)", "", "", "", "", "", "", "", "", ""
+   "``setup_search_path``", "(✓)", "(✓)", "(✓)", "(✓)", "", "(✓)", "", "", "", "(✓)"
    "``provsql.active`` GUC", "", "", "", "", "", "", "", "", "", ""
    "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", "", "", ""
 
@@ -363,7 +363,7 @@ Probabilities
    "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", "", ""
    "``probability_is_set``", "", "", "", "", "", "", "", "", "", ""
    "``replace_input`` / ``replace_block`` / ``replace_update`` (change a probability already used)", "", "✓", "", "", "", "", "", "", "", ""
-   "``provsql.last_eval_method`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.last_eval_method`` GUC", "", "✓", "", "", "", "", "", "", "", ""
 
 Continuous random variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

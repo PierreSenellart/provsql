@@ -14,13 +14,14 @@ The Scenario
 ------------
 
 An intelligence agency maintains a database of seven employees spread
-across three cities. Every employee holds a security clearance ranging
-from *unclassified* to *top secret*. Your tasks:
+across three cities. Each employee's record is classified at a level
+ranging from *unclassified* to *top secret*: the clearance an analyst needs
+to know that the employee exists. Your tasks:
 
 * identify which cities are served by more than one agent,
 * determine the minimum clearance level needed to infer each result,
-* find cities with exactly one agent (sensitive: if the city leaks,
-  the sole agent is exposed),
+* find cities with exactly one agent (sensitive: whatever is traced back
+  to that city's station points to the one agent there),
 * track where in the database each output value originated,
 * compute the probability that a city remains a single-agent post
   after accounting for possible-world uncertainty,
@@ -43,8 +44,8 @@ Setup
    call an external knowledge compiler (``d4``, ``c2d``…) or the ``graph-easy``
    ASCII renderer (:sqlfunc:`view_circuit`) detect its absence and report it
    instead of returning a result -- the cells still run cleanly; the default
-   probability methods work throughout (they use the built-in
-   tree-decomposition compiler), as does everything else. See the
+   probability evaluation works throughout (it chooses among the built-in
+   exact methods), as does everything else. See the
    :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
@@ -67,7 +68,8 @@ This creates:
 * ``classification_level`` -- an ordered ENUM
   (``unclassified`` < ``restricted`` < ``confidential`` < ``secret`` < ``top_secret`` < ``unavailable``)
   where ``unavailable`` is a sentinel representing the semiring 𝟘 (no derivation possible)
-* ``personnel`` -- 7 agents with name, position, city, and clearance level
+* ``personnel`` -- 7 agents with name, position, city, and the
+  classification level of their record
 
 
 Step 1: Explore the Database
@@ -75,12 +77,9 @@ Step 1: Explore the Database
 
 .. nb:omit-begin
 
-At the start of every session, set the search path so that ProvSQL functions
-can be called without the ``provsql.`` prefix:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -108,7 +107,7 @@ provenance tokens can be labelled with agent names:
     SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 
 After :sqlfunc:`add_provenance`, every row of ``personnel`` has a unique UUID
-token in its hidden ``provsql`` column. The mapping ``personnel_name``
+token in its ``provsql`` column. The mapping ``personnel_name``
 associates each token with the corresponding agent's name.
 
 
@@ -137,8 +136,8 @@ Step 4: Minimum Security Clearance (sr_minmax)
 -----------------------------------------------
 
 For each shared city, what is the *minimum clearance level* required to
-have inferred that the city has multiple agents? An analyst who knows
-the city only needs to see the lowest-cleared agent there.
+have inferred that the city has multiple agents? The analyst must see
+both agents of some pair in the city.
 
 The min-max m-semiring, available as :sqlfunc:`sr_minmax`, answers this
 over the ``classification_level`` enum:
@@ -169,18 +168,20 @@ for type inference); its value is ignored:
 
 Results: Nairobi requires ``restricted`` (Paul is the more-classified of
 the two agents, and both must be accessed to confirm the pair). Beijing
-requires ``secret`` (both Ellen and Jing hold the same level). Paris
-requires ``confidential``: the pair David–Nancy has MAX clearance
-``confidential``, which is the lowest maximum among all Paris pairs,
-so ``confidential`` clearance suffices to confirm at least one pair.
+requires ``secret`` (Ellen and Jing are both classified ``secret``). Paris
+requires ``confidential``: the more-classified of David and Nancy is
+``confidential``, the lowest such maximum among all Paris pairs, so
+``confidential`` clearance suffices to confirm at least one pair.
 
 
 Step 5: Cities with Exactly One Agent (EXCEPT / Monus)
 -------------------------------------------------------
 
-A city with a single agent is sensitive: knowing the city immediately
-identifies the agent. Find cities where *all* agents are alone using
-``EXCEPT``:
+A city with a single agent is sensitive: whatever is traced back to the
+agency's station there (a report, an expense, a contact) points to one
+person, where with two agents or more it could be any of them. Find the
+cities with exactly one agent, as the cities with an agent minus those
+with at least two, using ``EXCEPT``:
 
 .. code-block:: postgresql
 
@@ -242,12 +243,7 @@ Assign each agent a probability equal to ``id / 10.0``:
 
 .. code-block:: postgresql
 
-    ALTER TABLE personnel ADD COLUMN IF NOT EXISTS probability DOUBLE PRECISION;
-    UPDATE personnel SET probability = id / 10.0;
-
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), probability) FROM personnel;
-    END $$;
+    SELECT set_prob(provenance(), id / 10.0) FROM personnel;
 
 Now Juma has probability 0.1, Paul 0.2, and so on up to Jing 0.7.
 
@@ -421,22 +417,27 @@ To compare the three probability algorithms at scale, create a synthetic
          (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)) tens2(n);
 
     SELECT add_provenance('matrix');
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), prob) FROM matrix;
-    END $$;
+    SELECT set_prob(provenance(), prob) FROM matrix;
+
+The last query returns one (empty) row per cell of the matrix, 10,000 in
+all.
 
 Now run the same path query with each method in turn, timing each
 (``\timing`` in psql, or Studio's per-query timing):
 
 .. code-block:: postgresql
 
-    -- Default method (independent evaluation, tree decomposition, or d4)
+    -- No method named: the exact probability, by the method expected to
+    -- be cheapest on each row's circuit
+    SET provsql.last_eval_method = '';
     SELECT m1.x, m2.y,
            probability_evaluate(provenance()) AS prob
     FROM matrix m1, matrix m2
     WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
     GROUP BY m1.x, m2.y
     ORDER BY m1.x, m2.y;
+
+    SHOW provsql.last_eval_method;
 
 .. code-block:: postgresql
 
@@ -482,6 +483,15 @@ Now run the same path query with each method in turn, timing each
     WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
     GROUP BY m1.x, m2.y
     ORDER BY m1.x, m2.y;
+
+With no method named, :sqlfunc:`probability_evaluate` returns the exact
+probability, and a cost-based chooser picks, for each circuit, the exact
+method it expects to be cheapest (see :ref:`probability-guarantees`).
+:ref:`provsql.last_eval_method <provsql-last-eval-method>` lists the
+methods used since it was last cleared, so the query is preceded by
+emptying it: here typically ``independent`` for some rows and ``d-tree``
+for others, since the rows' circuits differ in shape. Studio
+reports the method in its evaluation strip.
 
 The Monte Carlo query uses ``9604`` samples, which gives roughly 1 %
 additive error with 95 % confidence (by the formula
@@ -589,9 +599,9 @@ returning the table and column count for an input token:
     SELECT identify_token(child) AS source
     FROM nairobi_token, unnest(get_children((get_children(prov))[1])) AS child;
 
-Both leaves resolve to ``(personnel, 6)``: the ``personnel`` table with
-its six non-provenance columns (``id``, ``name``, ``position``, ``city``,
-``classification``, and the ``probability`` column added in Step 7).
+Both leaves resolve to ``(personnel, 5)``: the ``personnel`` table with
+its five non-provenance columns (``id``, ``name``, ``position``, ``city``
+and ``classification``).
 
 
 Step 16: Revising a Probability
@@ -639,8 +649,9 @@ the circuit, and it still evaluates to ``0.26``:
 Step 17: Clearance Levels of a Negation
 ---------------------------------------
 
-An analyst runs the query of Step 5 seeing only the agents at or below
-their own clearance. At which levels does a city look single-agent?
+An analyst runs the query of Step 5 seeing only the agents whose records
+are classified at or below the analyst's clearance. At which levels does
+a city look single-agent?
 :sqlfunc:`sr_minmax` (Step 4) cannot answer this for a query with
 ``EXCEPT``: it returns a single level, read as "from that level up", but
 an analyst with more clearance sees more agents and may no longer see

@@ -37773,8 +37773,8 @@ void _PG_init(void) {
                              NULL,
                              NULL);
   DefineCustomStringVariable("provsql.last_eval_method",
-                             "Probability evaluation method(s) used by the most "
-                             "recent probability_evaluate call.",
+                             "Probability evaluation methods used by "
+                             "probability_evaluate since this was last cleared.",
                              "Set automatically after each probability_evaluate "
                              "call to the method that produced the result "
                              "(comma-separated and deduplicated across calls in "

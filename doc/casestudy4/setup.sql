@@ -55,6 +55,9 @@ CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
 SET provsql.update_provenance = on;
 
 SET search_path TO public, provsql;
+-- Make it the default of the database too, so that every later session
+-- finds ProvSQL's functions without the provsql. prefix.
+SELECT setup_search_path();
 
 SELECT add_provenance('person');
 SELECT add_provenance('holds');

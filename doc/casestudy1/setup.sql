@@ -5,6 +5,9 @@
 CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
 
 SET search_path TO public, provsql;
+-- Make it the default of the database too, so that every later session
+-- finds ProvSQL's functions without the provsql. prefix.
+SELECT setup_search_path();
 
 DROP TYPE IF EXISTS classification_level CASCADE;
 CREATE TYPE classification_level AS ENUM (

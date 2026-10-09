@@ -78,8 +78,8 @@ plus_type|plus_n_children
 plus|2
 (1 row)
 source_table|nb_columns
-agents|6
-agents|6
+agents|5
+agents|5
 (2 rows)
 remove_provenance
 

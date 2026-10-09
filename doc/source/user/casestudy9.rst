@@ -79,11 +79,9 @@ Step 1: The Pipeline
 
 .. nb:omit-begin
 
-At the start of every session, set the search path:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 

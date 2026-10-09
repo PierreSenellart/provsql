@@ -140,6 +140,7 @@ _SQL_FUNC_MAP = {
     'gate_null':                '/doxygen-sql/html/group__internal__constants.html#gab90c762d40201c8ff236e9d04d5abfaa',
 
     'set_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#ga17334fe1d3969d969eaa18e32a93b4e0',
+    'setup_search_path':        '/doxygen-sql/html/namespaceprovsql.html#a98dc558afe958f364b3c13ebe22bc1f7',
     'create_gate':              '/doxygen-sql/html/group__gate__manipulation.html#ga47adb345beee16ad65566b8e2ca96f8a',
     'cond':                     '/doxygen-sql/html/group__gate__manipulation.html#ga1bad4ab2d5313500c908eda06e2e16d3',
     'random_variable_cond':     '/doxygen-sql/html/group__random__variable__type.html#ga95154b86c627e27744fd832fc68020dd',

@@ -828,15 +828,13 @@ station registry certain:
 
 .. code-block:: postgresql
 
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), 1.0) FROM stations;
-      PERFORM set_prob(provenance(),
-                       CASE station_id WHEN 's1' THEN 1.0
-                                       WHEN 's2' THEN 0.8
-                                       WHEN 's3' THEN 0.7
-                                       ELSE 1.0 END)
-        FROM calibration_status;
-    END $$
+    SELECT set_prob(provenance(), 1.0) FROM stations;
+    SELECT set_prob(provenance(),
+                    CASE station_id WHEN 's1' THEN 1.0
+                                    WHEN 's2' THEN 0.8
+                                    WHEN 's3' THEN 0.7
+                                    ELSE 1.0 END)
+    FROM calibration_status;
 
 One record per district is kept certain, so each district's group
 exists in every world (an all-absent group would produce no

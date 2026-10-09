@@ -2,6 +2,9 @@ CREATE EXTENSION "uuid-ossp";
 CREATE EXTENSION provsql;
 
 SET search_path TO public, provsql;
+-- Make it the default of the database too, so that every later session
+-- finds ProvSQL's functions without the provsql. prefix.
+SELECT setup_search_path();
 
 /* STIF dataset */
 

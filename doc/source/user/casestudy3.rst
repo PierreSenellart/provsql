@@ -76,12 +76,9 @@ The script also adds provenance tracking and creates a combined
 Step 1: Explore the Database
 -----------------------------
 
-At the start of every session, set the search path so that ProvSQL functions
-can be called without the ``provsql.`` prefix:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 Inspect the four tables:
 

@@ -21,6 +21,9 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
+-- Make it the default of the database too, so that every later session
+-- finds ProvSQL's functions without the provsql. prefix.
+SELECT setup_search_path();
 
 DROP TABLE IF EXISTS bid CASCADE;
 DROP TABLE IF EXISTS expertise CASCADE;

@@ -85,10 +85,8 @@ DROP TABLE result_cs1_where;
 SET provsql.provenance = 'semiring';
 
 -- Steps 7-8: probabilities – assign and evaluate (possible-worlds)
-ALTER TABLE agents ADD COLUMN probability DOUBLE PRECISION;
-UPDATE agents SET probability = id / 10.0;
 DO $$ BEGIN
-  PERFORM set_prob(provenance(), probability) FROM agents;
+  PERFORM set_prob(provenance(), id / 10.0) FROM agents;
 END $$;
 
 CREATE TABLE result_cs1_prob AS

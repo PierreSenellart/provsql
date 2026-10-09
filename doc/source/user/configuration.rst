@@ -249,9 +249,11 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-last-eval-method:
 
 ``provsql.last_eval_method`` (default: empty)
-    Read-only: the probability evaluation method(s) used by the most
-    recent :sqlfunc:`probability_evaluate` call, to see what the
-    automatic selection chose; see :ref:`route-methods`.
+    Set by :sqlfunc:`probability_evaluate`: the evaluation methods used
+    in the session, comma-separated, each listed once, to see what the
+    automatic selection chose; see :ref:`route-methods`. Each call adds its
+    method to the list, so empty it first (``SET provsql.last_eval_method
+    = ''``) to read the methods of one query only.
 
 .. _provsql-joint-max-treewidth:
 

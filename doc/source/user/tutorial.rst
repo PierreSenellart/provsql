@@ -152,7 +152,7 @@ Activate provenance tracking on the table ``s`` using
 
     SELECT add_provenance('s');
 
-A hidden ``provsql`` column is added that holds a UUID provenance token for
+A ``provsql`` column is added that holds a UUID provenance token for
 each tuple. Run a simple query to see this extra column in the output:
 
 .. code-block:: postgresql

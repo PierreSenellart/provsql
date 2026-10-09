@@ -82,11 +82,9 @@ Step 1: Explore the Database
 
 .. nb:omit-begin
 
-At the start of every session, set the search path:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -271,9 +269,7 @@ classifier candidate is the true species for its bounding box:
 
 .. code-block:: postgresql
 
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), confidence) FROM detection;
-    END $$;
+    SELECT set_prob(provenance(), confidence) FROM detection;
 
 To see that ``repair_key`` made a numerical difference, ask: *what is
 the probability that bounding box 1 of photo 5 corresponds to a

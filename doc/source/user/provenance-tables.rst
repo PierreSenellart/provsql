@@ -58,7 +58,7 @@ Use :sqlfunc:`add_provenance` to add provenance tracking to an existing table:
 
     SELECT provsql.add_provenance('mytable');
 
-This adds a hidden ``provsql`` column of type ``uuid`` to the table. Each
+This adds a ``provsql`` column of type ``uuid`` to the table. Each
 row receives a freshly generated UUID that identifies a leaf (``input``) gate
 in the provenance circuit.
 

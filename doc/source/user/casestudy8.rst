@@ -127,7 +127,7 @@ column:
 
 The model is loaded. Now let us *see* what a probabilistic event looks like
 to ProvSQL. Every row a query returns over a provenance-tracked table
-carries a *provenance token* in a hidden ``provsql`` column: a handle to
+carries a *provenance token* in a ``provsql`` column: a handle to
 the little circuit explaining how that row came to be. Ask for the distinct
 values of ``positive``:
 

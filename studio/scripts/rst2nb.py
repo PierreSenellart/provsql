@@ -176,11 +176,15 @@ def split_setup_sql(text: str) -> list[str]:
     connection (psycopg is UTF-8 throughout); `CREATE EXTENSION`
     is covered by the binding banner's create-database action (which
     installs provsql CASCADE, pulling uuid-ossp along); and
-    `SET search_path` is applied per cell by the kernel (Studio always
-    keeps provsql reachable on the path)."""
+    `SET search_path` and the `setup_search_path()` call (with the
+    comment lines just above it) are not needed either: the kernel
+    applies the path per cell (Studio always keeps provsql reachable on
+    the path), and the call needs ownership of the database."""
     text = re.sub(r"^SET client_encoding\s*=.*;\s*$", "", text, flags=re.M)
     text = re.sub(r"^CREATE EXTENSION[^;]*;\s*$", "", text, flags=re.M)
     text = re.sub(r"^SET search_path[^;]*;\s*$", "", text, flags=re.M)
+    text = re.sub(r"^(?:--[^\n]*\n)*SELECT (?:provsql\.)?setup_search_path\(\);\s*$",
+                  "", text, flags=re.M)
     chunks: list[str] = []
     cur: list[str] = []
     in_copy = False

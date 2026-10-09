@@ -85,12 +85,9 @@ where ``no_evidence`` is the semiring 𝟘 (no derivation possible) and
 
 .. nb:omit-begin
 
-At the start of every session, set the search path so that ProvSQL functions
-can be called without the ``provsql.`` prefix:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -377,9 +374,7 @@ Assign each row of ``f`` its study's reliability score as a probability:
 
 .. code-block:: postgresql
 
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), reliability) FROM f;
-    END $$;
+    SELECT set_prob(provenance(), reliability) FROM f;
 
 Now compute the probability that at least one study supports each of the
 following three findings: (Exercise, Cardiovascular Disease, beneficial),
