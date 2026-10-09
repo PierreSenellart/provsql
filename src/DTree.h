@@ -53,11 +53,15 @@ struct DTreeInterval {
  * @param steps_out  If non-null, receives the number of recursion steps taken
  *                   (for cost calibration).
  * @return           A sound interval with @c lower <= Pr[clauses] <= upper.
+ * @param budget_ms  Wall-clock ceiling in ms, a backstop to @p budget where a
+ *                   subproblem costs far more than its calibration (heavily
+ *                   shared circuits); 0 = none.  Throws past it.
  */
 DTreeInterval dtreeBounds(const BooleanCircuit &c,
                           std::vector<std::set<gate_t> > clauses,
                           double max_width, unsigned long budget = 0,
-                          unsigned long *steps_out = nullptr);
+                          unsigned long *steps_out = nullptr,
+                         double budget_ms = 0.);
 
 /**
  * @brief Certified probability interval of an @e arbitrary Boolean circuit,
@@ -90,10 +94,14 @@ DTreeInterval dtreeBounds(const BooleanCircuit &c,
  * @param steps_out  If non-null, receives the number of recursion steps taken
  *                   (for cost calibration).
  * @return           A sound interval with @c lower <= Pr[root] <= upper.
+ * @param budget_ms  Wall-clock ceiling in ms, a backstop to @p budget where a
+ *                   subproblem costs far more than its calibration (heavily
+ *                   shared circuits); 0 = none.  Throws past it.
  */
 DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
                                  double max_width, unsigned long budget = 0,
-                                 unsigned long *steps_out = nullptr);
+                                 unsigned long *steps_out = nullptr,
+                                 double budget_ms = 0.);
 
 } // namespace provsql
 

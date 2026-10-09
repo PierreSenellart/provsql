@@ -459,6 +459,25 @@ The properties (``selective()``, ``exact_equality()`` / ``equal()``,
 ``has_star()`` / ``star()``, ``symbolic()``) are virtual methods of
 :cfunc:`Semiring`, documented there.
 
+Probabilities read the same systems through the Boolean circuit of the
+``BoolExpr`` translation, which unrolls each cyclic component of :math:`k`
+rows into :math:`k - 1` rounds, about :math:`2(k-1)t` gates for :math:`t`
+terms.  The Monte Carlo sampler (:cfile:`MonteCarloSampler.cpp`) does
+without it: ``GenericCircuit::linearizeFixSystem`` reads a system as
+linear Boolean forms over gates that do not depend on its unknowns, and
+each sampled world solves it by propagation from the unknowns whose
+constant part holds, linear in the terms.  ``monte-carlo`` and
+``stopping-rule`` sample a circuit with fixpoints this way; on the
+``relative`` and ``additive`` paths, ``booleanSubcircuitProbability``
+builds the Boolean circuit only where its estimated construction is
+cheaper than this sampling, and passes the sampling cost to the chooser
+as an outside option (``EvalContext::outside_cost``) that ends the
+portfolio when nothing left is cheaper.  An exact request whose expansion
+would exceed about :math:`10^8` gates is refused, with the reason tag
+``recursion-expansion-too-large``.  A circuit with a ``mulinput`` (a
+``repair_key`` block) keeps the Boolean circuit, which rewrites its
+blocks.
+
 A system is solved once per evaluation, and
 :cfile:`provenance_evaluate_compiled.cpp` caches the solution of every
 component, by semiring, mapping and command, for the other rows of the

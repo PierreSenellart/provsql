@@ -8,6 +8,7 @@
 #include "distributions/Distribution.h"  // makeDistribution -> per-family sample()
 #include "RangeCheck.h"        // collectRvConstraints
 #include "Circuit.h"
+#include "provsql_interrupt.h"  // provsql_poll_interrupt
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +101,7 @@ public:
   void resetIteration() {
     bool_cache_.clear();
     scalar_cache_.clear();
+    fix_solution_.clear();
   }
 
   bool evalBool(gate_t g);
@@ -132,7 +134,62 @@ private:
   // (NOT cleared in resetIteration): sampling then never re-parses the spec
   // or re-constructs the Distribution per draw.
   std::unordered_map<gate_t, std::unique_ptr<Distribution>> dist_cache_;
+
+  /// The least solution of the equation system @p sys in this world.
+  const std::vector<char> &solveFixSystem(gate_t sys);
+  /// Whether every gate of @p conj is true in this world.
+  bool conjunctionHolds(const std::vector<gate_t> &conj);
+  // Linear forms of each equation system met, read once and reused across
+  // iterations (NOT cleared in resetIteration), and its least solution in
+  // the current world (cleared), shared by all the rows of the system.
+  std::unordered_map<gate_t, FixSystemLinear> fix_linear_;
+  std::unordered_map<gate_t, std::vector<char>> fix_solution_;
 };
+
+bool Sampler::conjunctionHolds(const std::vector<gate_t> &conj)
+{
+  for(gate_t g : conj)
+    if(!evalBool(g))
+      return false;
+  return true;
+}
+
+const std::vector<char> &Sampler::solveFixSystem(gate_t sys)
+{
+  auto it = fix_solution_.find(sys);
+  if(it != fix_solution_.end())
+    return it->second;
+  auto lit = fix_linear_.find(sys);
+  if(lit == fix_linear_.end())
+    lit = fix_linear_.emplace(sys, gc_.linearizeFixSystem(sys)).first;
+  const FixSystemLinear &l = lit->second;
+
+  /* x_i = b_i | OR_j (a_ij & x_j) in a Boolean world: the least solution is
+   * the set of unknowns reachable from those whose constant part holds,
+   * along the terms whose coefficient holds.  A coefficient is only
+   * evaluated when its unknown is reached, so the inputs it reads are drawn
+   * lazily, consistently with the rest of the world through bool_cache_. */
+  std::vector<char> x(l.n, 0);
+  std::vector<std::size_t> queue;
+  for(std::size_t i = 0; i < l.n; ++i)
+    for(const auto &conj : l.b[i])
+      if(conjunctionHolds(conj)) {
+        x[i] = 1;
+        queue.push_back(i);
+        break;
+      }
+  for(std::size_t q = 0; q < queue.size(); ++q) {
+    if((q & 4095) == 0)
+      provsql_poll_interrupt();
+    const std::size_t j = queue[q];
+    for(const auto &[i, conj] : l.out[j])
+      if(!x[i] && conjunctionHolds(conj)) {
+        x[i] = 1;
+        queue.push_back(i);
+      }
+  }
+  return fix_solution_.emplace(sys, std::move(x)).first->second;
+}
 
 bool Sampler::evalBool(gate_t g)
 {
@@ -222,6 +279,27 @@ bool Sampler::evalBool(gate_t g)
         throw CircuitException("gate_annotation must have exactly one child");
       result = evalBool(wires[0]);
       break;
+    case gate_project:
+    case gate_eq:
+      // Where-provenance wrappers: identity on the Boolean semiring.
+      if(wires.empty())
+        throw CircuitException("a projection or equality gate needs a child");
+      result = evalBool(wires[0]);
+      break;
+    case gate_fixpoint:
+    {
+      // A row of a recursion on cyclic data: one unknown of the least
+      // solution of its equation system, solved in this world.
+      if(wires.size() != 1 || gc_.getGateType(wires[0]) != gate_fixsystem)
+        throw CircuitException(
+                "gate_fixpoint must have exactly one child, a gate_fixsystem");
+      const auto &x = solveFixSystem(wires[0]);
+      const unsigned idx = gc_.getInfos(g).first;
+      if(idx < 1 || idx > x.size())
+        throw CircuitException("gate_fixpoint index out of range");
+      result = x[idx - 1];
+      break;
+    }
     default:
       throw CircuitException(
               "Unsupported gate type in Boolean evaluation: " +
@@ -1236,6 +1314,28 @@ bool circuitHasObserve(const GenericCircuit &gc, gate_t root)
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }
   return false;
+}
+
+bool circuitHasFixpoint(const GenericCircuit &gc, gate_t root)
+{
+  /* A multivalued input (a block of repair_key) is not sampled here: such a
+   * circuit keeps the Boolean expansion, which rewrites the blocks. */
+  bool fixpoint = false;
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stack;
+  stack.push(root);
+  while(!stack.empty()) {
+    gate_t g = stack.top();
+    stack.pop();
+    if(!seen.insert(g).second) continue;
+    const auto t = gc.getGateType(g);
+    if(t == gate_mulinput)
+      return false;
+    if(t == gate_fixpoint)
+      fixpoint = true;
+    for(gate_t c : gc.getWires(g)) stack.push(c);
+  }
+  return fixpoint;
 }
 
 bool circuitHasRV(const GenericCircuit &gc, gate_t root)

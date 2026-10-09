@@ -13,6 +13,7 @@
  */
 #include "GenericCircuit.h"
 
+#include <functional>
 #include <unordered_set>
 
 gate_t GenericCircuit::setGate(gate_type type)
@@ -343,4 +344,149 @@ void GenericCircuit::foldAbsorptiveIdentities()
     changed = applyFoldRuleSweep(false);
     changed |= foldSemiringIdentities();
   }
+}
+
+FixSystemLinear GenericCircuit::linearizeFixSystem(gate_t sys) const
+{
+  const auto &w = getWires(sys);
+  if(w.size() % 2)
+    throw CircuitException("gate_fixsystem must have an even number of wires");
+  const std::size_t n = w.size() / 2;
+
+  std::unordered_map<gate_t, std::size_t> unknown;
+  for(std::size_t i = 0; i < n; ++i) {
+    if(getGateType(w[i]) != gate_fixvar)
+      throw CircuitException(
+              "The first half of a gate_fixsystem's wires must be its "
+              "gate_fixvar unknowns");
+    unknown.emplace(w[i], i);
+  }
+
+  /* Which gates depend on an unknown, as in solveFixSystem: an iterative
+   * post-order, another system's gate_fixpoint being a constant here. */
+  std::unordered_map<gate_t, bool> dep;
+  {
+    std::vector<gate_t> st;
+    for(std::size_t i = n; i < w.size(); ++i)
+      st.push_back(w[i]);
+    while(!st.empty()) {
+      const gate_t u = st.back();
+      if(dep.count(u)) { st.pop_back(); continue; }
+      const auto t = getGateType(u);
+      if(t == gate_fixvar) {
+        if(!unknown.count(u))
+          throw CircuitException(
+                  "An unknown of another equation system occurs in this one");
+        dep.emplace(u, true);
+        st.pop_back();
+        continue;
+      }
+      if(t == gate_fixpoint) {
+        dep.emplace(u, false);
+        st.pop_back();
+        continue;
+      }
+      bool ready = true;
+      for(const auto &c : getWires(u))
+        if(!dep.count(c)) { st.push_back(c); ready = false; }
+      if(!ready) continue;
+      bool d = false;
+      for(const auto &c : getWires(u))
+        d = d || dep.at(c);
+      dep.emplace(u, d);
+      st.pop_back();
+    }
+  }
+
+  /* Linear form, kept symbolic: a disjunction of conjunctions for the
+   * constant part, and (unknown, conjunction) terms.  Only the gates between
+   * an equation's root and its unknowns are visited, as in solveFixSystem. */
+  using Conj = std::vector<gate_t>;
+  struct Lin {
+    std::vector<Conj> c;
+    std::vector<std::pair<std::size_t, Conj> > terms;
+  };
+  std::unordered_map<gate_t, Lin> lin;
+  std::function<const Lin &(gate_t)> linear = [&](gate_t u) -> const Lin & {
+    auto it = lin.find(u);
+    if(it != lin.end())
+      return it->second;
+    Lin r;
+    const auto t = getGateType(u);
+    switch(t) {
+    case gate_fixvar:
+      r.terms.emplace_back(unknown.at(u), Conj{});
+      break;
+    case gate_plus:
+      for(const auto &c : getWires(u)) {
+        if(dep.at(c)) {
+          const Lin &l = linear(c);
+          r.c.insert(r.c.end(), l.c.begin(), l.c.end());
+          r.terms.insert(r.terms.end(), l.terms.begin(), l.terms.end());
+        } else
+          r.c.push_back(Conj{c});
+      }
+      break;
+    case gate_times: {
+      Conj k;
+      gate_t var = u;
+      for(const auto &c : getWires(u)) {
+        if(dep.at(c)) {
+          if(var != u)
+            throw CircuitRefusal(
+                    PROVSQL_GAP, "recursion-nonlinear",
+                    "This recursion's equations are not linear: a product "
+                    "has two factors depending on the recursive relation");
+          var = c;
+        } else
+          k.push_back(c);
+      }
+      const Lin &l = linear(var);
+      for(const auto &conj : l.c) {
+        Conj e = conj;
+        e.insert(e.end(), k.begin(), k.end());
+        r.c.push_back(std::move(e));
+      }
+      for(const auto &[j, conj] : l.terms) {
+        Conj e = conj;
+        e.insert(e.end(), k.begin(), k.end());
+        r.terms.emplace_back(j, std::move(e));
+      }
+      break;
+    }
+    case gate_assumed:
+    case gate_project:
+    case gate_eq:
+    case gate_annotation:
+      r = linear(getWires(u)[0]);
+      break;
+    default:
+      throw CircuitRefusal(
+              PROVSQL_GAP, "recursion-nonlinear",
+              std::string("This recursion's equations are not linear "
+                          "semiring expressions in the recursive relation "
+                          "(gate of type ") + gate_type_name[t] +
+              " over it)");
+    }
+    return lin.emplace(u, std::move(r)).first->second;
+  };
+
+  FixSystemLinear out;
+  out.n = n;
+  out.b.resize(n);
+  out.in.resize(n);
+  out.out.resize(n);
+  for(std::size_t i = 0; i < n; ++i) {
+    const gate_t f = w[n + i];
+    if(dep.at(f)) {
+      const Lin &l = linear(f);
+      out.b[i] = l.c;
+      for(const auto &[j, conj] : l.terms) {
+        out.in[i].emplace_back(j, conj);
+        out.out[j].emplace_back(i, conj);
+      }
+    } else
+      out.b[i].push_back(Conj{f});
+  }
+  return out;
 }

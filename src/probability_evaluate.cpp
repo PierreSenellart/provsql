@@ -59,6 +59,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "CircuitFromMMap.h"
 #include "provsql_interrupt.h"
 #include "GenericCircuit.h"
+#include "FixSystemGraph.h"
 #include "AnalyticEvaluator.h"
 #include "CountCmpEvaluator.h"
 #include "MinMaxCmpEvaluator.h"
@@ -838,6 +839,12 @@ static const double kCostStoppingRule    = 1e-3;  // relative univ: ~1e-3 * S * 
 static const double kCostKarpLuby        = 3e-6;  // relative DNF:  ~3e-6 * S * m * C (pessimistic: covers the p-dependent slow case)
 static const double kCostDTreeExact      = 3e-4;  // d-tree exact:  ~3e-4 * S * m (memoised Shannon; pessimistic vs tree-decomp on low tw)
 static const double kCostDTreeApprox     = 4e-4;  // d-tree approx: ~4e-4 * S / eps, DELTA-INDEPENDENT (deterministic -> overtakes samplers as delta shrinks)
+// d-tree's general (non-DNF) path computes the input footprint of every gate,
+// up to S * N set entries, which the per-node constants above leave out: ~1e-5
+// ms an entry on small circuits, rising to ~7e-5 where the sets no longer fit in
+// memory (measured: ~465M entries, 18.6 GB, in 32 s on a 5.3M-gate circuit of
+// 3,480 inputs).
+static const double kCostDTreeFootprint  = 1e-5;
 // Speculative-execution budget conversion: ms per d-tree subproblem (recursion
 // entry).  The chooser's budget is in ms (the next-best method's cost); the
 // d-tree counts subproblems, so budget_steps = budget_ms / (ms per subproblem).
@@ -847,6 +854,14 @@ static const double kCostDTreeApprox     = 4e-4;  // d-tree approx: ~4e-4 * S / 
 // (~5e-4 ms/step).  Using the right one keeps the budget honest -- a single
 // (smaller) constant under-charged the DNF path and let it run well past the
 // fallback's cost instead of bailing.
+// Recursions on cyclic data: the BoolExpr translation expands each cyclic
+// component of k rows into k-1 rounds over its terms (see solveFixSystem), about
+// 2 * (k-1) * terms gates, built at ~1.8e-4 ms a gate (measured on a grid of 900
+// rows and 3,480 terms).  Past kMaxBooleanExpansion gates, the expansion does not
+// fit in memory and is refused; the samplers solve the system in each world
+// instead, at a per-world cost of the order of the circuit itself.
+static const double kCostBooleanExpansion = 1.8e-4;
+static const double kMaxBooleanExpansion  = 1e8;
 static const double kCostDTreeMsPerStepDnf      = 1.4e-3;
 static const double kCostDTreeMsPerStepGeneral  = 5e-4;
 
@@ -884,6 +899,10 @@ struct EvalContext {
   /// of the safe fallback.  Infinity = no budget (the method is the last resort,
   /// or budgeting is off).
   double cost_budget = std::numeric_limits<double>::infinity();
+  /// Cost of an evaluation outside this Boolean view (sampling the equation
+  /// systems of a recursion directly): the chooser gives up, throwing, rather
+  /// than run a method or acquire a feature dearer than it.  Infinity = none.
+  double outside_cost = std::numeric_limits<double>::infinity();
   bool multivalued_rewritten = false;
   std::string actual_method;
 
@@ -1555,8 +1574,12 @@ public:
     // compilers would do full work.  NB the treewidth proxy is NOT used -- it
     // mispredicts this engine (cliques collapse fast under Shannon + subsumption,
     // low-w cycles do not).
-    if(tol.kind != ToleranceKind::Exact && tol.epsilon > 0.)
-      return kCostDTreeApprox * S / tol.epsilon;
+    if(tol.kind != ToleranceKind::Exact && tol.epsilon > 0.) {
+      // The general (non-DNF) path first computes every gate's footprint.
+      const double footprint = ctx.dnf_ok_ ? 0.
+        : kCostDTreeFootprint * S * static_cast<double>(ctx.n_inputs);
+      return kCostDTreeApprox * S / tol.epsilon + footprint;
+    }
     // Exact: memoised Shannon compilation, ~S*m.  Pessimistic vs tree-
     // decomposition (tighter constant) on low treewidth, so it is picked for
     // exact only where tree-decomposition bails (treewidth above its cap).  Only
@@ -1634,10 +1657,20 @@ public:
       budget_steps = (budget_steps == 0) ? cap : std::min(budget_steps, cap);
     }
 
+    // Wall-clock backstop: ten times the budget, for a circuit whose
+    // subproblems cost far more than the per-step calibration (heavy sharing,
+    // as in a recursion's Boolean expansion).  It never binds where the
+    // calibration holds, so the step budget keeps the choice deterministic.
+    double budget_ms = 0.;
+    if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget))
+      budget_ms = std::max(50., 10. * ctx.cost_budget);
+
     unsigned long steps = 0;
     provsql::DTreeInterval iv = is_dnf
-      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width, budget_steps, &steps)
-      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width, budget_steps, &steps);
+      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width, budget_steps,
+                             &steps, budget_ms)
+      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width, budget_steps,
+                                    &steps, budget_ms);
     if(provsql_verbose >= 50)
       provsql_notice("calibrate kind=dtree path=%s S=%zu N=%zu steps=%lu budget=%lu",
                      is_dnf ? "dnf" : "circuit", ctx.circuit_size, ctx.n_inputs,
@@ -1816,6 +1849,16 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
       if(fc < cheapest_fc) { cheapest_fc = fc; cheapest_f = f; have_pending = true; }
     }
 
+    // An evaluation outside the Boolean view is cheaper than anything left to
+    // do here: leave it to the caller.
+    if(std::min(best != nullptr ? best_cost
+                                : std::numeric_limits<double>::infinity(),
+                have_pending ? cheapest_fc
+                             : std::numeric_limits<double>::infinity())
+       > ctx.outside_cost)
+      throw CircuitException(
+        "an evaluation outside the Boolean circuit is cheaper");
+
     if(best != nullptr && (!have_pending || best_cost <= cheapest_fc)) {
       // Run the cheapest method: nothing cheaper could be revealed by acquiring
       // a feature first.  A Boolean-only method (handlesMultivalued() == false)
@@ -1951,6 +1994,57 @@ const MethodCatalog &MethodCatalog::instance()
   return cat;
 }
 
+/// Size of a circuit with recursions on cyclic data, and of its Boolean
+/// expansion: the gates reachable from the root, plus, for each cyclic
+/// component of k rows of an equation system, the 2 * (k-1) * terms gates of
+/// the rounds the BoolExpr translation unrolls it into.
+struct ExpansionEstimate {
+  double circuit_gates = 0.;  ///< Gates reachable from the root
+  double expanded_gates = 0.; ///< Gates of the Boolean expansion
+};
+
+static ExpansionEstimate estimateBooleanExpansion(const GenericCircuit &gc,
+                                                  gate_t root)
+{
+  ExpansionEstimate e;
+  std::unordered_set<gate_t> seen;
+  std::vector<gate_t> stack{root};
+  while(!stack.empty()) {
+    const gate_t g = stack.back();
+    stack.pop_back();
+    if(!seen.insert(g).second)
+      continue;
+    e.circuit_gates += 1.;
+    if(gc.getGateType(g) == gate_fixsystem) {
+      const FixSystemLinear l = gc.linearizeFixSystem(g);
+      std::vector<std::vector<std::size_t> > adj(l.n);
+      for(std::size_t j = 0; j < l.n; ++j)
+        for(const auto &t : l.out[j])
+          adj[j].push_back(t.first);
+      std::vector<std::size_t> comp_of(l.n);
+      const auto comps = fixSystemComponents(adj);
+      for(std::size_t c = 0; c < comps.size(); ++c)
+        for(const auto v : comps[c])
+          comp_of[v] = c;
+      for(std::size_t c = 0; c < comps.size(); ++c) {
+        if(comps[c].size() < 2)
+          continue;
+        double terms = 0.;
+        for(const auto i : comps[c])
+          for(const auto &t : l.in[i])
+            if(comp_of[t.first] == c)
+              terms += 1.;
+        e.expanded_gates +=
+          2. * static_cast<double>(comps[c].size() - 1) * terms;
+      }
+    }
+    for(gate_t c : gc.getWires(g))
+      stack.push_back(c);
+  }
+  e.expanded_gates += e.circuit_gates;
+  return e;
+}
+
 double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
                                     const std::string &method,
                                     const std::string &args,
@@ -1961,6 +2055,41 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
   const pg_uuid_t token = string2uuid(gc.getUUID(root));
   const bool is_path =
     method.empty() || method == "default" || method == "exact";
+
+  /* A recursion on cyclic data: its Boolean view expands every cyclic
+   * component into rounds, which can be far larger than the circuit.  An
+   * approximation samples the equation systems directly when that is cheaper
+   * than building the expansion (or when it would not fit); an exact answer
+   * needs the expansion, and is refused when it would not fit. */
+  bool skip_boolean_view = false;
+  double outside_cost = std::numeric_limits<double>::infinity();
+  if(circuitHasFixpoint(gc, root)) {
+    const ExpansionEstimate e = estimateBooleanExpansion(gc, root);
+    const bool too_large = e.expanded_gates > kMaxBooleanExpansion;
+    if(tol.kind != ToleranceKind::Exact && tol.delta > 0.
+       && tol.epsilon > 0.) {
+      const double per_sample = tol.kind == ToleranceKind::Additive
+                                  ? kCostMonteCarlo : kCostStoppingRule;
+      const double sampling = per_sample * e.circuit_gates
+                              * std::log(2.0 / tol.delta)
+                              / (tol.epsilon * tol.epsilon);
+      skip_boolean_view =
+        too_large || kCostBooleanExpansion * e.expanded_gates >= sampling;
+      // Once built, the Boolean view's methods compete with the sampling.
+      outside_cost = sampling;
+    } else if(too_large) {
+      if(mc_fallback)
+        skip_boolean_view = true;
+      else
+        throw CircuitRefusal(
+          PROVSQL_GAP, "recursion-expansion-too-large",
+          "the Boolean circuit of this recursion on cyclic data would have "
+          "about " + fmt_num(e.expanded_gates) + " gates, too many to build "
+          "for an exact probability; ask for an approximation instead "
+          "('additive' or 'relative', or 'monte-carlo'), which solves the "
+          "recursion in each sampled world");
+    }
+  }
 
   // Boolean-view portfolio.  Skip the build when the circuit carries random
   // variables (the BoolExpr translation drops gate_rv and rejects an RV
@@ -1973,7 +2102,7 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
    * read), so such a circuit goes straight to the estimators below rather than
    * meeting the semiring as an unresolved comparison. */
   const bool nested_agg = circuitHasNestedAggValue(gc, root);
-  if (!circuitHasRV(gc, root) && !nested_agg &&
+  if (!skip_boolean_view && !circuitHasRV(gc, root) && !nested_agg &&
       !(sampleable_agg && tol.delta > 0.)) {
     try {
       gate_t gate;
@@ -1983,6 +2112,7 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
                       inv_free_cert, args, /*explicitly_named=*/!is_path,
                       /*n_inputs=*/c.getInputs().size(),
                       /*circuit_size=*/c.getNbGates()};
+      ctx.outside_cost = outside_cost;
       double result;
       if (is_path) {
         // The empty / "default" / "exact" method runs the cost-ordered
@@ -2428,7 +2558,8 @@ static Datum probability_evaluate_internal
                         actual_method);
     } else if(method == "monte-carlo"
               && (provsql::circuitHasRV(gc, gc_root)
-                  || provsql::circuitHasUnresolvedSampleableAgg(gc, gc_root))) {
+                  || provsql::circuitHasUnresolvedSampleableAgg(gc, gc_root)
+                  || provsql::circuitHasFixpoint(gc, gc_root))) {
       // RV-aware (fixed-sample, additive) Monte Carlo.  Also the route for a
       // surviving sample-faithful HAVING comparator (any aggregate -- the
       // apx-safe corner): the sampler evaluates the gate_agg directly, so a

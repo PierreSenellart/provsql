@@ -3,6 +3,8 @@
  * @brief Implementation of the d-tree anytime interval-bounds engine.
  */
 #include <algorithm>
+#include <chrono>
+#include <optional>
 #include <functional>
 #include <map>
 #include <set>
@@ -86,7 +88,30 @@ struct DTreeContext {
   // of the circuit), so the chosen method is reproducible.
   unsigned long steps = 0;
   unsigned long budget = 0;
+  // Wall-clock backstop to the step budget (see dtreeBounds); unset = none.
+  std::optional<std::chrono::steady_clock::time_point> deadline;
 };
+
+/** Throw past the step budget, or (checked every 256 steps) past the
+ *  wall-clock deadline of @p ctx. */
+template<typename Ctx>
+void checkBudget(const Ctx &ctx)
+{
+  if(ctx.budget && ctx.steps > ctx.budget)
+    throw CircuitException("d-tree: cost budget exceeded");
+  if(ctx.deadline && (ctx.steps & 255) == 0
+     && std::chrono::steady_clock::now() > *ctx.deadline)
+    throw CircuitException("d-tree: time budget exceeded");
+}
+
+/** The deadline @p budget_ms from now, or none for 0. */
+std::optional<std::chrono::steady_clock::time_point> deadlineIn(double budget_ms)
+{
+  if(budget_ms <= 0.)
+    return std::nullopt;
+  return std::chrono::steady_clock::now()
+         + std::chrono::microseconds(static_cast<long long>(budget_ms * 1000.));
+}
 
 /**
  * @brief Drop subsumed clauses from a monotone DNF.
@@ -189,8 +214,7 @@ DTreeInterval recurse(DTreeContext &ctx, Clauses clauses, double max_width)
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
   ++ctx.steps;
-  if(ctx.budget && ctx.steps > ctx.budget)
-    throw CircuitException("d-tree: cost budget exceeded");
+  checkBudget(ctx);
 
   if(clauses.empty())
     return {0., 0.}; // empty disjunction is false
@@ -272,10 +296,11 @@ DTreeInterval recurse(DTreeContext &ctx, Clauses clauses, double max_width)
 
 DTreeInterval dtreeBounds(const BooleanCircuit &c, Clauses clauses,
                           double max_width, unsigned long budget,
-                          unsigned long *steps_out)
+                          unsigned long *steps_out, double budget_ms)
 {
   DTreeContext ctx{c, {}};
   ctx.budget = budget;
+  ctx.deadline = deadlineIn(budget_ms);
   DTreeInterval r = recurse(ctx, std::move(clauses), max_width);
   if(steps_out)
     *steps_out = ctx.steps;
@@ -300,6 +325,7 @@ struct GenContext {
   // Speculative-execution budget (see DTreeContext): subproblem count + cap.
   unsigned long steps = 0;
   unsigned long budget = 0;
+  std::optional<std::chrono::steady_clock::time_point> deadline;
 };
 
 inline unsigned long gid(gate_t g)
@@ -548,8 +574,7 @@ DTreeInterval genRefine(GenContext &ctx, gate_t g, Assignment &A, double w)
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
   ++ctx.steps;
-  if(ctx.budget && ctx.steps > ctx.budget)
-    throw CircuitException("d-tree: cost budget exceeded");
+  checkBudget(ctx);
 
   if(determined(ctx, g, A)) {
     double v = evalDet(ctx, g, A) ? 1.0 : 0.0;
@@ -585,8 +610,7 @@ DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
   ++ctx.steps;
-  if(ctx.budget && ctx.steps > ctx.budget)
-    throw CircuitException("d-tree: cost budget exceeded");
+  checkBudget(ctx);
 
   // Drop children fixed by A (and short-circuit on an absorbing one).
   std::vector<gate_t> live;
@@ -655,10 +679,11 @@ DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
 
 DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
                                  double max_width, unsigned long budget,
-                                 unsigned long *steps_out)
+                                 unsigned long *steps_out, double budget_ms)
 {
   GenContext ctx{c, {}, {}};
   ctx.budget = budget;
+  ctx.deadline = deadlineIn(budget_ms);
   Assignment A;
   DTreeInterval r = genRefine(ctx, root, A, max_width);
   if(steps_out)

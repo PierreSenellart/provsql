@@ -121,6 +121,18 @@ double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
 bool circuitHasRV(const GenericCircuit &gc, gate_t root);
 
 /**
+ * @brief Whether a @c gate_fixpoint (a row of a recursion on cyclic data) is
+ *        reachable from @p root.
+ *
+ * Such a circuit is sampled by solving its equation systems in each world,
+ * without the Boolean expansion of the BoolExpr translation, whose size is
+ * the number of rows of a cycle times the number of its terms.  False where
+ * a @c gate_mulinput is reachable too: the sampler does not draw blocks, so
+ * such a circuit keeps the Boolean expansion, which rewrites them.
+ */
+bool circuitHasFixpoint(const GenericCircuit &gc, gate_t root);
+
+/**
  * @brief Whether a surviving @c gate_agg exists and every one is sample-faithful
  *        (@c SUM / @c AVG / @c MIN / @c MAX / @c COUNT -- every aggregate the
  *        sampler reproduces exactly).
