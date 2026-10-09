@@ -93,6 +93,21 @@ def test_gate_label_case_gate_glyph():
     assert circuit._gate_label({"gate_type": "case"}) == "⇢"
 
 
+def test_gate_label_agg_names():
+    # An agg gate shows its aggregate's name: SUM as its glyph, an AGG
+    # suffix dropped, and the longest names whole, not cut at six letters.
+    def agg(name):
+        return circuit._gate_label({"gate_type": "agg", "info1_name": name})
+    assert agg("sum") == "Σ"
+    assert agg("count") == "COUNT"
+    assert agg("string_agg") == "STRING"
+    assert agg("array_agg") == "ARRAY"
+    assert agg("jsonb_agg") == "JSONB"
+    assert agg("xmlagg") == "XML"
+    assert agg("bool_or") == "BOOL_OR"
+    assert agg("stddev_samp") == "STDDEV_SAMP"
+
+
 def test_gate_label_transform_arith_opcodes():
     # The transform gate_arith opcodes (POW=7 / LN=8 / EXP=9) render their
     # operator glyph; POW is the caret, matching the `^` SQL operator.

@@ -112,7 +112,14 @@ def _gate_label(row: dict, rv_families: dict | None = None) -> str:
         # symbol is universally understood and saves precious circle
         # real estate.
         name = row["info1_name"].upper()
-        return "Σ" if name == "SUM" else _truncate(name)
+        if name == "SUM":
+            return "Σ"
+        # The gate is an aggregation already: STRING_AGG, ARRAY_AGG, XMLAGG
+        # read as STRING, ARRAY, XML.  The client shrinks a wide label to
+        # fit the circle, so the longest names (STDDEV_SAMP) are kept whole.
+        if name.endswith("AGG") and len(name) > 3:
+            name = name[:-3].rstrip("_")
+        return _truncate(name, 11)
     if t == "cmp" and row.get("info1_name"):
         # PostgreSQL stores comparison operators in pg_operator under their
         # ASCII names ("<=", ">=", "<>"). Render the math glyphs in the
