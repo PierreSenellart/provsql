@@ -5849,5 +5849,283 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 
+-- Definitions changed after their copies above were written: the current
+-- repair_key, nonzero and undo, and the transcendental functions of an
+-- aggregate result (ln / exp / sqrt), which now read their value through
+-- agg_transcendental.
+CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
+  RETURNS void AS
+$$
+DECLARE
+  r RECORD;
+  rows_query TEXT;
+  block_key_cols INT2[];
+BEGIN
+  -- Resolve the (possibly comma-separated) key_att text into the
+  -- corresponding pg_attribute.attnum values for the safe-query
+  -- metadata.  Names are trimmed; quoting is not supported because
+  -- repair_key has never accepted quoted identifiers in key_att.
+  IF key_att = '' THEN
+    block_key_cols := ARRAY[]::INT2[];
+  ELSE
+    SELECT array_agg(a.attnum ORDER BY t.ord)::INT2[]
+      INTO block_key_cols
+      FROM unnest(string_to_array(key_att, ',')) WITH ORDINALITY AS t(name, ord)
+      JOIN pg_attribute a
+        ON a.attrelid = _tbl
+       AND a.attname  = trim(t.name)
+       AND a.attnum   > 0
+       AND NOT a.attisdropped;
+    IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-columns; scope: gap';
+    END IF;
+    IF array_length(block_key_cols, 1) > 16 THEN
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-too-wide; scope: gap';
+    END IF;
+  END IF;
+
+  -- Same column shape as add_provenance: no UNIQUE, no DEFAULT past
+  -- the initial backfill (the guard trigger added after the rename
+  -- takes over both jobs once the column has been renamed to its
+  -- final name).  The DEFAULT is kept here only so the second pass
+  -- below can read provsql_temp from the user-visible rows
+  -- without a separate UPDATE.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID DEFAULT public.uuid_generate_v4()', _tbl);
+
+  -- Build a per-group mapping (key columns + a fresh key_token + the
+  -- group size) once, then use it for both the create_gate(key_token,
+  -- 'input') first pass and the per-row mulinput second pass.  Going
+  -- through a temp table avoids re-running uuid_generate_v4() (which
+  -- would produce different UUIDs the second time).  USING (%1$s) on
+  -- the second pass handles the multi-column case uniformly.
+  -- ON COMMIT DROP plus the explicit DROP TABLE at the end of this
+  -- function leave the temp table cleaned up across transactions and
+  -- across repeated calls in the same transaction.
+  IF key_att = '' THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %s', _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %s t CROSS JOIN provsql_repair_key_tmp k', _tbl);
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT %1$s,
+                public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %2$s
+       GROUP BY %1$s', key_att, _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (PARTITION BY k.provsql_key_token
+                                 ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %2$s t
+         JOIN provsql_repair_key_tmp k USING (%1$s)', key_att, _tbl);
+  END IF;
+
+  -- Pass 1: one input gate per group key.
+  FOR r IN SELECT provsql_key_token FROM provsql_repair_key_tmp LOOP
+    PERFORM provsql.create_gate(r.provsql_key_token, 'input');
+  END LOOP;
+
+  -- Pass 2: per row, attach a mulinput gate to its group's key token.
+  -- The block size goes in info2 rather than the uniform 1/size going
+  -- in the probability: a repaired row's probability is the user's to
+  -- write (the documented "repair_key then set_prob(provenance(), p)"
+  -- pattern), and probabilities are written once.  A row nobody gives
+  -- a probability evaluates at 1/size all the same -- see
+  -- MMappedCircuit::getProb.
+  FOR r IN EXECUTE rows_query LOOP
+    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token],
+                                r.within_group::int, r.group_size::int, NULL);
+  END LOOP;
+
+  DROP TABLE provsql_repair_key_tmp;
+
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql_temp DROP DEFAULT', _tbl);
+  EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
+  -- Base BID tables also have themselves as their sole ancestor.  Same
+  -- rationale as the @c add_provenance branch above.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION agg_transcendental(fn text, a agg_token)
+  RETURNS numeric AS
+$$
+  SELECT CASE
+    WHEN provsql.agg_token_value_type((a)::uuid)
+           IN ('float8'::regtype::oid, 'float4'::regtype::oid)
+      THEN (CASE fn
+              WHEN 'sqrt' THEN sqrt(provsql.agg_token_value(a)::float8)
+              WHEN 'ln'   THEN ln(provsql.agg_token_value(a)::float8)
+              WHEN 'exp'  THEN exp(provsql.agg_token_value(a)::float8)
+            END)::text::numeric   /* through the float's own text: the cast to
+                                   * numeric keeps fifteen digits, its text
+                                   * keeps every one the value has */
+    ELSE CASE fn
+           WHEN 'sqrt' THEN sqrt(provsql.agg_token_value(a))
+           WHEN 'ln'   THEN ln(provsql.agg_token_value(a))
+           WHEN 'exp'  THEN exp(provsql.agg_token_value(a))
+         END
+  END;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION provsql_ln(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(8, ARRAY[(a)::uuid],
+     provsql.agg_transcendental('ln', a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION provsql_exp(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(9, ARRAY[(a)::uuid],
+     provsql.agg_transcendental('exp', a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION provsql_sqrt(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(7,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(0.5)],
+     provsql.agg_transcendental('sqrt', a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION nonzero(token uuid,
+                        semiring text DEFAULT NULL,
+                        mapping regclass DEFAULT NULL)
+  RETURNS boolean AS
+$$
+BEGIN
+  IF token IS NULL THEN
+    RETURN true;
+  END IF;
+  IF semiring IS NULL THEN
+    RETURN provsql.true_nonzero(token);
+  ELSIF semiring = 'boolean' THEN
+    IF mapping IS NULL THEN
+      /* Every leaf true: that truth is plain_truth, which walks the gates
+       * whose truth follows from their children's and reads a comparison of
+       * aggregate results off the values they record.  Reading such a
+       * comparison over the worlds of what it aggregates, as the evaluation
+       * below does, costs one term per subset of its contributions. */
+      RETURN provsql.plain_truth(token);
+    END IF;
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'boolean', TRUE);
+  ELSIF semiring = 'counting' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
+  ELSE
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: nonzero-semiring; scope: gap';
+  END IF;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION undo(
+  c uuid
+)
+RETURNS uuid
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  undo_query text;
+  undone_query text;
+  undo_token uuid;
+  schema_rec RECORD;
+  table_rec RECORD;
+  row_rec RECORD;
+  new_x uuid;
+  tracking text := current_setting('provsql.update_provenance');
+BEGIN
+  -- Test for the row, not for its query text: a TRANSACTION row has no
+  -- query of its own, and undoing a whole transaction is exactly what it
+  -- is there for.
+  SELECT query INTO undone_query
+  FROM update_provenance
+  WHERE provsql = c
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE NOTICE 'Unable to find % in update_provenance', c;
+    RETURN c;
+  END IF;
+
+  SELECT query
+  INTO undo_query
+  FROM pg_stat_activity
+  WHERE pid = pg_backend_pid();
+
+  undo_token := public.uuid_generate_v4();
+  PERFORM create_gate(undo_token, 'update');
+  INSERT INTO update_provenance(provsql, query, query_type, username, ts,
+                                valid_time, xid, tx_token)
+  VALUES (
+    undo_token,
+    undo_query,
+    'UNDO',
+    current_user,
+    CURRENT_TIMESTAMP,
+    tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)),
+    pg_current_xact_id(),
+    transaction_token()
+  );
+
+  -- Off for the rewriting below, then back to what it was, for this
+  -- transaction only: a session-level change would outlive it.
+  PERFORM set_config('provsql.update_provenance', 'off', true);
+
+  FOR schema_rec IN
+    SELECT nspname
+    FROM pg_namespace
+    WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast','pg_temp_1','pg_toast_temp_1')
+  LOOP
+    FOR table_rec IN
+      EXECUTE format('SELECT tablename AS tname FROM pg_tables WHERE schemaname = %L', schema_rec.nspname)
+    LOOP
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = schema_rec.nspname
+          AND table_name = table_rec.tname
+          AND table_name <> 'update_provenance'
+          AND column_name = 'provsql'
+      ) THEN
+        FOR row_rec IN
+          EXECUTE format('SELECT provsql AS x FROM %I.%I', schema_rec.nspname, table_rec.tname)
+        LOOP
+          new_x := replace_the_circuit(row_rec.x, c, undo_token);
+          EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2',
+                         schema_rec.nspname, table_rec.tname)
+          USING new_x, row_rec.x;
+        END LOOP;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  PERFORM set_config('provsql.update_provenance', tracking, true);
+
+  RETURN undo_token;
+END;
+$$;
+
 SELECT reset_constants_cache();
 
