@@ -48,11 +48,14 @@ What each case study covers
     studies behind it.
 
 :doc:`Case study 3 -- Île-de-France Public Transit <casestudy3>`
-    **Boolean provenance at real-world scale.** On the STIF GTFS dataset
-    (hundreds of routes, tens of thousands of stops) a result token is true
-    iff every record along the path carries the accessibility flag -- which
-    stops are reachable from Bagneux by a fully wheelchair-accessible
-    journey?
+    **Provenance at real-world scale.** On the STIF GTFS dataset (hundreds
+    of routes, tens of thousands of stops) a result token is true iff every
+    record along the trip carries the accessibility flag -- which stops are
+    reachable from Luxembourg by a fully wheelchair-accessible journey? Then
+    **recursion over the whole network**: one ``WITH RECURSIVE`` query
+    answers travel times, accessible journeys and the probability of
+    getting there through disruptions, each semiring solving its equations
+    by its own method.
 
 :doc:`Case study 4 -- Government Ministers Over Time <casestudy4>`
     The **temporal** extension and **data-modification tracking**. Over
@@ -163,9 +166,9 @@ Setup and basics
    "``provenance()`` (``SELECT`` list)", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "✓", "✓", "", ""
    "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", "", ""
-   "Hand-built mapping table", "", "", "", "", "", "✓", "", "", "", ""
+   "Hand-built mapping table", "", "", "", "✓", "", "✓", "", "", "", ""
    "``setup_search_path``", "(✓)", "(✓)", "(✓)", "(✓)", "", "(✓)", "", "", "", "(✓)"
-   "``provsql.active`` GUC", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.active`` GUC", "", "", "", "✓", "", "", "", "", "", ""
    "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", "", "", ""
 
 Supported SQL constructs
@@ -185,9 +188,9 @@ Supported SQL constructs
    "``EXCEPT`` (monus)", "✓", "✓", "", "", "", "✓", "", "", "", ""
    "``UNION`` / ``UNION ALL``", "", "", "", "", "", "", "✓", "✓", "", ""
    "``HAVING``", "", "", "✓", "", "", "", "✓", "✓", "", ""
-   "``VALUES``", "", "", "", "", "", "✓", "", "", "", ""
+   "``VALUES``", "", "", "", "✓", "", "✓", "", "", "", ""
    "CTE (``WITH``)", "", "", "", "", "", "✓", "", "✓", "✓", ""
-   "``WITH RECURSIVE``", "", "", "", "", "", "", "", "✓", "", ""
+   "``WITH RECURSIVE``", "", "", "", "✓", "", "", "", "✓", "", ""
    "``LATERAL``", "", "", "", "✓", "", "", "✓", "", "", ""
    "``FILTER`` clause on aggregates", "", "", "✓", "", "", "", "", "", "", "✓"
    "``CREATE TABLE … AS SELECT``", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓", ""
@@ -313,12 +316,12 @@ Semiring evaluation
    "``sr_boolean``", "", "", "", "✓", "", "", "", "", "", ""
    "``sr_boolexpr``", "", "✓", "", "", "", "✓", "", "", "", ""
    "``sr_formula``", "✓", "✓", "✓", "✓", "", "✓", "", "✓", "", ""
-   "``sr_counting``", "✓", "", "✓", "", "", "", "", "", "", ""
+   "``sr_counting``", "✓", "", "✓", "✓", "", "", "", "", "", ""
    "``sr_why``", "", "", "✓", "", "", "", "", "(✓)", "", ""
    "``sr_how``", "", "", "", "", "", "", "", "(✓)", "", ""
    "``sr_which``", "", "", "✓", "", "", "", "", "", "", ""
-   "``sr_tropical``", "", "", "", "", "", "", "", "✓", "", ""
-   "``sr_tropical(…, nonnegative => true)`` (absorptive min-plus)", "", "", "", "", "", "", "", "✓", "", ""
+   "``sr_tropical``", "", "", "", "✓", "", "", "", "✓", "", ""
+   "``sr_tropical(…, nonnegative => true)`` (absorptive min-plus)", "", "", "", "✓", "", "", "", "✓", "", ""
    "``sr_viterbi``", "", "", "", "", "", "", "✓", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "✓", "", "", ""
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", "", ""
@@ -336,7 +339,7 @@ Probabilities
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``set_prob``", "✓", "✓", "✓", "", "", "✓", "", "✓", "✓", "✓"
+   "``set_prob``", "✓", "✓", "✓", "✓", "", "✓", "", "✓", "✓", "✓"
    "``get_prob``", "", "", "", "", "", "", "✓", "✓", "", ""
    "``probability_evaluate`` (default fallback)", "", "✓", "✓", "", "", "✓", "", "✓", "✓", "✓"
    "Conditioning operator ``|`` / ``cond`` / ``given``", "", "", "", "", "", "", "", "", "✓", ""
@@ -344,7 +347,7 @@ Probabilities
    "``expected(X | C)`` / ``variance(X | C)`` (conditional moments)", "", "", "", "", "", "", "", "", "✓", ""
    "``'independent'`` method", "", "(✓)", "", "", "", "", "✓", "✓", "✓", ""
    "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", "", "✓", ""
-   "``'monte-carlo'`` method", "(✓)", "✓", "", "", "", "", "✓", "✓", "✓", ""
+   "``'monte-carlo'`` method", "(✓)", "✓", "", "✓", "", "", "✓", "✓", "✓", ""
    "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓", "", ""
    "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓", "", ""
    "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓", "", ""
@@ -353,12 +356,12 @@ Probabilities
    "``'sieve'`` method (inclusion-exclusion)", "", "", "", "", "", "", "", "", "", ""
    "``'karp-luby'`` method (relative FPRAS)", "", "", "", "", "", "", "", "", "", ""
    "``'stopping-rule'`` method (additive FPRAS)", "", "", "", "", "", "", "", "", "", ""
-   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "", "", "", "", "", "", ""
+   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "✓", "", "", "", "", "", ""
    "``probability_bounds`` (cheap lower / upper marginals)", "", "", "", "", "", "", "", "", "", ""
    "Studio benchmark panel", "", "", "", "", "", "", "", "✓", "", ""
    "``expected`` of ``count`` / ``sum`` / ``min`` / ``max``", "", "", "", "", "", "✓", "✓", "", "✓", "✓"
    "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓", "✓", ""
-   "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", "", "", ""
+   "``provsql.monte_carlo_seed`` GUC", "", "", "", "✓", "", "", "✓", "", "", ""
    "``provsql.rv_mc_samples`` GUC", "", "", "", "", "", "", "✓", "", "✓", ""
    "``provsql.simplify_on_load`` GUC", "", "", "", "", "", "", "✓", "", "", ""
    "``probability_is_set``", "", "", "", "", "", "", "", "", "", ""
