@@ -1247,7 +1247,20 @@ public:
   }
   dDNNF buildDD(EvalContext &ctx) const override {
     try {
-      TreeDecomposition td(ctx.c);
+      // On the chooser's path, the cost is bounded by the next-best method's:
+      // stop the min-fill build as soon as a bag shows the width it would take
+      // to exceed it (the degeneracy proxy that priced the method is only a
+      // lower bound, and the build of a large circuit is slow).  A by-name call
+      // keeps the full MAX_TREEWIDTH bound.
+      unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
+      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
+        const double ratio = ctx.cost_budget
+          / (kCostTreeDecomp * static_cast<double>(ctx.circuit_size));
+        const double w = ratio >= 1. ? std::floor(std::log2(ratio)) : 0.;
+        width_cap = static_cast<unsigned>(
+          std::min<double>(w, TreeDecomposition::MAX_TREEWIDTH));
+      }
+      TreeDecomposition td(ctx.c, width_cap);
       // Speculative execution: the (poly) min-fill build has now discovered the
       // EXACT treewidth, where the cost estimate above used only the degeneracy
       // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
@@ -1290,14 +1303,15 @@ public:
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
   bool producesDD() const override { return true; }
-  // Subprocess: the compilers exploit structure, so the typical cost is the
-  // d-DNNF compile (~linear in the serialized circuit) plus a fixed startup, not
-  // the 2^N worst case.  Modelled as max(startup_floor, slope * S) ms.  (It is
-  // still the last resort: cheaper in-process methods, when they apply, undercut
-  // it; when none does, it is the only candidate and runs regardless.)
+  // Subprocess: a fixed startup plus a compile that exploits structure on easy
+  // shapes but can struggle badly on others.  Modelled as the pessimistic
+  // max(startup_floor, slope * S^1.5) ms of kCostCompilation, so that on a large
+  // circuit an approximation's bounded cost undercuts it.  (It is the last
+  // resort: cheaper in-process methods, when they apply, undercut it; when none
+  // does, it is the only candidate and runs regardless.)
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return std::max(kCostCompilationFloor,
-                    kCostCompilation * static_cast<double>(ctx.circuit_size));
+    const double s = static_cast<double>(ctx.circuit_size);
+    return std::max(kCostCompilationFloor, kCostCompilation * s * std::sqrt(s));
   }
   dDNNF buildDD(EvalContext &ctx) const override {
     // On a chooser path (exact / relative / additive) ctx.args carries the
