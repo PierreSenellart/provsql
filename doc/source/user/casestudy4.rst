@@ -46,8 +46,7 @@ Setup
    below, open the `cs4 database in the ProvSQL Playground
    <https://provsql.org/playground/?db=cs4&mode=temporal>`_; it ships this case
    study's data pre-loaded and opens straight in Temporal mode, ready to follow
-   along as you read. The Playground bundles no external tools, but Temporal
-   mode needs none. See the :ref:`Playground note <playground-note>`.
+   along as you read. See the :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
 

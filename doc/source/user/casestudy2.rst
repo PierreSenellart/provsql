@@ -45,12 +45,8 @@ Setup
    rather keep reading this page, open the bare `cs2 database
    <https://provsql.org/playground/?db=cs2>`_ instead and run the queries as
    you read (the notebook shows the exercise solutions inline, while this
-   page keeps them folded). The Playground bundles no external tools, so a
-   step that explicitly calls an external knowledge compiler (``d4``,
-   ``c2d``…) or the ``graph-easy`` ASCII renderer will not run there; the
-   default probability methods still work (they use the built-in
-   tree-decomposition compiler), as does everything else. See the
-   :ref:`Playground note <playground-note>`.
+   page keeps them folded). See the :ref:`Playground note
+   <playground-note>`.
 
 .. nb:omit-begin
 
