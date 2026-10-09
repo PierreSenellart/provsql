@@ -95,13 +95,24 @@ bool matchPointObservationCmp(const GenericCircuit &gc, gate_t g,
 class Sampler {
 public:
   Sampler(const GenericCircuit &gc, std::mt19937_64 &rng)
-    : gc_(gc), rng_(rng) {}
+    : gc_(gc), rng_(rng), bool_stamp_(gc.getNbGates(), 0),
+      bool_value_(gc.getNbGates(), 0) {}
 
   /// Reset per-iteration memo caches.
   void resetIteration() {
-    bool_cache_.clear();
     scalar_cache_.clear();
-    fix_solution_.clear();
+    // The Boolean memo and the equation systems' solutions are stamped with
+    // the iteration: a new one invalidates them all, without clearing or
+    // reallocating per world.  On the (rare) wrap of the counter, reset the
+    // stamps.
+    if(++iteration_ == 0) {
+      std::fill(bool_stamp_.begin(), bool_stamp_.end(), 0);
+      for(auto &kv : fix_state_) {
+        std::fill(kv.second.reached.begin(), kv.second.reached.end(), 0);
+        kv.second.solved = 0;
+      }
+      iteration_ = 1;
+    }
   }
 
   bool evalBool(gate_t g);
@@ -127,7 +138,26 @@ private:
 
   const GenericCircuit &gc_;
   std::mt19937_64 &rng_;
-  std::unordered_map<gate_t, bool> bool_cache_;
+  // Truth of each gate in this world, indexed by gate: valid where its stamp
+  // is the current iteration (see resetIteration), so that a world costs no
+  // hash-node allocation per gate.
+  unsigned iteration_ = 1;
+  std::vector<unsigned> bool_stamp_;
+  std::vector<char> bool_value_;
+  const char *boolMemo(gate_t g) const {
+    const auto i = static_cast<std::size_t>(g);
+    return i < bool_stamp_.size() && bool_stamp_[i] == iteration_
+           ? &bool_value_[i] : nullptr;
+  }
+  void setBoolMemo(gate_t g, bool v) {
+    const auto i = static_cast<std::size_t>(g);
+    if(i >= bool_stamp_.size()) {
+      bool_stamp_.resize(i + 1, 0);
+      bool_value_.resize(i + 1, 0);
+    }
+    bool_stamp_[i] = iteration_;
+    bool_value_[i] = v;
+  }
   std::unordered_map<gate_t, std::optional<double>> scalar_cache_;
   const std::unordered_map<gate_t, bool> *fixed_ = nullptr;
   // Per-gate_rv Distribution, constructed once and reused across iterations
@@ -135,15 +165,26 @@ private:
   // or re-constructs the Distribution per draw.
   std::unordered_map<gate_t, std::unique_ptr<Distribution>> dist_cache_;
 
-  /// The least solution of the equation system @p sys in this world.
-  const std::vector<char> &solveFixSystem(gate_t sys);
+  /// An equation system met: its linear forms, read once, and the part of
+  /// its least solution explored in the current world, shared by all the
+  /// rows of the system (unknown @c i is known to hold where
+  /// <tt>reached[i] == solved</tt>, the iteration it was explored in; the
+  /// exploration resumes from @c queue at @c next).  Kept across
+  /// iterations, buffers included.
+  struct FixState {
+    FixSystemLinear lin;
+    std::vector<std::size_t> seeds; ///< Unknowns with a constant part
+    std::vector<unsigned> reached;
+    std::vector<std::size_t> queue;
+    std::size_t next = 0;
+    unsigned solved = 0;
+  };
+  /// Whether unknown @p i of @p sys holds in this world: the least solution
+  /// is explored from the seeds only until it reaches @p i (or is complete).
+  bool fixUnknownHolds(gate_t sys, std::size_t i);
   /// Whether every gate of @p conj is true in this world.
   bool conjunctionHolds(const std::vector<gate_t> &conj);
-  // Linear forms of each equation system met, read once and reused across
-  // iterations (NOT cleared in resetIteration), and its least solution in
-  // the current world (cleared), shared by all the rows of the system.
-  std::unordered_map<gate_t, FixSystemLinear> fix_linear_;
-  std::unordered_map<gate_t, std::vector<char>> fix_solution_;
+  std::unordered_map<gate_t, FixState> fix_state_;
 };
 
 bool Sampler::conjunctionHolds(const std::vector<gate_t> &conj)
@@ -154,47 +195,61 @@ bool Sampler::conjunctionHolds(const std::vector<gate_t> &conj)
   return true;
 }
 
-const std::vector<char> &Sampler::solveFixSystem(gate_t sys)
+bool Sampler::fixUnknownHolds(gate_t sys, std::size_t target)
 {
-  auto it = fix_solution_.find(sys);
-  if(it != fix_solution_.end())
-    return it->second;
-  auto lit = fix_linear_.find(sys);
-  if(lit == fix_linear_.end())
-    lit = fix_linear_.emplace(sys, gc_.linearizeFixSystem(sys)).first;
-  const FixSystemLinear &l = lit->second;
+  auto it = fix_state_.find(sys);
+  if(it == fix_state_.end()) {
+    FixState st;
+    st.lin = gc_.linearizeFixSystem(sys);
+    for(std::size_t i = 0; i < st.lin.n; ++i)
+      if(!st.lin.b[i].empty())
+        st.seeds.push_back(i);
+    st.reached.assign(st.lin.n, 0);
+    it = fix_state_.emplace(sys, std::move(st)).first;
+  }
+  FixState &st = it->second;
+  const FixSystemLinear &l = st.lin;
+  if(target >= l.n)
+    throw CircuitException("gate_fixpoint index out of range");
 
   /* x_i = b_i | OR_j (a_ij & x_j) in a Boolean world: the least solution is
    * the set of unknowns reachable from those whose constant part holds,
-   * along the terms whose coefficient holds.  A coefficient is only
-   * evaluated when its unknown is reached, so the inputs it reads are drawn
-   * lazily, consistently with the rest of the world through bool_cache_. */
-  std::vector<char> x(l.n, 0);
-  std::vector<std::size_t> queue;
-  for(std::size_t i = 0; i < l.n; ++i)
-    for(const auto &conj : l.b[i])
-      if(conjunctionHolds(conj)) {
-        x[i] = 1;
-        queue.push_back(i);
-        break;
-      }
-  for(std::size_t q = 0; q < queue.size(); ++q) {
-    if((q & 4095) == 0)
+   * along the terms whose coefficient holds.  It is explored breadth-first,
+   * only as far as the unknown asked for, and resumed for another one of the
+   * same world.  A coefficient is only evaluated when its unknown is
+   * reached, so the inputs it reads are drawn lazily, consistently with the
+   * rest of the world through the memo. */
+  const unsigned now = iteration_;
+  auto &reached = st.reached;
+  auto &queue = st.queue;
+  if(st.solved != now) {
+    st.solved = now;
+    queue.clear();
+    st.next = 0;
+    for(const std::size_t i : st.seeds)
+      for(const auto &conj : l.b[i])
+        if(conjunctionHolds(conj)) {
+          reached[i] = now;
+          queue.push_back(i);
+          break;
+        }
+  }
+  while(reached[target] != now && st.next < queue.size()) {
+    if((st.next & 4095) == 0)
       provsql_poll_interrupt();
-    const std::size_t j = queue[q];
+    const std::size_t j = queue[st.next++];
     for(const auto &[i, conj] : l.out[j])
-      if(!x[i] && conjunctionHolds(conj)) {
-        x[i] = 1;
+      if(reached[i] != now && conjunctionHolds(conj)) {
+        reached[i] = now;
         queue.push_back(i);
       }
   }
-  return fix_solution_.emplace(sys, std::move(x)).first->second;
+  return reached[target] == now;
 }
 
 bool Sampler::evalBool(gate_t g)
 {
-  auto it = bool_cache_.find(g);
-  if(it != bool_cache_.end()) return it->second;
+  if(const char *m = boolMemo(g)) return *m;
 
   bool result = false;
   const auto type = gc_.getGateType(g);
@@ -293,11 +348,10 @@ bool Sampler::evalBool(gate_t g)
       if(wires.size() != 1 || gc_.getGateType(wires[0]) != gate_fixsystem)
         throw CircuitException(
                 "gate_fixpoint must have exactly one child, a gate_fixsystem");
-      const auto &x = solveFixSystem(wires[0]);
       const unsigned idx = gc_.getInfos(g).first;
-      if(idx < 1 || idx > x.size())
+      if(idx < 1)
         throw CircuitException("gate_fixpoint index out of range");
-      result = x[idx - 1];
+      result = fixUnknownHolds(wires[0], idx - 1);
       break;
     }
     default:
@@ -306,7 +360,7 @@ bool Sampler::evalBool(gate_t g)
               std::string(gate_type_name[type]));
   }
 
-  bool_cache_[g] = result;
+  setBoolMemo(g, result);
   return result;
 }
 
@@ -705,7 +759,7 @@ std::optional<double> Sampler::evalScalar(gate_t g)
       //  - Classic 3-wire:  [p_token, x_token, y_token].  Draw the
       //    Bernoulli via evalBool, which handles gate_input by
       //    sampling uniform(0,1) < get_prob and memoises on
-      //    bool_cache_; two mixtures sharing the same p_token
+      //    the Boolean memo; two mixtures sharing the same p_token
       //    therefore see the same draw, and any unrelated Boolean
       //    parent of p_token stays in sync.
       //
@@ -715,7 +769,7 @@ std::optional<double> Sampler::evalScalar(gate_t g)
       //    outcome value in extra.
       //    We draw a single uniform[0,1) per block, walk the
       //    cumulative probabilities to pick a mulinput, and stash the
-      //    Boolean truth values into bool_cache_ so any downstream
+      //    Boolean truth values into the Boolean memo so any downstream
       //    Boolean consumer of the mulinputs (independentEvaluation,
       //    OR/AND parents) sees a consistent sampled outcome.
       if(gc_.isCategoricalMixture(g)) {
@@ -730,7 +784,7 @@ std::optional<double> Sampler::evalScalar(gate_t g)
           if(r < cum) { chosen = i; break; }
         }
         for(std::size_t i = 1; i < wires.size(); ++i) {
-          bool_cache_[wires[i]] = (i == chosen);
+          setBoolMemo(wires[i], i == chosen);
         }
         result = parseDoubleStrict(gc_.getExtra(wires[chosen]));
         break;
@@ -1152,7 +1206,7 @@ ConditionalScalarSamples monteCarloConditionalScalarSamples(
 
   for(unsigned i = 0; i < samples; ++i) {
     sampler.resetIteration();
-    /* Evaluate the indicator FIRST: this populates bool_cache_ AND
+    /* Evaluate the indicator FIRST: this populates the Boolean memo AND
      * scalar_cache_ for every gate_rv / gate_input that the event
      * touches, so the subsequent evalScalar(root) reads the same
      * draws.  Shared gate_t leaves between root and event_root are
