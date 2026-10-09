@@ -146,16 +146,9 @@ Alcohol|Cardiovascular Disease|harmful|1 (*)|0.45 (*)|0.4500 (*)|0.45
 remove_provenance
 
 (1 row)
-exposure|outcome|n_studies|studies|n_beneficial
-Coffee|Cardiovascular Disease|3 (*)|Brown2022, Chen2019, Garcia2017 (*)|1 (*)
-Coffee|Cognitive Decline|2 (*)|Brown2022, Park2021 (*)|2 (*)
-Exercise|Cardiovascular Disease|3 (*)|Johnson2020, Smith2018, Williams2021 (*)|3 (*)
-Exercise|Inflammation|1 (*)|Smith2018 (*)|1 (*)
+exposure|outcome|n_studies|n_designs|studies|n_beneficial
+Coffee|Cardiovascular Disease|3 (*)|2 (*)|Brown2022, Chen2019, Garcia2017 (*)|1 (*)
+Coffee|Cognitive Decline|2 (*)|2 (*)|Brown2022, Park2021 (*)|2 (*)
+Exercise|Cardiovascular Disease|3 (*)|2 (*)|Johnson2020, Smith2018, Williams2021 (*)|3 (*)
+Exercise|Inflammation|1 (*)|1 (*)|Smith2018 (*)|1 (*)
 (4 rows)
-remove_provenance
-
-(1 row)
-exposure|outcome|sign|evidence
-Coffee|Cardiovascular Disease|beneficial|Brown2022
-Coffee|Cardiovascular Disease|harmful|Garcia2017
-(2 rows)

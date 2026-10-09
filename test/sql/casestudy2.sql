@@ -353,10 +353,12 @@ ORDER BY evidence_weight_value DESC, exposure, outcome, effect;
 DROP TABLE result_agg_arith;
 
 -- Step 17: richer aggregates carry provenance (COUNT(DISTINCT), string_agg,
--- COUNT(*) FILTER), each returned as an agg_token.
+-- COUNT(*) FILTER), each returned as an agg_token.  Coffee and Exercise to
+-- CVD each have 3 studies but 2 designs.
 CREATE TABLE result_richagg AS
 SELECT exposure, outcome,
-       COUNT(DISTINCT study) AS n_studies,
+       COUNT(*) AS n_studies,
+       COUNT(DISTINCT study_type) AS n_designs,
        string_agg(study, ', ' ORDER BY study) AS studies,
        COUNT(*) FILTER (WHERE effect = 'beneficial') AS n_beneficial
 FROM f
@@ -365,22 +367,6 @@ GROUP BY exposure, outcome;
 SELECT remove_provenance('result_richagg');
 SELECT * FROM result_richagg ORDER BY exposure, outcome;
 DROP TABLE result_richagg;
-
--- Step 18: UNION ALL concatenates two arms, each keeping its own provenance
--- (beneficial -> Brown2022, harmful -> Garcia2017).
-CREATE TABLE result_signed AS
-SELECT exposure, outcome, 'beneficial' AS sign,
-       sr_formula(provenance(), 'study_mapping') AS evidence
-FROM f WHERE exposure = 'Coffee' AND outcome = 'Cardiovascular Disease' AND effect = 'beneficial'
-GROUP BY exposure, outcome
-UNION ALL
-SELECT exposure, outcome, 'harmful',
-       sr_formula(provenance(), 'study_mapping')
-FROM f WHERE exposure = 'Coffee' AND outcome = 'Cardiovascular Disease' AND effect = 'harmful'
-GROUP BY exposure, outcome;
-SELECT remove_provenance('result_signed');
-SELECT * FROM result_signed ORDER BY sign;
-DROP TABLE result_signed;
 
 -- Clean up
 DROP VIEW f_replicated;

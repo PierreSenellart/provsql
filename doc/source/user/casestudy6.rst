@@ -233,7 +233,7 @@ full method catalogue (see :doc:`the chapter on probabilities
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
 probability with a Hoeffding confidence band. Pin
 ``provsql.monte_carlo_seed = 42`` in the Config panel and re-run:
-the result is now identical across runs. Toggle the seed back to
+the result is now identical across runs. Set the seed back to
 ``-1`` and re-run to see the band shift between runs.
 
 .. figure:: /_static/casestudy6/cmp-circuit-mc-eval.png

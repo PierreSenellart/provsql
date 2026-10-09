@@ -690,7 +690,7 @@ the interactive twin of Steps 13–15.
 
    Contributions mode: Johnson2020, Smith2018, and Williams2021 ranked
    by Shapley value -- the same numbers as Step 13, read off a heat-map.
-   The :guilabel:`Measure` toggle switches to Banzhaf (Step 14).
+   The :guilabel:`Measure` picker switches to Banzhaf (Step 14).
 
 Step 16: Arithmetic on Aggregate Results
 ------------------------------------------
@@ -731,13 +731,15 @@ Step 17: Richer Aggregates -- ``DISTINCT``, ``string_agg``, ``FILTER``
 ----------------------------------------------------------------------
 
 Provenance tracks through the full range of SQL aggregates, not just
-``COUNT(*)``. For each (exposure, outcome) pair, count the *distinct*
-studies, list them, and count how many of the findings are beneficial:
+``COUNT(*)``. For each (exposure, outcome) pair, count the studies and
+their *distinct* designs, list the studies, and count how many of the
+findings are beneficial:
 
 .. code-block:: postgresql
 
     SELECT exposure, outcome,
-           COUNT(DISTINCT study) AS n_studies,
+           COUNT(*) AS n_studies,
+           COUNT(DISTINCT study_type) AS n_designs,
            string_agg(study, ', ' ORDER BY study) AS studies,
            COUNT(*) FILTER (WHERE effect = 'beneficial') AS n_beneficial
     FROM f
@@ -745,58 +747,17 @@ studies, list them, and count how many of the findings are beneficial:
     GROUP BY exposure, outcome
     ORDER BY exposure, outcome;
 
-Each aggregate value comes back as an ``agg_token`` (shown
-as ``value (*)``): the count, the concatenated list, and the filtered
-count all carry the provenance of the findings they summarise, and the
+Two RCTs back Exercise→CVD, so its three studies have two designs. Each
+aggregate value comes back as an ``agg_token`` (shown as ``value (*)``):
+the counts, the concatenated list, and the filtered count all carry the provenance of the findings they summarise, and the
 group's ``provenance()`` still feeds :sqlfunc:`probability_evaluate` or
 :sqlfunc:`sr_formula` as in the earlier steps:
 
 .. code-block:: text
 
-    exposure | outcome                | n_studies | studies                                  | n_beneficial
-    ---------+------------------------+-----------+------------------------------------------+-------------
-    Coffee   | Cardiovascular Disease | 3 (*)     | Brown2022, Chen2019, Garcia2017 (*)      | 1 (*)
-    Coffee   | Cognitive Decline      | 2 (*)     | Brown2022, Park2021 (*)                  | 2 (*)
-    Exercise | Cardiovascular Disease | 3 (*)     | Johnson2020, Smith2018, Williams2021 (*) | 3 (*)
-    Exercise | Inflammation           | 1 (*)     | Smith2018 (*)                            | 1 (*)
-
-
-Step 18: A Signed-Effect View with ``UNION ALL``
--------------------------------------------------
-
-``UNION ALL`` concatenates two result sets, keeping every row's own
-provenance. Merge the beneficial and harmful findings on Coffee →
-Cardiovascular Disease into a single signed-effect view, each side
-tagged and carrying its own lineage:
-
-.. code-block:: postgresql
-
-    SELECT exposure, outcome, 'beneficial' AS sign,
-           sr_formula(provenance(), 'study_mapping') AS evidence
-    FROM f
-    WHERE exposure = 'Coffee' AND outcome = 'Cardiovascular Disease'
-      AND effect = 'beneficial'
-    GROUP BY exposure, outcome
-    UNION ALL
-    SELECT exposure, outcome, 'harmful',
-           sr_formula(provenance(), 'study_mapping')
-    FROM f
-    WHERE exposure = 'Coffee' AND outcome = 'Cardiovascular Disease'
-      AND effect = 'harmful'
-    GROUP BY exposure, outcome
-    ORDER BY sign;
-
-The two arms keep distinct provenance: the beneficial row traces back
-to ``Brown2022``, the harmful one to ``Garcia2017``:
-
-.. code-block:: text
-
-    exposure | outcome                | sign       | evidence
-    ---------+------------------------+------------+------------------------------------------
-    Coffee   | Cardiovascular Disease | beneficial | Brown2022
-    Coffee   | Cardiovascular Disease | harmful    | Garcia2017
-
-(``UNION`` instead of ``UNION ALL`` would additionally ⊕-combine the
-provenance of rows that become duplicates after projection; here the
-two arms are disjoint, so the concatenating ``UNION ALL`` is what the
-signed view calls for.)
+    exposure | outcome                | n_studies | n_designs | studies                                  | n_beneficial
+    ---------+------------------------+-----------+-----------+------------------------------------------+-------------
+    Coffee   | Cardiovascular Disease | 3 (*)     | 2 (*)     | Brown2022, Chen2019, Garcia2017 (*)      | 1 (*)
+    Coffee   | Cognitive Decline      | 2 (*)     | 2 (*)     | Brown2022, Park2021 (*)                  | 2 (*)
+    Exercise | Cardiovascular Disease | 3 (*)     | 2 (*)     | Johnson2020, Smith2018, Williams2021 (*) | 3 (*)
+    Exercise | Inflammation           | 1 (*)     | 1 (*)     | Smith2018 (*)                            | 1 (*)
