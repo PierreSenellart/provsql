@@ -946,7 +946,7 @@ Step 20: Calibration as Graded Confidence
 -----------------------------------------
 
 The calibration scores of ``calibration_status`` can also be read as
-*degrees of confidence* rather than probabilities. A district's alert is
+*degrees of confidence*, not probabilities. A district's alert is
 corroborated when two of its stations agree; how confident is that
 corroboration? A fuzzy semiring combines the degrees, with ``max`` over
 alternatives and a t-norm for a conjunction:
@@ -970,12 +970,13 @@ alternatives and a t-norm for a conjunction:
     ORDER BY s1.district;
 
 :sqlfunc:`sr_lukasiewicz` conjoins with the Łukasiewicz t-norm
-:math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre
-(0.95) and Riverside Park (0.70), gets 0.65, the confidence lost by each
-station adding up. :sqlfunc:`sr_viterbi` multiplies instead, 0.665. With
-the fully trusted Suburban Reference (1.00), the east district keeps the
-Industrial Estate's 0.60 under both: a certain station costs nothing. The
-stations' own tokens are not in the mapping and count as fully true.
+:math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre (0.95)
+and Riverside Park (0.70), gets 0.65. The two stations' shortfalls from
+full confidence, 0.05 and 0.30, add up. :sqlfunc:`sr_viterbi` multiplies
+instead, 0.665. With the fully trusted Suburban Reference (1.00), the east
+district keeps the Industrial Estate's 0.60 under both: a certain station
+costs nothing. The stations' own tokens are not in the mapping and count
+as fully true.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full reference and

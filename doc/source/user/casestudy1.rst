@@ -685,12 +685,12 @@ and that answer at the top level.
 Step 18: What Allied Services Conclude
 --------------------------------------
 
-The agency shares some personnel files with allied services, each ally
-seeing its own subset of the agents, in no order of clearance. Which
-allies would see a city as single-agent? :sqlfunc:`sr_subset` reads the
-labels of an enum as worlds, one per ally, the mapping giving the allies
-each file is shared with, and returns the allies whose view returns the
-row:
+The agency shares some personnel files with allied services. Each ally
+sees some of the agents, and unlike clearance levels, the allies are not
+ordered. Which allies would see a city as single-agent?
+:sqlfunc:`sr_subset` reads the labels of an enum as worlds, here one per
+ally. The mapping gives the allies each file is shared with, and the
+result is the set of allies whose view returns the row:
 
 .. code-block:: postgresql
 

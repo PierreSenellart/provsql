@@ -668,7 +668,8 @@ value turns it into a distribution over labels:
 
 Box 1 of photo 5 is a Red Deer with probability 0.40 and a Roe Deer with
 0.30, its two candidates' confidences; in the remaining worlds, neither
-candidate is right and the box has no label. ``ORDER BY s.name`` fixes
-which value :sqlfunc:`choose` returns where several are present, which
-mutual exclusion rules out here. Box 6, whose only candidate is
-unidentified, has no species to join and no row.
+candidate is right and the box has no label. Mutual exclusion leaves at
+most one candidate present, so ``ORDER BY s.name`` changes nothing here;
+in general, it decides which value :sqlfunc:`choose` returns when several
+are present. Box 6, whose only candidate is unidentified, has no species
+to join and no row.

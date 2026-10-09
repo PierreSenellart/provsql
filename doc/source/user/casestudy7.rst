@@ -576,9 +576,10 @@ derivations is infinite.)
 
 The same walk gives *degrees of separation*: count one hop per
 co-review and take the cheapest path, in the tropical (min-plus) semiring.
-With ``nonnegative => true``, :sqlfunc:`sr_tropical` checks the costs
-nonnegative, which makes it absorptive -- a cycle can only add to a path's
-cost -- so it accepts the absorptive tokens, as probability does:
+With ``nonnegative => true``, :sqlfunc:`sr_tropical` checks that the costs
+are nonnegative. A cycle can then only add to a path's cost, so the
+semiring is absorptive and accepts the absorptive tokens, as probability
+does:
 
 .. code-block:: postgresql
 

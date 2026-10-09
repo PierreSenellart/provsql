@@ -461,8 +461,8 @@ About **0.1886**, against **0.1587** at the fixed threshold. The
 Normal's tail thins quickly above 25, so the labs with a lower threshold
 gain more referrals than the labs with a higher one lose.
 This compares two random variables of different families, which ProvSQL
-integrates numerically -- still exact to quadrature precision, with no
-sampling.
+integrates numerically: the answer is deterministic, to quadrature
+precision, with no sampling.
 
 Problem 5: A Probabilistic Total
 --------------------------------
@@ -674,7 +674,7 @@ pairings, since the variant's larger location parameter shifts its whole
 distribution right. The comparison is between two log-normals, which
 have a registered closed form -- exact, no Monte Carlo.
 
-The log-normal is not the only model of a duration. If symptoms start
+A duration can also be modelled from its mechanism. If symptoms start
 when a growing viral load first crosses a threshold, the incubation is a
 *first-passage time*, whose distribution is the `inverse Gaussian
 <https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`_ (also
@@ -927,11 +927,11 @@ root:
 
 ``inverse_gamma(3, 8)`` has mean :math:`8/(3-1) = 4`, so on average the
 noise is the same as before, and the reading's variance is again about
-**4** (a Monte-Carlo estimate): by the law of total variance, the
-variance of the reading is the mean of the noise variance when the mean
-is fixed. The uncertainty in the spread shows in the shape instead: the
-reading has heavier tails than a ``normal(20, 2)``, the more so as the
-prior on the variance is vaguer.
+**4** (a Monte-Carlo estimate): by the law of total variance, with the
+mean fixed at 20, the reading's variance is the expected noise variance.
+The uncertainty in the spread shows in the shape instead: the reading has
+heavier tails than a ``normal(20, 2)``, the more so as the prior on the
+variance is vaguer.
 
 Problem 13: Learning That Parameter From Data
 ---------------------------------------------
@@ -995,9 +995,9 @@ observation's density, giving the same posterior to Monte Carlo tolerance
 under the sample budget.
 
 Which reading moved the posterior most? :sqlfunc:`shapley_observe`
-attributes the shift of the posterior mean, from the prior's 20 to
-22.8481, to the observations, by their Shapley values; each observation
-records its value, which :sqlfunc:`get_extra` reads back:
+splits the shift of the posterior mean, from the prior's 20 to 22.8481,
+between the observations, by their Shapley values. Each observation
+records the value observed, which :sqlfunc:`get_extra` reads back:
 
 .. code-block:: postgresql
 
@@ -1046,7 +1046,7 @@ its conjugate shape, moving the bias to the data side:
     RESET provsql.rv_mc_samples;
 
 The exact posterior mean is **36.1392**: the sampled answer was close, but
-only the closed form says so.
+only the closed form shows that it was.
 
 Recap
 -----
