@@ -103,6 +103,13 @@ private:
 bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 
 /**
+ * @brief Memoised helper for @c evaluate(): @p memo holds, per gate, -1
+ *        while unevaluated, else its value in the sampled world.
+ */
+bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled,
+              std::vector<signed char> &memo) const;
+
+/**
  * @brief Recursive helper for @c interpretAsDD().
  *
  * A certified (d-DNNF-marked) gate is handed to

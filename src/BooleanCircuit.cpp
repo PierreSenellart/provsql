@@ -54,6 +54,9 @@ extern "C" {
 #include "kcmcp_client.h"
 #endif
 
+/** Size past which @c toStringHelper stops: PG's limit for a text value. */
+static constexpr std::size_t max_rendering_size = std::size_t(1) << 30;
+
 // "provsql_utils.h"
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
@@ -196,6 +199,13 @@ std::string BooleanCircuit::toStringHelper(
   BooleanGate parent,
   const std::unordered_map<gate_t, std::string> *labels) const
 {
+  /* The rendering is a formula: a sub-circuit shared by several gates is
+   * written out at each of them, so it can be exponential in the circuit
+   * (that of a recursion on cyclic data, for one).  Stay interruptible, and
+   * stop before the text could not be returned anyway. */
+  if(provsql_interrupted)
+    throw CircuitException("Interrupted");
+
   std::string op;
   std::string result;
   auto gtype = getGateType(g);
@@ -245,6 +255,10 @@ std::string BooleanCircuit::toStringHelper(
     else if(!result.empty())
       result+=" "+op+" ";
     result+=toStringHelper(s, gtype, labels);
+    if(result.size() > max_rendering_size)
+      throw CircuitException(
+        "the Boolean expression is too large to print (over 1 GB): a "
+        "sub-circuit shared by several gates is written out at each of them");
   }
 
   // Parenthesis elision:
@@ -321,17 +335,38 @@ std::string BooleanCircuit::exportCircuit(gate_t root) const
 
 bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
 {
+  /* Memoised: a sub-circuit shared by several gates is evaluated once, not
+   * once per path to it, which is exponential on a circuit with sharing
+   * (that of a recursion on cyclic data, for one). */
+  std::vector<signed char> memo(gates.size(), -1);
+  return evaluate(g, sampled, memo);
+}
+
+bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled,
+                              std::vector<signed char> &memo) const
+{
   check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
+  auto &m = memo[static_cast<std::size_t>(g)];
+  if(m >= 0)
+    return m;
+  if(provsql_interrupted)
+    throw CircuitException("Interrupted");
+
   bool disjunction=false;
+  bool value;
 
   switch(getGateType(g)) {
   case BooleanGate::IN:
-    return sampled.find(g)!=sampled.end();
+    value = sampled.find(g)!=sampled.end();
+    m = value;
+    return value;
   case BooleanGate::MULIN:
   case BooleanGate::MULVAR:
     throw CircuitException("Monte-Carlo sampling not implemented on multivalued inputs");
   case BooleanGate::NOT:
-    return !evaluate(*(getWires(g).begin()), sampled);
+    value = !evaluate(*(getWires(g).begin()), sampled, memo);
+    memo[static_cast<std::size_t>(g)] = value;
+    return value;
   case BooleanGate::AND:
     disjunction = false;
     break;
@@ -342,18 +377,16 @@ bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sample
     throw CircuitException("Incorrect gate type");
   }
 
-  for(auto s: getWires(g)) {
-    bool e = evaluate(s, sampled);
-    if(disjunction && e)
-      return true;
-    if(!disjunction && !e)
-      return false;
-  }
-
-  if(disjunction)
-    return false;
-  else
-    return true;
+  /* An OR with a true wire is true, an AND with a false one false; with no
+   * such wire, an OR is false and an AND true. */
+  value = !disjunction;
+  for(auto s: getWires(g))
+    if(evaluate(s, sampled, memo) == disjunction) {
+      value = disjunction;
+      break;
+    }
+  memo[static_cast<std::size_t>(g)] = value;
+  return value;
 }
 
 double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const

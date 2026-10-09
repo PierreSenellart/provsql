@@ -22,6 +22,7 @@ extern "C" {
 #include "provsql_utils.h" // provsql_interrupted
 #include "miscadmin.h"     // check_stack_depth
 }
+#include "provsql_interrupt.h" // provsql_poll_interrupt
 
 namespace provsql {
 
@@ -320,6 +321,10 @@ const std::set<gate_t> &footprintOf(GenContext &ctx, gate_t g)
   auto it = ctx.footprint.find(g);
   if(it != ctx.footprint.end())
     return it->second;
+  /* One cone per gate: on a large circuit whose gates read many inputs (that
+   * of a recursion on cyclic data, for one), this is quadratic in time and
+   * memory, so stay interruptible and within provsql.max_memory. */
+  provsql_poll_interrupt();
   std::set<gate_t> s;
   switch(ctx.c.getGateType(g)) {
   case BooleanGate::IN: {

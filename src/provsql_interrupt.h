@@ -44,6 +44,13 @@ extern bool provsql_interrupted;
 void provsql_sigint_handler(int);
 
 /**
+ * @brief SIGTERM handler setting @c provsql_interrupted, then running
+ *        PG's own (@c die), so that a terminated backend stops its
+ *        evaluation as a cancelled one does.
+ */
+void provsql_sigterm_handler(int);
+
+/**
  * @brief Raise PG's cancel if the evaluation stopped for one; nothing
  *        otherwise.  Called in a @c catch, once the scope is gone.
  */
@@ -85,7 +92,8 @@ void provsql_limit_exceeded(const char *tag, const char *message,
  */
 class provsql_interrupt_scope
 {
-  void (*prev_)(int); ///< The handler to restore
+  void (*prev_)(int); ///< The SIGINT handler to restore
+  void (*prev_term_)(int); ///< The SIGTERM handler to restore
 
 public:
   provsql_interrupt_scope();

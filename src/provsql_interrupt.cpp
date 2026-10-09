@@ -71,12 +71,35 @@ void provsql_sigint_handler(int)
   SetLatch(MyLatch);
 }
 
+/** PG's SIGTERM handler (@c die), which @c provsql_sigterm_handler chains to. */
+static void (*pg_sigterm_handler)(int) = SIG_DFL;
+
+/**
+ * @brief SIGTERM: stop the evaluation, then let PG terminate the backend.
+ *
+ * A terminate request (@c pg_terminate_backend, a fast shutdown) runs PG's
+ * @c die, which only sets @c ProcDiePending for the next
+ * @c CHECK_FOR_INTERRUPTS: the C++ loops, which poll
+ * @c provsql_interrupted, would never see it.  Set the flag too; once the
+ * evaluation has unwound, @c CHECK_FOR_INTERRUPTS terminates the backend.
+ */
+void provsql_sigterm_handler(int signo)
+{
+  provsql_interrupted = true;
+  if (pg_sigterm_handler != SIG_DFL && pg_sigterm_handler != SIG_IGN)
+    pg_sigterm_handler(signo);
+}
+
 provsql_interrupt_scope::provsql_interrupt_scope()
 {
   TimestampTz statement = GetCurrentStatementStartTimestamp();
   provsql_interrupted = false;
   limit_hit = false;
   prev_ = signal(SIGINT, provsql_sigint_handler);
+  prev_term_ = signal(SIGTERM, provsql_sigterm_handler);
+  /* A nested scope finds our own handler installed: keep PG's. */
+  if (prev_term_ != provsql_sigterm_handler)
+    pg_sigterm_handler = prev_term_;
   if (statement != baseline_statement) {
     baseline_statement = statement;
     baseline_rss = current_rss();
@@ -87,6 +110,7 @@ provsql_interrupt_scope::~provsql_interrupt_scope()
 {
   /* The flag stays: the catch that follows reads it */
   signal(SIGINT, prev_);
+  signal(SIGTERM, prev_term_);
 }
 
 size_t provsql_memory_used(void)
