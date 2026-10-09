@@ -2705,10 +2705,12 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
               LoweredCte *e = (LoweredCte *)palloc0(sizeof(LoweredCte));
               /* The body may read the other CTEs of the WITH, before or
                * after it: inline them into a copy of it, which is what is
-               * evaluated on its own. */
+               * evaluated on its own -- all of them, those otherwise kept as
+               * CTEs too, since the SQL that evaluates the body has no WITH
+               * to find them in ("relation does not exist"). */
               CommonTableExpr *body = copyObject(cte);
               inline_ctes_in_rtable(((Query *)body->ctequery)->rtable,
-                                    cteList, lowered, kept);
+                                    cteList, lowered, NIL);
               if (lower_recursive_cte(body, r, e)) {
                 /* Lowering succeeded; remember the scan subquery so any
                  * further reference to this CTE reuses it. */
@@ -2737,8 +2739,21 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
             provsql_unsupported(PROVSQL_GAP, "recursion-unsupported-version", "Recursive CTEs not supported");
 #endif
           } else {
+            ListCell *lcn, *lct;
             r->rtekind = RTE_SUBQUERY;
             r->subquery = copyObject((Query *)cte->ctequery);
+            /* The columns of the CTE are named by its column list
+             * (WITH s(a) AS ...), not by its body's own output names, which
+             * the subquery would otherwise expose when deparsed ("column a
+             * does not exist"). */
+            lcn = list_head(cte->ctecolnames);
+            foreach (lct, r->subquery->targetList) {
+              TargetEntry *te = (TargetEntry *)lfirst(lct);
+              if (te->resjunk || lcn == NULL)
+                continue;
+              te->resname = pstrdup(strVal(lfirst(lcn)));
+              lcn = my_lnext(cte->ctecolnames, lcn);
+            }
             /* The body was one level below the WITH, it is now
              * ctelevelsup + 1 levels below: its references to the other
              * CTEs of the WITH (those kept as CTEs) and to outer queries

@@ -261,3 +261,22 @@ node|path
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|y
+constant sibling, base term|1
+constant sibling, base term|2
+constant sibling, base term|3
+constant sibling, recursive term|1
+constant sibling, recursive term|3
+sibling renaming its column|1
+sibling renaming its column|2
+sibling renaming its column|3
+(8 rows)
+remove_provenance
+
+(1 row)
