@@ -177,7 +177,7 @@ struct MinAgg : StandardAgg<T> {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     if(has) {
-      if(v < value) value = v;
+      if(sql_less(v, value)) value = v;
     } else {
       value = v;
       has = true;
@@ -195,7 +195,7 @@ struct MaxAgg : StandardAgg<T> {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     if(has) {
-      if(v > value) value = v;
+      if(sql_less(value, v)) value = v;
     } else {
       value = v;
       has = true;

@@ -2432,6 +2432,18 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     first = false;
     appendStringInfoString(&cols, quote_identifier(name));
     appendStringInfo(&coldef, "%s %s", quote_identifier(name), format_type_be(typid));
+    /* The rounds are driven through temporary tables, which cannot hold a
+     * column of a pseudo-type: the record[] path that SEARCH and CYCLE add
+     * is one. */
+    if (get_typtype(typid) == TYPTYPE_PSEUDO)
+      provsql_unsupported_hint(
+        PROVSQL_GAP, "recursion-pseudo-type-column",
+        "Build the path as an array of the column's own type instead of a "
+        "SEARCH or CYCLE clause, e.g. ARRAY[node] in the base term and "
+        "path || node in the recursive one.",
+        "recursive query over provenance-tracked relations with a column of "
+        "type %s (as SEARCH and CYCLE clauses add) not supported",
+        format_type_be(typid));
   }
 
   if (provsql_verbose >= 20)
@@ -2693,10 +2705,12 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
               LoweredCte *e = (LoweredCte *)palloc0(sizeof(LoweredCte));
               /* The body may read the other CTEs of the WITH, before or
                * after it: inline them into a copy of it, which is what is
-               * evaluated on its own. */
+               * evaluated on its own -- all of them, those otherwise kept as
+               * CTEs too, since the SQL that evaluates the body has no WITH
+               * to find them in ("relation does not exist"). */
               CommonTableExpr *body = copyObject(cte);
               inline_ctes_in_rtable(((Query *)body->ctequery)->rtable,
-                                    cteList, lowered, kept);
+                                    cteList, lowered, NIL);
               if (lower_recursive_cte(body, r, e)) {
                 /* Lowering succeeded; remember the scan subquery so any
                  * further reference to this CTE reuses it. */
@@ -2725,8 +2739,21 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
             provsql_unsupported(PROVSQL_GAP, "recursion-unsupported-version", "Recursive CTEs not supported");
 #endif
           } else {
+            ListCell *lcn, *lct;
             r->rtekind = RTE_SUBQUERY;
             r->subquery = copyObject((Query *)cte->ctequery);
+            /* The columns of the CTE are named by its column list
+             * (WITH s(a) AS ...), not by its body's own output names, which
+             * the subquery would otherwise expose when deparsed ("column a
+             * does not exist"). */
+            lcn = list_head(cte->ctecolnames);
+            foreach (lct, r->subquery->targetList) {
+              TargetEntry *te = (TargetEntry *)lfirst(lct);
+              if (te->resjunk || lcn == NULL)
+                continue;
+              te->resname = pstrdup(strVal(lfirst(lcn)));
+              lcn = my_lnext(cte->ctecolnames, lcn);
+            }
             /* The body was one level below the WITH, it is now
              * ctelevelsup + 1 levels below: its references to the other
              * CTEs of the WITH (those kept as CTEs) and to outer queries
@@ -4683,6 +4710,98 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
   return expr_s;
 }
 
+/** @brief Whether @p aggfnoid is one of PostgreSQL's aggregates whose
+ *  result depends on the order it reads its rows in. */
+static bool aggregate_order_dependent(Oid aggfnoid) {
+  char *name;
+  bool dep;
+
+  if (aggfnoid >= FirstNormalObjectId)
+    return false;
+  name = get_func_name(aggfnoid);
+  if (name == NULL)
+    return false;
+  dep = strcmp(name, "array_agg") == 0 || strcmp(name, "string_agg") == 0 ||
+        strncmp(name, "json_agg", 8) == 0 ||
+        strncmp(name, "jsonb_agg", 9) == 0 ||
+        strncmp(name, "json_object_agg", 15) == 0 ||
+        strncmp(name, "jsonb_object_agg", 16) == 0 ||
+        strcmp(name, "xmlagg") == 0;
+  pfree(name);
+  return dep;
+}
+
+/**
+ * @brief @c order_checked(agg, order_determined(...)) for an order-dependent
+ *        aggregate @p agg_ref, or @c NULL.
+ *
+ * The check reads the aggregate's arguments, sorted by its @c ORDER @c BY,
+ * over every row of the group its own @c FILTER keeps -- those present only
+ * in other worlds included, which the value shown leaves out -- and the
+ * value is returned with a warning where two rows tie on the @c ORDER
+ * @c BY (or there is none) with different values.
+ */
+static Expr *make_order_check(const constants_t *constants, Aggref *agg_ref) {
+  Aggref *chk;
+  List *args = NIL, *types = NIL;
+  ListCell *lc;
+  int nvals = 0;
+  AttrNumber resno = 1;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !aggregate_order_dependent(agg_ref->aggfnoid))
+    return NULL;
+  foreach (lc, agg_ref->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    ++nvals;
+  }
+  args = lappend(args, makeTargetEntry(
+    (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                      Int32GetDatum(nvals), false, true), resno++, NULL, false));
+  types = lappend_oid(types, INT4OID);
+  foreach (lc, agg_ref->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    args = lappend(args, makeTargetEntry((Expr *)copyObject(te->expr), resno++,
+                                         NULL, false));
+    types = lappend_oid(types, exprType((Node *)te->expr));
+  }
+  foreach (lc, agg_ref->aggorder) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    TargetEntry *key = get_sortgroupclause_tle(sgc, agg_ref->args);
+    TargetEntry *te = makeTargetEntry((Expr *)copyObject(key->expr), resno++,
+                                      NULL, false);
+    te->ressortgroupref = sgc->tleSortGroupRef;
+    args = lappend(args, te);
+    types = lappend_oid(types, exprType((Node *)key->expr));
+  }
+
+  chk = makeNode(Aggref);
+  chk->aggfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+  chk->aggtype = BOOLOID;
+  chk->aggtranstype = InvalidOid;
+  chk->aggargtypes = types;
+  chk->args = args;
+  chk->aggorder = (List *)copyObject(agg_ref->aggorder);
+  chk->aggfilter = (Expr *)copyObject(agg_ref->aggfilter);
+  chk->inputcollid = agg_ref->inputcollid;
+  chk->aggkind = AGGKIND_NORMAL;
+  chk->aggsplit = AGGSPLIT_SIMPLE;
+  chk->agglevelsup = agg_ref->agglevelsup;
+  chk->location = -1;
+#if PG_VERSION_NUM >= 140000
+  chk->aggno = chk->aggtransno = -1;
+#endif
+  return (Expr *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              agg_ref->aggtype,
+                              list_make2(agg_ref, chk), agg_ref->aggcollid,
+                              InvalidOid, COERCE_EXPLICIT_CALL);
+}
+
 /**
  * @brief Build the provenance expression for a single aggregate function.
  *
@@ -4733,6 +4852,9 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     /* Read before the displayed value is rewritten below, which replaces the
      * agg_token Var the predicate looks for */
     bool nested = nested_agg_trackable(constants, q, agg_ref);
+    /* The value shown, through the tie check of an order-dependent
+     * aggregate */
+    Expr *shown = NULL;
 
     /* Aggregates that return random_variable (sum_rv, avg_rv, and any
      * future RV-returning aggregate) get a different rewrite: instead
@@ -4810,6 +4932,10 @@ static Expr *make_aggregation_expression(const constants_t *constants,
         aggregation_function != F_COUNT_ANY)
       agg->aggfilter = filter;
 
+    /* Built before the value shown is restricted to the database as it is:
+     * the tie check reads the rows of every world. */
+    shown = make_order_check(constants, agg_ref);
+
     /* The value shown is the one plain SQL computes: over the rows that hold
      * in the database as it is, not over those kept only for their
      * provenance (see plain_row_token). */
@@ -4879,7 +5005,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
                     Int32GetDatum(agg_ref->aggtype), false, true);
 
     plus->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
-    plus->args = list_make5(fn, typ, agg_ref, agg,
+    plus->args = list_make5(fn, typ, shown ? shown : (Expr *)agg_ref, agg,
                             makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
                                       BoolGetDatum(is_scalar), false, true));
     plus->location = -1;
@@ -10296,7 +10422,8 @@ static Node *scalar_distinct_mutator(Node *node, void *cx) {
  * its WHERE keeps none, a Var of that row on an outer subquery reads an empty
  * row.  The FROM, the WHERE and the aggregates without @c DISTINCT move to one
  * more subquery, and the query is the cross join of these subqueries, without
- * aggregation.
+ * aggregation.  A @c HAVING, which filters the one row, becomes the
+ * @c WHERE of that cross join.
  */
 static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
   scalar_distinct_ctx c;
@@ -10311,6 +10438,8 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     te->expr = (Expr *)scalar_distinct_mutator((Node *)te->expr, &c);
   }
+  if (q->havingQual != NULL)
+    q->havingQual = scalar_distinct_mutator(q->havingQual, &c);
 
   foreach (lc, q->jointree->fromlist) {
     Node *item = (Node *)lfirst(lc);
@@ -10349,6 +10478,9 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
       colnames = lappend(colnames, makeString(pstrdup(name)));
     }
     o->hasAggs = true;
+    /* One level deeper than the query it comes from: its references to the
+     * queries around (a correlated subquery) reach one level further. */
+    IncrementVarSublevelsUp((Node *)o, 1, 1);
 
     rte->rtekind = RTE_SUBQUERY;
     rte->subquery = o;
@@ -10370,7 +10502,8 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
 #endif
 
   q->rtable = new_rtable;
-  q->jointree = makeFromExpr(from, NULL);
+  q->jointree = makeFromExpr(from, q->havingQual);
+  q->havingQual = NULL;
   q->hasAggs = false;
 }
 
@@ -10686,9 +10819,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 
       /* A query without GROUP BY returns one row, even when its WHERE keeps
        * none: the columns of the outer subqueries would then be read from an
-       * empty row.  The query becomes a cross join of one-row subqueries. */
+       * empty row (PostgreSQL leaves that row's values undefined: a token
+       * read there was garbage).  The query becomes a cross join of one-row
+       * subqueries, its HAVING the WHERE of that join. */
       if (q->groupClause == NIL && q->groupingSets == NIL &&
-          q->havingQual == NULL && !q->hasSubLinks)
+          !q->hasSubLinks)
         scalar_distinct_as_cross_join(q, rtable_base, n_aggs);
 
       return q;
@@ -11876,6 +12011,26 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
  * counts peer groups, and which groups are present varies); @c ROWS frames
  * only when they span the whole partition.
  */
+/**
+ * @brief Whether a frame is @c GROUPS @c BETWEEN @c UNBOUNDED @c PRECEDING
+ *        @c AND @c 1 @c PRECEDING: the rows strictly before the current
+ *        row's peers, those whose ordering value is below the current one's
+ *        in every world (see @c set_before_peers_frame).
+ */
+static bool frame_strictly_before_peers(const WindowClause *wc) {
+#ifdef FRAMEOPTION_GROUPS
+  int fo = wc->frameOptions;
+  return (fo & FRAMEOPTION_GROUPS) &&
+         (fo & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
+         (fo & FRAMEOPTION_END_OFFSET_PRECEDING) &&
+         wc->endOffset != NULL && IsA(wc->endOffset, Const) &&
+         !((Const *)wc->endOffset)->constisnull &&
+         DatumGetInt64(((Const *)wc->endOffset)->constvalue) == 1;
+#else
+  return false;
+#endif
+}
+
 static bool window_frame_by_values(const WindowClause *wc) {
   int fo = wc->frameOptions;
   bool whole = (fo & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
@@ -11887,7 +12042,8 @@ static bool window_frame_by_values(const WindowClause *wc) {
     return true;
 #ifdef FRAMEOPTION_GROUPS
   if (fo & FRAMEOPTION_GROUPS)
-    return !(fo & (FRAMEOPTION_START_OFFSET | FRAMEOPTION_END_OFFSET));
+    return !(fo & (FRAMEOPTION_START_OFFSET | FRAMEOPTION_END_OFFSET)) ||
+           frame_strictly_before_peers(wc);
 #endif
   return false;
 }
@@ -12024,6 +12180,40 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
 }
 
 /**
+ * @brief Give @p frame the rows strictly before the current row's peers.
+ *
+ * That is @c RANGE @c BETWEEN @c UNBOUNDED @c PRECEDING @c AND @c CURRENT
+ * @c ROW @c EXCLUDE @c GROUP, but PostgreSQL recomputes a frame with an
+ * exclusion from scratch for every row: quadratic in the partition, with the
+ * arguments of the aggregate (gate builders, @c plain_truth) evaluated again
+ * each time, which took a minute over 870 rows.  Where the window is ordered,
+ * the same rows are @c GROUPS @c BETWEEN @c UNBOUNDED @c PRECEDING @c AND
+ * @c 1 @c PRECEDING, whose start does not move: aggregated incrementally,
+ * each row once.  Without @c ORDER @c BY, every row is a peer and the frame
+ * is empty either way.
+ */
+static void set_before_peers_frame(WindowClause *frame) {
+  if (frame->orderClause != NIL) {
+    frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_GROUPS |
+                          FRAMEOPTION_BETWEEN |
+                          FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+                          FRAMEOPTION_END_OFFSET_PRECEDING;
+    frame->startOffset = NULL;
+    frame->endOffset = (Node *)makeConst(INT8OID, -1, InvalidOid,
+                                         sizeof(int64), Int64GetDatum(1),
+                                         false, FLOAT8PASSBYVAL);
+  } else {
+    frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
+                          FRAMEOPTION_BETWEEN |
+                          FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+                          FRAMEOPTION_END_CURRENT_ROW |
+                          FRAMEOPTION_EXCLUDE_GROUP;
+    frame->startOffset = NULL;
+    frame->endOffset = NULL;
+  }
+}
+
+/**
  * @brief The number of rows strictly before the current one, as the
  *        aggregate @c count(*) over a window.
  *
@@ -12051,12 +12241,7 @@ static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
   frame = (WindowClause *)copyObject(wc);
   frame->name = NULL;
   frame->refname = NULL;
-  frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
-                        FRAMEOPTION_BETWEEN |
-                        FRAMEOPTION_START_UNBOUNDED_PRECEDING |
-                        FRAMEOPTION_END_CURRENT_ROW | FRAMEOPTION_EXCLUDE_GROUP;
-  frame->startOffset = NULL;
-  frame->endOffset = NULL;
+  set_before_peers_frame(frame);
   frame->winref = winref + 1;
   q->windowClause = lappend(q->windowClause, frame);
 
@@ -12071,6 +12256,181 @@ static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
   count->winagg = true;
   count->location = wf->location;
   return count;
+}
+
+/**
+ * @brief Append to @p q a copy of the window of @p wf whose frame is the
+ *        peers of the current row, and return its @c winref (0 if none).
+ */
+static Index peers_window(Query *q, WindowFunc *wf) {
+  WindowClause *wc = window_clause_of(q, wf->winref);
+  WindowClause *frame;
+  Index winref = 0;
+  ListCell *lc;
+
+  if (wc == NULL)
+    return 0;
+  foreach (lc, q->windowClause)
+    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+  frame = (WindowClause *)copyObject(wc);
+  frame->name = NULL;
+  frame->refname = NULL;
+  frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
+                        FRAMEOPTION_BETWEEN |
+                        FRAMEOPTION_START_CURRENT_ROW |
+                        FRAMEOPTION_END_CURRENT_ROW;
+  frame->startOffset = NULL;
+  frame->endOffset = NULL;
+  frame->winref = winref + 1;
+  q->windowClause = lappend(q->windowClause, frame);
+  return frame->winref;
+}
+
+/**
+ * @brief Whether the current row ties on the @c ORDER @c BY of @p wf with
+ *        another row of its partition, as @c "count(*) > 1" over its peers.
+ *
+ * Counted over every row of the partition, those absent from the database
+ * as it is included: a tie there leaves the row number undetermined in the
+ * worlds where both rows are present.  Without @c ORDER @c BY, every row of
+ * the partition is a peer.
+ */
+static Expr *peers_in_any_world(Query *q, WindowFunc *wf) {
+  Index winref = peers_window(q, wf);
+  WindowFunc *count;
+  Oid gt;
+
+  if (winref == 0)
+    return (Expr *)makeBoolConst(false, false);
+  count = makeNode(WindowFunc);
+  count->winfnoid = F_COUNT_;
+  count->wintype = INT8OID;
+  count->winref = winref;
+  count->winstar = true;
+  count->winagg = true;
+  count->location = -1;
+  gt = OpernameGetOprid(list_make1(makeString(">")), INT8OID, INT8OID);
+  return make_opclause(gt, BOOLOID, false, (Expr *)count,
+                       (Expr *)makeConst(INT8OID, -1, InvalidOid,
+                                         sizeof(int64), Int64GetDatum(1),
+                                         false, FLOAT8PASSBYVAL),
+                       InvalidOid, InvalidOid);
+}
+
+/**
+ * @brief An untracked window function @p wf, with a warning where the order
+ *        it reads is not determined, or @p wf itself.
+ *
+ * @c lag and @c lead read the rows strictly before or after, which the
+ * order leaves open wherever two rows of the partition tie on it: like
+ * @c row_number, any peers.  @c first_value, @c last_value and
+ * @c nth_value over a frame determined by values (@c RANGE, @c GROUPS, the
+ * whole partition) read a determined set of rows, in an order open only
+ * among peers: they are determined where peers have the same value of what
+ * is read.  Both are checked over every row of the partition, those absent
+ * from the database as it is included.  Over a @c ROWS frame other than the
+ * whole partition, the frame itself is not determined: left as it is.
+ */
+static Node *window_order_check(const constants_t *constants, Query *q,
+                                WindowFunc *wf) {
+  char *name;
+  Expr *determined = NULL;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      wf->winfnoid >= FirstNormalObjectId ||
+      (name = get_func_name(wf->winfnoid)) == NULL)
+    return (Node *)wf;
+  if (strcmp(name, "lag") == 0 || strcmp(name, "lead") == 0) {
+    determined = makeBoolExpr(NOT_EXPR,
+                              list_make1(peers_in_any_world(q, wf)), -1);
+  } else if (strcmp(name, "first_value") == 0 ||
+             strcmp(name, "last_value") == 0 ||
+             strcmp(name, "nth_value") == 0) {
+    WindowClause *wc = window_clause_of(q, wf->winref);
+    Index winref;
+    WindowFunc *chk;
+
+    if (wc == NULL || wf->args == NIL ||
+        ((wc->frameOptions & FRAMEOPTION_ROWS) &&
+         !((wc->frameOptions & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
+           (wc->frameOptions & FRAMEOPTION_END_UNBOUNDED_FOLLOWING))))
+      return (Node *)wf;
+    winref = peers_window(q, wf);
+    if (winref == 0)
+      return (Node *)wf;
+    chk = makeNode(WindowFunc);
+    chk->winfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+    chk->wintype = BOOLOID;
+    chk->inputcollid = wf->inputcollid;
+    chk->args = list_make2(makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                                     Int32GetDatum(1), false, true),
+                           copyObject(linitial(wf->args)));
+    chk->winref = winref;
+    chk->winagg = true;
+    chk->location = -1;
+    determined = (Expr *)chk;
+  }
+  pfree(name);
+  if (determined == NULL)
+    return (Node *)wf;
+  return (Node *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              wf->wintype,
+                              list_make3(wf, determined,
+                                         makeBoolConst(true, false)),
+                              wf->wincollid, InvalidOid, COERCE_EXPLICIT_CALL);
+}
+
+/**
+ * @brief The tracked window aggregate @p e of @p wf, an order-dependent one
+ *        (@c array_agg, @c string_agg, ...), with a warning where the order
+ *        of its frame is not determined.
+ *
+ * Its frame is read in the order of the window, open only among peers:
+ * determined where peers have the same value of what is aggregated, checked
+ * over every row of the partition.
+ */
+static Expr *window_aggregate_order_check(const constants_t *constants,
+                                          Query *q, WindowFunc *wf, Expr *e) {
+  Index winref;
+  WindowFunc *chk;
+  List *args;
+  ListCell *lc;
+
+  if (!OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
+      !OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
+      wf->args == NIL || (winref = peers_window(q, wf)) == 0)
+    return e;
+  args = list_make1(makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                              Int32GetDatum(list_length(wf->args)), false,
+                              true));
+  foreach (lc, wf->args)
+    args = lappend(args, copyObject(lfirst(lc)));
+  chk = makeNode(WindowFunc);
+  chk->winfnoid = constants->OID_FUNCTION_ORDER_DETERMINED;
+  chk->wintype = BOOLOID;
+  chk->inputcollid = wf->inputcollid;
+  chk->args = args;
+  chk->aggfilter = (Expr *)copyObject(wf->aggfilter);
+  chk->winref = winref;
+  chk->winagg = true;
+  chk->location = -1;
+  return (Expr *)makeFuncExpr(constants->OID_FUNCTION_ORDER_CHECKED,
+                              exprType((Node *)e),
+                              list_make2(e, chk), InvalidOid, InvalidOid,
+                              COERCE_EXPLICIT_CALL);
+}
+
+/** @brief Walker: the first @c WindowFunc in a tree, into @p cx (a
+ *  @c WindowFunc **). */
+static bool find_window_func_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, WindowFunc)) {
+    *(WindowFunc **)cx = (WindowFunc *)node;
+    return true;
+  }
+  return expression_tree_walker(node, find_window_func_walker, cx);
 }
 
 /** @brief Context for @c window_aggregation_mutator. */
@@ -12295,7 +12655,8 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
         FuncExpr *check = makeNode(FuncExpr);
         check->funcid = c->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK;
         check->funcresulttype = c->constants->OID_TYPE_AGG_TOKEN;
-        check->args = list_make2(e, actual_row_number(c, wf));
+        check->args = list_make3(e, actual_row_number(c, wf),
+                                 peers_in_any_world(c->q, wf));
         check->location = -1;
         e = (Expr *)check;
       }
@@ -12304,8 +12665,10 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
                                              c->prov_atts);
     if (e == NULL) {
       c->untracked = true;
-      return node;
+      return window_order_check(c->constants, c->q, wf);
     }
+    if (wf->winagg && aggregate_order_dependent(wf->winfnoid))
+      e = window_aggregate_order_check(c->constants, c->q, wf, e);
     return (Node *)e;
   }
   return expression_tree_mutator(node, window_aggregation_mutator, ctx);
@@ -12342,6 +12705,27 @@ static bool windowfunc_outside_plain_walker(Node *node, void *cx) {
   return expression_tree_walker(node, windowfunc_outside_plain_walker, cx);
 }
 
+/**
+ * @brief Mutator: each @c ntile_as_rank check, whose bucket is left
+ *        untracked, back to PostgreSQL's @c ntile its second argument holds.
+ */
+static Node *strip_ntile_checks_mutator(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, FuncExpr) &&
+      OidIsValid(constants->OID_FUNCTION_NTILE_AS_RANK) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_NTILE_AS_RANK &&
+      list_length(((FuncExpr *)node)->args) == 2) {
+    WindowFunc *orig = NULL;
+    find_window_func_walker((Node *)lsecond(((FuncExpr *)node)->args), &orig);
+    if (orig != NULL)
+      return (Node *)copyObject(orig);
+  }
+  return expression_tree_mutator(node, strip_ntile_checks_mutator, cx);
+}
+
 static bool replace_window_aggregations(const constants_t *constants,
                                         Query *q, List *prov_atts) {
   window_aggregation_context ctx = {constants, q, prov_atts, false};
@@ -12360,8 +12744,13 @@ static bool replace_window_aggregations(const constants_t *constants,
     foreach (lk, keys) {
       TargetEntry *te = get_sortgroupclause_tle(
         (SortGroupClause *)lfirst(lk), q->targetList);
-      if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
+      if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
+        /* The windows stay as they are: the check an ntile was rewritten
+         * into would read the integer counts as agg_tokens. */
+        q->targetList = (List *)strip_ntile_checks_mutator(
+          (Node *)q->targetList, (void *)constants);
         return false;
+      }
     }
   }
 
@@ -14792,7 +15181,8 @@ static bool window_outside_fragment(Query *q, WindowFunc *wf) {
   return wc != NULL &&
          (wc->frameOptions & (FRAMEOPTION_ROWS | FRAMEOPTION_GROUPS)) &&
          (wc->frameOptions & (FRAMEOPTION_START_OFFSET |
-                              FRAMEOPTION_END_OFFSET));
+                              FRAMEOPTION_END_OFFSET)) &&
+         !frame_strictly_before_peers(wc);
 }
 
 /** @brief Context for @c window_kinds_walker. */
@@ -16269,6 +16659,7 @@ typedef struct oj_renum_ctx {
   int npairs;
   Index from[2];
   Index to[2];
+  int sublevels_up;   ///< Depth of the sublink being walked (0 outside)
 } oj_renum_ctx;
 
 static Node *oj_renum_mut(Node *node, void *cx) {
@@ -16277,7 +16668,7 @@ static Node *oj_renum_mut(Node *node, void *cx) {
     return NULL;
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    if (v->varlevelsup == 0) {
+    if (v->varlevelsup == (Index) c->sublevels_up) {
       int i;
       for (i = 0; i < c->npairs; ++i)
         if (v->varno == c->from[i]) {
@@ -16294,6 +16685,15 @@ static Node *oj_renum_mut(Node *node, void *cx) {
         }
     }
     return node;
+  }
+  /* A sublink of the condition (NOT IN, EXISTS) reads the two relations one
+   * level up: renumber those references too. */
+  if (IsA(node, Query)) {
+    Query *res;
+    c->sublevels_up++;
+    res = query_tree_mutator((Query *)node, oj_renum_mut, cx, 0);
+    c->sublevels_up--;
+    return (Node *)res;
   }
   return expression_tree_mutator(node, oj_renum_mut, cx);
 }
@@ -16356,6 +16756,7 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
   rctx.npairs = 2;
   rctx.from[0] = R_idx; rctx.to[0] = 1;
   rctx.from[1] = S_idx; rctx.to[1] = 2;
+  rctx.sublevels_up = 0;
   theta2 = oj_renum_mut(copyObject(theta), &rctx);
   IncrementVarSublevelsUp(theta2, depth, 1);
 
@@ -16370,6 +16771,9 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
   je->rtindex = 3;
   fe->fromlist = list_make1(je);
   sub->jointree = fe;
+  /* Without the flag the planner leaves a sublink of the condition
+   * unplanned, and fails costing it. */
+  sub->hasSubLinks = checkExprHasSubLink(theta2);
 
   if (select_r)
     for (i = 0; i < Rc->n; ++i) {
@@ -30797,17 +31201,16 @@ static Index partition_only_winref(Query *q, WindowClause *wc) {
  * with the current row's last peer, less the current row and its peers.
  */
 static Index before_peers_winref(Query *q, WindowClause *wc) {
-  const int fo = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
-                 FRAMEOPTION_BETWEEN |
-                 FRAMEOPTION_START_UNBOUNDED_PRECEDING |
-                 FRAMEOPTION_END_CURRENT_ROW | FRAMEOPTION_EXCLUDE_GROUP;
   ListCell *lc;
-  WindowClause *w1;
+  WindowClause *w1, model;
   Index maxref = 0;
 
+  model.orderClause = wc->orderClause;
+  set_before_peers_frame(&model);
   foreach (lc, q->windowClause) {
     WindowClause *c = (WindowClause *)lfirst(lc);
-    if (c->frameOptions == fo &&
+    if (c->frameOptions == model.frameOptions &&
+        equal(c->endOffset, model.endOffset) &&
         equal(c->partitionClause, wc->partitionClause) &&
         equal(c->orderClause, wc->orderClause))
       return c->winref;
@@ -30818,9 +31221,7 @@ static Index before_peers_winref(Query *q, WindowClause *wc) {
   w1->name = NULL;
   w1->refname = NULL;
   w1->copiedOrder = false;
-  w1->frameOptions = fo;
-  w1->startOffset = NULL;
-  w1->endOffset = NULL;
+  set_before_peers_frame(w1);
   w1->winref = maxref + 1;
   q->windowClause = lappend(q->windowClause, w1);
   return w1->winref;

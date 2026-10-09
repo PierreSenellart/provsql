@@ -140,9 +140,9 @@ void check_acceptance_or_throw(std::size_t accepted, unsigned attempted,
 
 /* Sample covariance and the two sample variances from one coupled pass.
  * Population (1/n) normalisation, matching the central-moment MC
- * convention in Expectation.cpp.  Pairs with a NaN member (sampling-
- * undefined worlds, e.g. empty-group aggregates) are excluded; an
- * all-NaN pass yields NaN throughout. */
+ * convention in Expectation.cpp.  Pairs with a member that has no value
+ * (e.g. an empty-group aggregate) are excluded; with none left, the
+ * statistics have no value (NoValueException). */
 struct CovStats {
   double cov;
   double var_x;
@@ -154,7 +154,7 @@ CovStats mcCovStats(const GenericCircuit &gc, gate_t x, gate_t y,
 {
   const unsigned n = mc_samples_or_throw(what);
 
-  std::vector<double> xs, ys;
+  std::vector<std::optional<double>> xs, ys;
   if (event) {
     auto cs = monteCarloConditionalScalarPairSamples(gc, x, y, *event, n);
     check_acceptance_or_throw(cs.xs.size(), cs.attempted, what);
@@ -166,24 +166,24 @@ CovStats mcCovStats(const GenericCircuit &gc, gate_t x, gate_t y,
 
   double sum_x = 0.0, sum_y = 0.0;
   std::size_t m = 0;
+  /* A draw where either has no value is a missing observation of the pair;
+   * a NaN (in the data) is a value and propagates. */
   for (std::size_t i = 0; i < xs.size(); ++i) {
-    if (std::isnan(xs[i]) || std::isnan(ys[i])) continue;
-    sum_x += xs[i];
-    sum_y += ys[i];
+    if (!xs[i] || !ys[i]) continue;
+    sum_x += *xs[i];
+    sum_y += *ys[i];
     ++m;
   }
-  if (m == 0) {
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    return {nan, nan, nan};
-  }
+  if (m == 0)
+    throw NoValueException(what);
   const double mean_x = sum_x / static_cast<double>(m);
   const double mean_y = sum_y / static_cast<double>(m);
 
   double cov = 0.0, var_x = 0.0, var_y = 0.0;
   for (std::size_t i = 0; i < xs.size(); ++i) {
-    if (std::isnan(xs[i]) || std::isnan(ys[i])) continue;
-    const double dx = xs[i] - mean_x;
-    const double dy = ys[i] - mean_y;
+    if (!xs[i] || !ys[i]) continue;
+    const double dx = *xs[i] - mean_x;
+    const double dy = *ys[i] - mean_y;
     cov += dx * dy;
     var_x += dx * dx;
     var_y += dy * dy;
@@ -342,6 +342,10 @@ Datum rv_covariance(PG_FUNCTION_ARGS)
 
     return Float8GetDatum(
       provsql::computeCovariance(gc, gates[0], gates[1], event_opt));
+  } catch (const provsql::NoValueException &) {
+    /* Defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_covariance: %s", e.what());
@@ -378,6 +382,10 @@ Datum rv_correlation(PG_FUNCTION_ARGS)
     if (!rho)
       PG_RETURN_NULL();
     return Float8GetDatum(*rho);
+  } catch (const provsql::NoValueException &) {
+    /* Defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch (const std::exception &e) {
     provsql_cancel_if_interrupted();
     provsql_error("rv_correlation: %s", e.what());

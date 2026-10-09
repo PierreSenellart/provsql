@@ -7370,8 +7370,8 @@ CREATE AGGREGATE min(random_variable) (
 -- The moment statistics are built from indicator-weighted power sums with
 -- existing gate_arith opcodes (e.g. covar_pop = SXY/N - (SX/N)(SY/N)); a
 -- world where the statistic is undefined (N = 0, or N = 1 for the sample
--- forms) evaluates to NaN, the established undefined-world convention the
--- moment estimators skip.  percentile_cont is the one gate the arithmetic
+-- forms) divides by zero, which leaves the world without a value, as SQL
+-- gives NULL there; the moment estimators skip such worlds.  percentile_cont is the one gate the arithmetic
 -- cannot express: it mints the PROVSQL_ARITH_PERCENTILE gate_arith
 -- (interleaved [ind_1, x_1, ...] wires, fraction in extra) that the Monte
 -- Carlo sampler evaluates by sorting each draw's present values and
@@ -7507,8 +7507,8 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Sample-variance gate @f$(SXX - SX^2/N) / (N - 1)@f$ from the
- *  power-sum tokens (NaN in a world with @f$N \le 1@f$, the undefined-world
- *  convention). */
+ *  power-sum tokens (no value in a world with @f$N \le 1@f$, where it
+ *  divides by zero, as SQL gives NULL there). */
 CREATE OR REPLACE FUNCTION rv_stat_var_samp_token(
   n_tok uuid, s_tok uuid, ss_tok uuid)
   RETURNS uuid AS
@@ -7590,8 +7590,8 @@ $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
 
 /** @brief Final function for @c corr(random_variable, random_variable):
  *  @f$\mathrm{covar\_pop} / \sqrt{\max(v_x v_y, 0)}@f$ (a zero-variance
- *  world divides to @f$\pm\infty@f$ / NaN, the undefined-world convention,
- *  matching SQL's NULL for a zero-stddev input). */
+ *  world divides by zero and has no value, matching SQL's NULL for a
+ *  zero-stddev input). */
 CREATE OR REPLACE FUNCTION corr_rv_ffunc(state uuid[])
   RETURNS random_variable AS
 $$
@@ -7736,7 +7736,7 @@ CREATE AGGREGATE rv_stddev_samp_impl(random_variable, random_variable) (
  * (two percentiles of the same group at different fractions are distinct
  * gates).  Per Monte Carlo draw, the sampler collects the values whose
  * indicator draws 1, sorts them, and linearly interpolates at the
- * fraction; a draw with no present row is NaN (undefined world).
+ * fraction; a draw with no present value has no value (SQL's NULL).
  */
 CREATE OR REPLACE FUNCTION rv_percentile_make(fraction double precision,
                                               pairs uuid[])
@@ -7982,10 +7982,54 @@ CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUI
  * @param rank the agg_token of the rank of the row
  * @param row_number the row number of the row among those of the database
  *        as it is, or NULL for a row absent from it (no check then)
+ * @param tied whether the row ties on the <tt>ORDER BY</tt> with another row
+ *        of any world, which warns as well
  */
-CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
+CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint,
+                                              tied boolean DEFAULT false)
   RETURNS agg_token
   AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE PARALLEL SAFE;
+
+/** @brief Transition function of order_determined (internal) */
+CREATE OR REPLACE FUNCTION order_determined_transfn(internal, integer, VARIADIC "any")
+  RETURNS internal
+  AS 'provsql','order_determined_transfn' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Final function of order_determined (internal) */
+CREATE OR REPLACE FUNCTION order_determined_finalfn(internal)
+  RETURNS boolean
+  AS 'provsql','order_determined_finalfn' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Whether an order-dependent aggregate reads its rows in an order the
+ *        query determines (internal)
+ *
+ * Called by the query rewriter beside @c array_agg, @c string_agg, the
+ * @c json_agg family and @c xmlagg over provenance-tracked relations, with
+ * the aggregate's own arguments (the first @p nvals ones) and @c ORDER
+ * @c BY, over every row of the group, those present only in other worlds
+ * included: false when two rows tie on the @c ORDER @c BY (or there is
+ * none) with different values.
+ */
+CREATE AGGREGATE order_determined(nvals integer, VARIADIC "any") (
+  SFUNC = order_determined_transfn,
+  STYPE = internal,
+  FINALFUNC = order_determined_finalfn
+);
+
+/**
+ * @brief The value of an order-dependent aggregate, with a warning where its
+ *        order is not determined (internal)
+ *
+ * Returns @p val, with a warning, once per statement, when @p determined
+ * (from @c order_determined) is false: the order of the rows in the
+ * database as it is is the one read in every world.  @p is_window for a
+ * window function (@c lag, @c first_value, ...), which warns as such.
+ */
+CREATE OR REPLACE FUNCTION order_checked(val anyelement, determined boolean,
+                                         is_window boolean DEFAULT false)
+  RETURNS anyelement
+  AS 'provsql','order_checked' LANGUAGE C VOLATILE PARALLEL SAFE;
 
 /**
  * @brief The bucket of a row read over its rank, for @c ntile() (internal)
@@ -8279,7 +8323,8 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
  * The variance / raw-moment / central-moment SQL functions need an
  * extra @p k integer argument that does not fit that dispatcher's
  * signature, so they go through this dedicated entry point.  Returns
- * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE.
+ * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE; NULL
+ * when the value is defined in no world.
  */
 CREATE OR REPLACE FUNCTION rv_moment(
   token uuid, k integer, central boolean,
@@ -11907,6 +11952,196 @@ BEGIN
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over a subset semiring, as a bitmask (internal)
+ *
+ * Bit @f$i@f$ stands for the label of rank @f$i@f$ of the enum type of
+ * @p element_one; bit 63 for the unrestricted element of @c consent.
+ * @p semiring is @c subset, @c clearance or @c consent.
+ */
+CREATE OR REPLACE FUNCTION subset_evaluate(
+  token UUID, token2value regclass, semiring TEXT, element_one ANYENUM)
+  RETURNS bigint AS
+  'provsql', 'provenance_evaluate_compiled' LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief The labels of the enum type of @p element_one a bitmask holds (internal) */
+CREATE OR REPLACE FUNCTION subset_labels(mask bigint, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief The settling level of a bitmask of clearance levels (internal) */
+CREATE OR REPLACE FUNCTION subset_settling(mask bigint, element_one ANYENUM)
+  RETURNS ANYENUM AS
+  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Membership of a label, given as text, in a subset annotation (internal)
+ *
+ * The enum type is that of the @c value column of @p token2value.
+ */
+CREATE OR REPLACE FUNCTION subset_member(
+  token UUID, token2value regclass, semiring TEXT, label TEXT)
+  RETURNS boolean AS
+  'provsql', 'subset_member' LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the subsets of the labels of a user enum
+ *
+ * The powerset Boolean algebra: alternatives combine by union, joins by
+ * intersection, negation (@c EXCEPT, @c NOT @c EXISTS) by difference.
+ * A mapping value is a set of labels (an array of the enum), or a single
+ * label standing for itself.  The result is the set of labels whose world
+ * contains the tuple.  The third argument is a sample value of the enum,
+ * used only for type inference.  At most 63 labels.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to labels or arrays of labels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION sr_subset(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT provsql.subset_labels(
+    provsql.subset_evaluate(token, token2value, 'subset', element_one),
+    element_one);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance as the set of clearance levels a tuple is visible at
+ *
+ * The labels of the enum are clearance levels, in increasing order.  A
+ * single level in the mapping makes a tuple visible at that level and every
+ * one above it; an array is an arbitrary set of levels (compartments).  The
+ * result is the set of levels at which the query, run over the tuples
+ * visible at that level, returns the tuple: unlike :sqlfunc:`sr_minmax`,
+ * negation is exact, so a tuple can be visible at a level and not at a
+ * higher one.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION sr_clearance(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT provsql.subset_labels(
+    provsql.subset_evaluate(token, token2value, 'clearance', element_one),
+    element_one);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Whether a tuple is visible at a clearance level
+ *
+ * Membership of @p level in :sqlfunc:`sr_clearance`; the level is given as
+ * text, of the enum type of the @c value column of the mapping.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param level The clearance level.
+ */
+CREATE OR REPLACE FUNCTION visible_at(
+  token UUID, token2value regclass, level TEXT)
+  RETURNS boolean AS
+$$
+  SELECT provsql.subset_member(token, token2value, 'clearance', level);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The level from which the visibility of a tuple no longer changes
+ *
+ * The lowest clearance level @c settles_at such that the tuple is visible
+ * at every level from it to the top, or at none of them; @c visible_at_top
+ * says which.  Meaningful for hierarchical levels.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to levels or arrays of levels.
+ * @param element_one Sample value of the carrier enum (any value works).
+ * @param settles_at The settling level.
+ * @param visible_at_top Whether the tuple is visible at the top level.
+ */
+CREATE OR REPLACE FUNCTION clearance_settling(
+  token UUID, token2value regclass, element_one ANYENUM,
+  OUT settles_at ANYENUM, OUT visible_at_top boolean) AS
+$$
+  SELECT provsql.subset_settling(m, element_one),
+         enum_last(element_one) = ANY(provsql.subset_labels(m, element_one))
+    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over consented purposes
+ *
+ * The labels of the enum are purposes; the mapping gives the purposes each
+ * tuple is consented for (a purpose or an array of purposes).  The result
+ * gives the purposes for which the query, run over the tuples consented for
+ * that purpose, returns the tuple, and whether the query over the whole
+ * database (@c unrestricted) returns it.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ * @param purposes The purposes for which the query returns the tuple.
+ * @param unrestricted Whether the query over the whole database returns it.
+ */
+CREATE OR REPLACE FUNCTION sr_consent(
+  token UUID, token2value regclass, element_one ANYENUM,
+  OUT purposes ANYARRAY, OUT unrestricted boolean) AS
+$$
+  SELECT provsql.subset_labels(m, element_one), m < 0
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Whether a tuple may be used for a purpose
+ *
+ * True when the query returns the tuple both over the whole database and
+ * over the tuples consented for @p purpose, given as text, of the enum type
+ * of the @c value column of the mapping.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param purpose The purpose.
+ */
+CREATE OR REPLACE FUNCTION consented_for(
+  token UUID, token2value regclass, purpose TEXT)
+  RETURNS boolean AS
+$$
+  SELECT provsql.subset_member(token, token2value, 'consent', purpose);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The purposes a tuple may be used for
+ *
+ * The purposes for which :sqlfunc:`consented_for` holds: empty when the
+ * query over the whole database does not return the tuple.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION consent_purposes(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT CASE WHEN m < 0 THEN provsql.subset_labels(m, element_one)
+              ELSE provsql.subset_labels(0, element_one) END
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
+/** @brief The purposes for which consent changes the answer
+ *
+ * The purposes whose consented tuples give a different answer about the
+ * tuple than the whole database: the tuple is returned for the purpose but
+ * not over the whole database (only possible through a negation reading a
+ * tuple the purpose was not consented for), or the reverse (the purpose
+ * lacks consent for a tuple the answer needs).
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to purposes or arrays of purposes.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE OR REPLACE FUNCTION consent_conflicts(
+  token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYARRAY AS
+$$
+  SELECT CASE WHEN m < 0 THEN provsql.subset_labels(~m, element_one)
+              ELSE provsql.subset_labels(m, element_one) END
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
 
 /** @} */
 

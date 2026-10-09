@@ -191,13 +191,18 @@ rv_histogram(PG_FUNCTION_ARGS)
               "raise provsql.rv_mc_samples or check that the event is "
               "satisfiable",
               cs.attempted);
-          samples = std::move(cs.accepted);
+          samples = provsql::definedDraws(cs.accepted);
         }
       } else {
-        samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
+        samples = provsql::definedDraws(
+                    provsql::monteCarloScalarSamples(gc, root_gate, N));
       }
       }  /* end: rv_mc_samples > 0 */
 
+      /* A NaN drawn (a NaN in the data) has no place on the axis. */
+      samples.erase(std::remove_if(samples.begin(), samples.end(),
+                                   [](double x) { return std::isnan(x); }),
+                    samples.end());
       if (!samples.empty()) {
         /* Pick the bin range per side: when @c compute_support proves
          * a finite support endpoint we use it verbatim (Uniform / sums

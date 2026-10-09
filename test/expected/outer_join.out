@@ -473,3 +473,37 @@ total|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+c|id|parentid
+both sides|1|1
+both sides|2|
+exists|1|
+exists|2|2
+full not in|1|1
+full not in|2|
+full not in||2
+not in|1|1
+not in|2|
+right in|2|2
+right in||1
+(11 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

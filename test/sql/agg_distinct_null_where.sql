@@ -81,5 +81,35 @@ SELECT remove_provenance('adn_e');
 SELECT 'expected beside DISTINCT' AS q, g,
        round(expected(c)::numeric, 6) AS ec FROM adn_e ORDER BY g;
 
+-- Without GROUP BY, the query is one row even when its WHERE keeps none, and
+-- a HAVING filters that row: an AGG(DISTINCT) beside another aggregate, or
+-- read by the HAVING (as the at-most-one-row check of a scalar subquery with
+-- SELECT DISTINCT is), is read from its own one-row subquery, not from the
+-- empty row of the aggregation (whose values PostgreSQL leaves undefined: a
+-- token read there was garbage).  The rows present are those of SQL.
+CREATE TABLE adn_s AS
+  SELECT 'empty, HAVING holds' AS q, present(provenance()) AS present
+  FROM (SELECT count(DISTINCT v) AS c, sum(w) FROM adn WHERE w > 100
+        HAVING count(DISTINCT v) <= 1) s
+  UNION ALL
+  SELECT 'HAVING fails', present(provenance())
+  FROM (SELECT count(DISTINCT v) AS c, sum(w) FROM adn
+        HAVING count(DISTINCT v) <= 1) s
+  UNION ALL
+  SELECT 'HAVING on another aggregate', present(provenance())
+  FROM (SELECT count(DISTINCT v) AS c FROM adn HAVING sum(w) > 1) s
+  UNION ALL
+  SELECT 'scalar DISTINCT subquery, empty', present(provenance())
+  FROM adn a WHERE a.v = (SELECT DISTINCT b.v FROM adn b WHERE b.w > 100)
+  UNION ALL
+  SELECT 'correlated, empty', present(provenance())
+  FROM adn a
+  WHERE a.v = (SELECT DISTINCT b.v FROM adn b WHERE b.w = a.w AND b.w > 100)
+  UNION ALL
+  SELECT 'correlated, one value', present(provenance())
+  FROM adn a WHERE a.v = (SELECT DISTINCT b.v FROM adn b WHERE b.w = a.w);
+SELECT remove_provenance('adn_s');
+SELECT q, bool_or(present) AS present FROM adn_s GROUP BY q ORDER BY q;
+
 DROP FUNCTION adn_check(text, text);
-DROP TABLE adn, adn_u, adn_h, adn_h2, adn_e;
+DROP TABLE adn, adn_u, adn_h, adn_h2, adn_e, adn_s;

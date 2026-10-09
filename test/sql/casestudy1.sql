@@ -211,6 +211,33 @@ FROM nairobi_token;
 
 DROP TABLE nairobi_token;
 
+-- Step 17: clearance levels of the EXCEPT query of Step 5.  An analyst sees
+-- the agents at or below their level: Nairobi looks single-agent only at
+-- unclassified (Paul hidden), Paris only at restricted (Nancy alone),
+-- Beijing never; sr_minmax reads these as up-sets.  The mapping is rebuilt
+-- since Juma's token changed in Step 16.
+DROP TABLE agents_level;
+SELECT create_provenance_mapping('agents_level', 'agents', 'classification');
+CREATE TABLE result_cs1_clearance AS
+SELECT city,
+    sr_clearance(provenance(), 'agents_level',
+                 'unclassified'::classification_level) AS levels,
+    visible_at(provenance(), 'agents_level', 'unclassified') AS at_unclassified,
+    (clearance_settling(provenance(), 'agents_level',
+                        'unclassified'::classification_level)).*,
+    sr_minmax(provenance(), 'agents_level',
+              'unclassified'::classification_level) AS minmax
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+      JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t;
+SELECT remove_provenance('result_cs1_clearance');
+SELECT * FROM result_cs1_clearance ORDER BY city;
+DROP TABLE result_cs1_clearance;
+
 -- Clean up
 DROP TABLE agents_level;
 DROP TABLE agents_name;

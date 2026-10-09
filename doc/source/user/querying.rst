@@ -170,7 +170,9 @@ The same holds for ``FETCH FIRST``, ``OFFSET``, ``DISTINCT ON`` (the first
 row of each group), groups ranked on an aggregate (see
 :ref:`rank-over-aggregate`), and in subqueries. Where the ``ORDER BY``
 leaves ties, ``LIMIT`` keeps all the tied rows, as ``FETCH … WITH TIES``
-does, and a ``WARNING`` says so.
+does, and a ``WARNING`` says so. Ties are looked for among the rows of every
+world, those absent from the actual data included (a null-padded row, a row
+excluded by ``NOT EXISTS``), even two rows that are never present together.
 
 To keep the truncation of the actual result instead, for instance to look
 at its first rows, write :sqlfunc:`plain`:

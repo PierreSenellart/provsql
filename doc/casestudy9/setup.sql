@@ -9,8 +9,10 @@ CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
 
+DROP TABLE IF EXISTS consent CASCADE;
 DROP TABLE IF EXISTS deal CASCADE;
 DROP TABLE IF EXISTS region CASCADE;
+DROP TYPE IF EXISTS purpose CASCADE;
 
 CREATE TABLE region (
     name   text PRIMARY KEY,
@@ -44,3 +46,25 @@ INSERT INTO deal (id, customer, region, quarter, amount, win_prob) VALUES
     (10, 'Horizon',   'West',  'Q1',  35, 0.8),
     (11, 'Mesa',      'West',  'Q2',  55, 0.6),
     (12, 'Sierra',    'West',  'Q2', 150, 0.2);
+
+-- The purposes each customer consented to the use of their data for
+CREATE TYPE purpose AS ENUM ('forecasting', 'analytics', 'marketing');
+
+CREATE TABLE consent (
+    customer text PRIMARY KEY,
+    purposes purpose[] NOT NULL
+);
+
+INSERT INTO consent (customer, purposes) VALUES
+    ('Arctis',    '{forecasting,analytics,marketing}'),
+    ('Borealis',  '{forecasting,analytics}'),
+    ('Fjordline', '{forecasting}'),
+    ('Glacier',   '{forecasting,analytics,marketing}'),
+    ('Meridian',  '{forecasting,analytics,marketing}'),
+    ('Solstice',  '{forecasting}'),
+    ('Tropica',   '{forecasting,analytics,marketing}'),
+    ('Zenith',    '{forecasting,analytics,marketing}'),
+    ('Canyon',    '{forecasting,analytics,marketing}'),
+    ('Horizon',   '{forecasting,analytics}'),
+    ('Mesa',      '{forecasting,analytics,marketing}'),
+    ('Sierra',    '{forecasting,analytics,marketing}');

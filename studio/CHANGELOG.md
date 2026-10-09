@@ -51,6 +51,10 @@ Requires extension **>= 1.13.0**.
   gates of a recursion over cyclic data are rendered, and every
   arithmetic operator ProvSQL records over aggregates (integer
   division, `floor`, `ceil`, `round`, `abs`, `power`, …) has its glyph.
+- **Subset, clearance and consent semirings.** The evaluation strip
+  offers `subset`, `clearance` and `consent` in its User-enum group, for
+  mappings whose value is an enum or an array of one; a consent result
+  returned for some purposes but not over the whole database says so.
 
 ### Fixes
 

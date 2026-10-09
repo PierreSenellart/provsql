@@ -313,6 +313,9 @@ Semiring evaluation
    "``sr_viterbi``", "", "", "", "", "", "", "", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "", "", "", ""
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", "", ""
+   "``sr_clearance`` / ``visible_at`` / ``clearance_settling``", "", "✓", "", "", "", "", "", "", "", ""
+   "``sr_consent`` / ``consented_for`` / ``consent_conflicts``", "", "", "", "", "", "", "", "", "", "✓"
+   "``sr_subset``", "", "", "", "", "", "", "", "", "", ""
    "``sr_temporal`` / ``sr_interval_num`` / ``sr_interval_int``", "", "", "", "", "✓", "", "", "", "", ""
    "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", "", "", ""
 

@@ -166,7 +166,7 @@ and algorithms are in |cpp|.
 
 - ``semiring/*.h`` -- header-only semiring implementations (Boolean,
   BoolExpr, Counting, Formula, How, IntervalUnion, Lukasiewicz,
-  MinMax, Tropical, Viterbi, Which, Why).
+  MinMax, Subset, Tropical, Viterbi, Which, Why).
 - :cfile:`provenance_evaluate_compiled.cpp` /
   :cfile:`provenance_evaluate_compiled.hpp` -- dispatcher for
   compiled semirings.

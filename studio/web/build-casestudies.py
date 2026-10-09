@@ -14,7 +14,7 @@ passed through unchanged. One case study is skipped: casestudy3 loads a large
 GTFS dataset that must be downloaded separately.
 
 Outputs (git-ignored) into studio/web/casestudies/:
-  <name>.sql       one per database (tutorial, cs1, cs2, cs4, cs5, cs6, cs7)
+  <name>.sql       one per database (tutorial, cs1, cs2, cs4, cs5, cs6, cs7, cs9)
   manifest.json    [{name, file, title}, ...] consumed by studio-boot.js
 """
 import csv
@@ -37,6 +37,7 @@ STUDIES = [
     ("cs5",      "casestudy5", "CS5: Wildlife Photo Archive"),
     ("cs6",      "casestudy6", "CS6: City Air-Quality Sensor Network"),
     ("cs7",      "casestudy7", "CS7: Peer-Review Assignment"),
+    ("cs9",      "casestudy9", "CS9: A Sales Forecast Dashboard"),
 ]
 
 # Notebooks that build their own tables inline (no doc/<dir>/setup.sql): they

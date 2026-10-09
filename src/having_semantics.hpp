@@ -632,13 +632,15 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
            * a fraction -- the world has no value, the reading a divisor of
            * zero gets (see the DIV arm) rather than the error SQL raises
            * there: raising in one world would take every other world's
-           * answer with it. */
+           * answer with it.  A NaN operand (a NaN in the data) is a value,
+           * and gives NaN, as in SQL. */
           double a;
           bool ai;
 
           if (w.empty() || !eval(w[0], world, a, ai)) return false;
+          bool nan_operand = std::isnan(a);
           if (aop == PROVSQL_ARITH_LN) {
-            if (!(a > 0)) return false;
+            if (!nan_operand && !(a > 0)) return false;
             out = std::log(a);
           } else if (aop == PROVSQL_ARITH_EXP) {
             out = std::exp(a);
@@ -647,10 +649,11 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
             bool ei;
 
             if (w.size() != 2 || !eval(w[1], world, e, ei)) return false;
+            nan_operand = nan_operand || std::isnan(e);
             out = std::pow(a, e);
-            if (std::isnan(out)) return false;
+            if (std::isnan(out) && !nan_operand) return false;
           }
-          if (!std::isfinite(out)) return false;
+          if (!nan_operand && !std::isfinite(out)) return false;
           is_int = false;
           return true;
         }
@@ -660,9 +663,11 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
           for (gate_t ch : w) {
             double v; bool vi;
             if (!eval(ch, world, v, vi)) return false;
+            /* In PostgreSQL's order of floats, NaN the greatest. */
             if (first) { r = v; first = false; }
-            else r = (aop == PROVSQL_ARITH_MAX) ? std::max(r, v)
-                                                : std::min(r, v);
+            else if (aop == PROVSQL_ARITH_MAX ? sql_less(r, v)
+                                              : sql_less(v, r))
+              r = v;
             all_int = all_int && vi;
           }
           out = r; is_int = all_int; return true;
@@ -693,11 +698,12 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
 
             if (!eval(w[i], world, ind, ii)) return false;
             if (ind < 0.5) continue;              /* the row is not here */
-            if (!eval(w[i + 1], world, x, xi)) return false;
+            /* A row with no value is skipped, as SQL skips a NULL. */
+            if (!eval(w[i + 1], world, x, xi)) continue;
             members.push_back(x);
           }
           if (members.empty()) return false;
-          std::sort(members.begin(), members.end());
+          std::sort(members.begin(), members.end(), sql_less<double>);
           pos = fraction * static_cast<double>(members.size() - 1);
           lo = static_cast<std::size_t>(pos);
           fp = pos - static_cast<double>(lo);
@@ -761,13 +767,16 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
         if (!eval(atoms[ai].L, world, lv, lint) ||
             !eval(atoms[ai].R, world, rv, rint))
           continue;                                     // NULL comparison: false
+        /* In PostgreSQL's order of floats: NaN equals NaN and is above
+         * every number. */
+        const bool lt = sql_less(lv, rv), gt = sql_less(rv, lv);
         switch (atoms[ai].op) {
-        case ComparisonOperator::EQ: truth[ai] = (lv == rv); break;
-        case ComparisonOperator::NE: truth[ai] = (lv != rv); break;
-        case ComparisonOperator::LT: truth[ai] = (lv <  rv); break;
-        case ComparisonOperator::LE: truth[ai] = (lv <= rv); break;
-        case ComparisonOperator::GT: truth[ai] = (lv >  rv); break;
-        case ComparisonOperator::GE: truth[ai] = (lv >= rv); break;
+        case ComparisonOperator::EQ: truth[ai] = !lt && !gt; break;
+        case ComparisonOperator::NE: truth[ai] = lt || gt; break;
+        case ComparisonOperator::LT: truth[ai] = lt; break;
+        case ComparisonOperator::LE: truth[ai] = !gt; break;
+        case ComparisonOperator::GT: truth[ai] = gt; break;
+        case ComparisonOperator::GE: truth[ai] = !lt; break;
         }
       }
       /* A comparison that is NULL in the world counts as false: exact for a

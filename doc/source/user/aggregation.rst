@@ -68,6 +68,12 @@ over an exact argument (an integer, a ``numeric``), as the arithmetic over
 sums and counts that defines them. Over a floating-point argument, they are
 read as a plain value, with a warning.
 
+``array_agg``, ``string_agg``, the ``json_agg`` family and ``xmlagg`` read
+their rows in order. Where the query does not determine that order (no
+``ORDER BY``, or rows tying on it with different values, in any world), a
+``WARNING`` says so, and the order of the database as it is is read in
+every world.
+
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -79,7 +85,7 @@ both in the same query and over subquery results:
 
     SELECT dept, COUNT(*) * 10 FROM employees GROUP BY dept;
     SELECT dept, SUM(salary) + 1000 FROM employees GROUP BY dept;
-    SELECT dept, string_agg(name, ', ') || ' (team)' FROM employees GROUP BY dept;
+    SELECT dept, string_agg(name, ', ' ORDER BY name) || ' (team)' FROM employees GROUP BY dept;
     SELECT cnt::numeric FROM (SELECT COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, COALESCE(cnt, 0) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, GREATEST(cnt, 3) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
@@ -331,7 +337,7 @@ partition gives each row the probability of being among them:
     WHERE rk <= 3;
 
 ``row_number`` is tracked as ``rank``; where the ``ORDER BY`` of the window
-leaves ties, the value is the rank, and a ``WARNING`` says so.
+leaves ties, in any world, the value is the rank, and a ``WARNING`` says so.
 ``cume_dist()``, ``percent_rank()`` and ``ntile()`` are tracked as well.
 Rows that tie on the ``ORDER BY`` of an ``ntile`` share the bucket of their
 rank, where SQL may split them between two buckets; a ``WARNING`` says so
@@ -340,7 +346,10 @@ when it does.
 The other window functions run with a ``WARNING``, their value untracked:
 ``lag``, ``lead``, ``first_value``, ``last_value``, ``nth_value``,
 ``ROWS`` and ``GROUPS`` frames with an offset, and windows over aggregate
-results other than the ranks below.
+results other than the ranks below. A second ``WARNING`` says when the order
+they read is not determined: ``lag`` and ``lead`` with rows tying on the
+``ORDER BY``; ``first_value``, ``last_value`` and ``nth_value`` with tying
+rows of different values.
 
 The circuit of a running aggregate, whose frame moves with the current
 row, is quadratic in the size of the partition.

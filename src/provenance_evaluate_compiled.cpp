@@ -24,6 +24,9 @@
  *   <tt>int4multirange</tt>; selected by the result type of the call
  * - @c "minmax" / @c "maxmin" → @c semiring::MinMax over any user-defined
  *   PostgreSQL enum type, selected by @c get_typtype() == @c TYPTYPE_ENUM
+ * - @c "subset" / @c "clearance" / @c "consent" → @c semiring::Subset, the
+ *   subsets of the labels of an enum type, returned as a @c bigint bitmask
+ *   (declared in SQL as @c subset_evaluate)
  *
  * Each compiled semiring exposes @c parse_leaf() and (for text-valued
  * carriers) @c to_text() member functions, so this file is purely a
@@ -48,6 +51,9 @@ extern "C" {
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 PG_FUNCTION_INFO_V1(plain_truth);
+PG_FUNCTION_INFO_V1(subset_labels);
+PG_FUNCTION_INFO_V1(subset_settling);
+PG_FUNCTION_INFO_V1(subset_member);
 }
 
 #include <string>
@@ -72,6 +78,7 @@ PG_FUNCTION_INFO_V1(plain_truth);
 #include "semiring/Lukasiewicz.h"
 #include "semiring/IntervalUnion.h"
 #include "semiring/MinMax.h"
+#include "semiring/Subset.h"
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
@@ -109,6 +116,7 @@ Datum to_datum(const semiring::Which &sr, const semiring::which_provenance_t &v)
 Datum to_datum(const semiring::IntervalUnion &, Datum v)  { return v; }
 #endif
 Datum to_datum(const semiring::MinMax &, Datum v)         { return v; }
+Datum to_datum(const semiring::Subset &, uint64_t v)     { return Int64GetDatum(static_cast<int64>(v)); }
 
 namespace {
 
@@ -385,7 +393,12 @@ static Datum provenance_evaluate_compiled_internal
   fixpoint_cache_ctx = semiring + "|" + std::to_string(table) + "|" +
                        std::to_string(type) + "|" +
                        std::to_string(GetCurrentCommandId(false));
-  get_typlenbyval(type, &fixpoint_cache_typlen, &fixpoint_cache_typbyval);
+  /* The subset semirings answer a bigint bitmask, whatever the enum type of
+   * the sample element that selects them. */
+  if(semiring == "subset" || semiring == "clearance" || semiring == "consent")
+    get_typlenbyval(INT8OID, &fixpoint_cache_typlen, &fixpoint_cache_typbyval);
+  else
+    get_typlenbyval(type, &fixpoint_cache_typlen, &fixpoint_cache_typbyval);
   {
     auto it = fixpoint_cache.find(fixpoint_cache_ctx + "|" + uuid2string(token));
     if(it != fixpoint_cache.end())
@@ -472,6 +485,12 @@ static Datum provenance_evaluate_compiled_internal
   if (get_typtype(type) == TYPTYPE_ENUM) {
     if (semiring == "minmax") return pec(constants, c, g, semiring::MinMax(type, false), drop_table);
     if (semiring == "maxmin") return pec(constants, c, g, semiring::MinMax(type, true), drop_table);
+    if (semiring == "subset")
+      return pec(constants, c, g, semiring::Subset(type, semiring::Subset::Mode::SUBSET), drop_table);
+    if (semiring == "clearance")
+      return pec(constants, c, g, semiring::Subset(type, semiring::Subset::Mode::CLEARANCE), drop_table);
+    if (semiring == "consent")
+      return pec(constants, c, g, semiring::Subset(type, semiring::Subset::Mode::CONSENT), drop_table);
     throw CircuitException("Unknown semiring for enum type: " + semiring);
   }
   throw CircuitException("Unknown element type for provenance_evaluate_compiled");
@@ -499,6 +518,10 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
     Oid type = get_fn_expr_argtype(fcinfo->flinfo, 3);
 
     return provenance_evaluate_compiled_internal(*DatumGetUUIDP(token), table, semiring, type);
+  } catch(const provsql::NoValueException &) {
+    /* An expectation defined in no world: SQL's NULL. */
+    provsql_cancel_if_interrupted();
+    PG_RETURN_NULL();
   } catch(const CircuitRefusal &r) {
     provsql_cancel_if_interrupted();
     provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
@@ -680,4 +703,103 @@ Datum plain_truth(PG_FUNCTION_ARGS)
     plain_truth_memo.clear();
   plain_truth_memo.emplace(uuid2string(token), res);
   PG_RETURN_BOOL(res);
+}
+
+/**
+ * @brief The labels a subset bitmask holds, as an array of the enum type of
+ *        @p element_one, in @c enumsortorder.
+ *
+ * Bits above the last label (the unrestricted element of the consent
+ * semiring) are ignored.
+ */
+Datum subset_labels(PG_FUNCTION_ARGS)
+{
+  uint64_t mask = static_cast<uint64_t>(PG_GETARG_INT64(0));
+  Oid enum_oid = get_fn_expr_argtype(fcinfo->flinfo, 1);
+  semiring::EnumLabels labels(enum_oid);
+  std::vector<Datum> elems;
+  for(std::size_t i = 0; i < labels.oids.size() && i < 63; ++i)
+    if(mask & (uint64_t(1) << i))
+      elems.push_back(ObjectIdGetDatum(labels.oids[i]));
+  int16 typlen;
+  bool typbyval;
+  char typalign;
+  get_typlenbyvalalign(enum_oid, &typlen, &typbyval, &typalign);
+  PG_RETURN_ARRAYTYPE_P(construct_array(elems.data(), elems.size(), enum_oid,
+                                        typlen, typbyval, typalign));
+}
+
+/**
+ * @brief The settling level of a set of clearance levels: the lowest level
+ *        from which membership no longer changes up to the top level.
+ *
+ * Settledness is upward-closed, so it always exists; the membership it
+ * settles to is that of the top level.
+ */
+Datum subset_settling(PG_FUNCTION_ARGS)
+{
+  uint64_t mask = static_cast<uint64_t>(PG_GETARG_INT64(0));
+  semiring::EnumLabels labels(get_fn_expr_argtype(fcinfo->flinfo, 1));
+  std::size_t n = labels.oids.size();
+  if(n == 0 || n > 63)
+    provsql_error("subset_settling: an enum type of 1 to 63 labels is required");
+  bool top = mask & (uint64_t(1) << (n - 1));
+  std::size_t l = n - 1;
+  while(l > 0 && static_cast<bool>(mask & (uint64_t(1) << (l - 1))) == top)
+    --l;
+  PG_RETURN_OID(labels.oids[l]);
+}
+
+/**
+ * @brief Membership of a label, given as text, in the subset annotation of
+ *        a token: the predicate behind @c visible_at and @c consented_for.
+ *
+ * The enum type is that of the mapping table's @c value column (or the
+ * element type of an array column), so that the caller writes the label as
+ * a plain string.  In @c consent mode, a purpose holds only where the
+ * unrestricted element does too.
+ */
+Datum subset_member(PG_FUNCTION_ARGS)
+{
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) || PG_ARGISNULL(3))
+    PG_RETURN_NULL();
+  pg_uuid_t token = *PG_GETARG_UUID_P(0);
+  Oid table = PG_GETARG_OID(1);
+  text *m = PG_GETARG_TEXT_P(2);
+  std::string mode(VARDATA(m), VARSIZE(m) - VARHDRSZ);
+  char *label_text = text_to_cstring(PG_GETARG_TEXT_P(3));
+
+  AttrNumber att = get_attnum(table, "value");
+  if(att == InvalidAttrNumber)
+    provsql_error("%s: the mapping has no column named value",
+                  mode == "consent" ? "consented_for" : "visible_at");
+  Oid coltype = get_atttype(table, att);
+  Oid elemtype = get_element_type(coltype);
+  Oid enum_oid = OidIsValid(elemtype) ? elemtype : coltype;
+  if(get_typtype(enum_oid) != TYPTYPE_ENUM)
+    provsql_error("%s: the value column of the mapping is not of an enum type",
+                  mode == "consent" ? "consented_for" : "visible_at");
+
+  Oid in_func, typioparam;
+  getTypeInputInfo(enum_oid, &in_func, &typioparam);
+  Oid label = DatumGetObjectId(OidInputFunctionCall(in_func, label_text,
+                                                    typioparam, -1));
+  semiring::EnumLabels labels(enum_oid);
+  uint64_t bit = uint64_t(1) << labels.rank.at(label);
+
+  uint64_t mask = 0;
+  try {
+    provsql_interrupt_scope interrupt_scope;
+    mask = static_cast<uint64_t>(DatumGetInt64(
+      provenance_evaluate_compiled_internal(token, table, mode, enum_oid)));
+  } catch(const CircuitRefusal &r) {
+    provsql_cancel_if_interrupted();
+    provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
+  } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("subset_member: %s", e.what());
+  }
+  if(mode == "consent")
+    PG_RETURN_BOOL((mask & bit) && (mask & semiring::Subset::UNRESTRICTED));
+  PG_RETURN_BOOL(mask & bit);
 }

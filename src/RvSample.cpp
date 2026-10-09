@@ -81,7 +81,9 @@ rv_sample(PG_FUNCTION_ARGS)
     root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
     const bool conditional = event_opt.has_value();
 
-    std::vector<double> samples;
+    /* A draw is empty where the root has no value in the world drawn (an
+     * aggregate over no row): returned as NULL. */
+    std::vector<std::optional<double>> samples;
     if (conditional) {
       const gate_t event = *event_opt;
       /* Conjugate shape: the posterior is a first-class distribution, so
@@ -110,7 +112,8 @@ rv_sample(PG_FUNCTION_ARGS)
             "rv_sample: evidence is infeasible (no positive-weight draw "
             "among %u Monte Carlo samples); the observations may contradict "
             "the prior, or raise provsql.rv_mc_samples", budget);
-        samples = provsql::posteriorResample(post, n);
+        for (double x : provsql::posteriorResample(post, n))
+          samples.push_back(x);
       } else {
       /* Closed-form truncation fast path: when the root is a bare
        * gate_rv of a supported family (Uniform / Normal / Exponential)
@@ -123,7 +126,7 @@ rv_sample(PG_FUNCTION_ARGS)
       auto direct = provsql::try_truncated_closed_form_sample(
                       gc, root_gate, event, n);
       if (direct) {
-        samples = std::move(*direct);
+        samples.assign(direct->begin(), direct->end());
       } else {
         /* Budget: n / acceptance_floor candidate draws, capped at the
          * GUC ceiling.  acceptance_floor = 0.001 means a 0.1% acceptance
@@ -150,9 +153,9 @@ rv_sample(PG_FUNCTION_ARGS)
       samples = provsql::monteCarloScalarSamples(gc, root_gate, n);
     }
 
-    for (double x : samples) {
-      Datum values[1] = { Float8GetDatum(x) };
-      bool nulls[1] = { false };
+    for (const auto &x : samples) {
+      Datum values[1] = { Float8GetDatum(x ? *x : 0.0) };
+      bool nulls[1] = { !x };
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
   } catch (const std::exception &e) {

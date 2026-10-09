@@ -86,8 +86,10 @@ def test_compiled_registry_has_boolean_rewrite_flag():
     # Mirrors src/semiring/*.h compatibleWithBooleanRewrite() = true.
     # `interval-union` is a registry family entry covering sr_temporal /
     # sr_interval_num / sr_interval_int, all of which delegate to
-    # semiring::IntervalUnion ; all three return true.
-    assert compat == {"boolexpr", "boolean", "formula", "interval-union"}, compat
+    # semiring::IntervalUnion ; all three return true.  `subset`,
+    # `clearance` and `consent` are the three modes of semiring::Subset.
+    assert compat == {"boolexpr", "boolean", "formula", "interval-union",
+                      "subset", "clearance", "consent"}, compat
 
 
 def test_compiled_registry_has_absorptive_flag():
@@ -115,6 +117,7 @@ def test_compiled_registry_has_absorptive_flag():
     assert absorptive == {
         "boolexpr", "boolean", "tropical-nonneg", "viterbi",
         "lukasiewicz", "interval-union", "minmax", "maxmin",
+        "subset", "clearance", "consent",
     }, absorptive
 
 

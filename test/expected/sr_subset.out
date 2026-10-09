@@ -1,0 +1,42 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|levels|at_public|at_confidential|settles_at|visible_at_top|minmax
+Alice|{public,secret,top_secret}|t|f|secret|t|public
+Bob|{public}|t|f|confidential|f|public
+Carol|{public,confidential,secret,top_secret}|t|t|public|t|public
+(3 rows)
+remove_provenance
+
+(1 row)
+name|clearance|subset
+Alice|{public,secret,top_secret}|{public}
+Bob|{public,secret}|{public}
+Carol|{public,confidential,secret,top_secret}|{public}
+(3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|purposes|unrestricted|allowed|conflicts|marketing
+Alice|{analytics,marketing}|f|{}|{analytics,marketing}|f
+Bob|{billing,analytics,marketing}|t|{billing,analytics,marketing}|{}|t
+Carol|{billing}|t|{billing}|{analytics,marketing}|f
+(3 rows)
+ERROR:  invalid input value for enum sub_level: "marketing"
+CONTEXT:  SQL function "visible_at" statement 1

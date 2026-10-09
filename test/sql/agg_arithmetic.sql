@@ -269,7 +269,7 @@ SELECT r, a, f, e FROM agg_arith_fn;
 DROP TABLE agg_arith_fn;
 CREATE TABLE agg_arith_fn AS
   SELECT array_agg(id ORDER BY id) = ARRAY[1,2,3,4,5,6,7] AS eq,
-         cardinality(array_agg(id)) AS n, round((CAST(count(*) AS real) / 3)::numeric, 6) AS f
+         cardinality(array_agg(id ORDER BY id)) AS n, round((CAST(count(*) AS real) / 3)::numeric, 6) AS f
   FROM personnel;
 SELECT remove_provenance('agg_arith_fn');
 SELECT eq, n, f FROM agg_arith_fn;

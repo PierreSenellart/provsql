@@ -125,7 +125,7 @@ typedef enum provsql_arith_op {
                                 ///< the values whose indicator draws 1 are
                                 ///< sorted and linearly interpolated at the
                                 ///< fraction (SQL @c percentile_cont); an
-                                ///< empty draw is NaN (undefined world).
+                                ///< empty draw has no value (SQL NULL).
   PROVSQL_ARITH_INTDIV = 11,///< binary, child0 / child1 truncated toward
                             ///< zero: SQL's division of two integers
   PROVSQL_ARITH_ROUND = 12, ///< child0 rounded half away from zero, to
@@ -245,6 +245,12 @@ typedef struct constants_t {
    *  relations is rewritten into; @c InvalidOid on a schema that predates
    *  it. */
   Oid OID_FUNCTION_ROW_NUMBER_AS_RANK;
+  /** @brief OID of the @c order_determined aggregate, the tie check of an
+   *  order-dependent aggregate; @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_ORDER_DETERMINED;
+  /** @brief OID of @c order_checked, which warns where that check fails;
+   *  @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_ORDER_CHECKED;
   /** @brief OID of @c ntile_as_rank, the tie check of a tracked
    *  @c ntile(); @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_NTILE_AS_RANK;

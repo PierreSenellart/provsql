@@ -119,6 +119,11 @@ typedef struct provsqlSharedState
   char kcmcp_endpoint[256]; ///< Live endpoint of the managed KCMCP server
                             ///< ("" when none): written by the supervisor
                             ///< worker, read by the in-extension client.
+  bool worker_ready;      ///< The MMap worker reads the pipe: set by it under
+                          ///< @c lock once it has taken the replay spool.
+                          ///< False until then, after a crash restart
+                          ///< included, when the worker starts only after
+                          ///< recovery (see @c provsql_replay_store_message).
 } provsqlSharedState;
 
 #endif /* PROVSQL_INPROCESS_STORE */

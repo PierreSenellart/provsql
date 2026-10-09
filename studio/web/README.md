@@ -139,7 +139,7 @@ studio/web/                  # this dir is itself the doc-root
 ### Tutorial and case-study databases
 
 The one IndexedDB-persisted cluster holds a database per tutorial / case
-study (`tutorial`, `cs1`, `cs2`, `cs4`, `cs5`, `cs6`, `cs7`), switchable from
+study (`tutorial`, `cs1`, `cs2`, `cs4`, `cs5`, `cs6`, `cs7`, `cs9`), switchable from
 the connection chip. `build-casestudies.py` derives them from the canonical
 `doc/{tutorial,casestudyN}/setup.sql` scripts, rewriting the psql-only
 `COPY … FROM stdin` / `\copy … CSV` constructs into INSERTs and splitting each

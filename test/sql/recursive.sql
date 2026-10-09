@@ -510,3 +510,64 @@ RESET provsql.active;
 DROP TABLE rmv_t;
 SELECT remove_provenance('rmv');
 DROP TABLE rmv;
+
+-- SEARCH and CYCLE clauses add a path column of type record[], which the
+-- temporary tables the rounds go through cannot hold: refused with the cause
+-- and the way out, a path of the column's own type, which works.
+CREATE TABLE rsc(node int, parent int);
+INSERT INTO rsc VALUES (1, NULL), (2, 1), (3, 1);
+SELECT add_provenance('rsc');
+WITH RECURSIVE t AS (
+  SELECT node, parent FROM rsc WHERE parent IS NULL
+  UNION ALL
+  SELECT n.node, n.parent FROM t JOIN rsc n ON n.parent = t.node)
+SEARCH DEPTH FIRST BY node SET path
+SELECT node FROM t;
+WITH RECURSIVE t AS (
+  SELECT node, parent FROM rsc WHERE parent IS NULL
+  UNION ALL
+  SELECT n.node, n.parent FROM t JOIN rsc n ON n.parent = t.node)
+CYCLE node SET is_cycle USING cpath
+SELECT node FROM t;
+CREATE TABLE rsc_r AS
+  WITH RECURSIVE t AS (
+    SELECT node, ARRAY[node] AS path FROM rsc WHERE parent IS NULL
+    UNION ALL
+    SELECT n.node, t.path || n.node FROM t JOIN rsc n ON n.parent = t.node)
+  SELECT node, path FROM t;
+SELECT remove_provenance('rsc_r');
+SELECT node, path FROM rsc_r ORDER BY path;
+DROP TABLE rsc_r;
+SELECT remove_provenance('rsc');
+DROP TABLE rsc;
+
+-- A sibling CTE of the same WITH read by a term of the recursion: the body,
+-- evaluated on its own, has every sibling inlined, also one that reads no
+-- tracked relation (it was left out: "relation does not exist"), and an
+-- inlined sibling keeps the names of its column list (it lost them: "column
+-- does not exist").  Each answers 1, 2, 3 (1, 3 for the second).
+CREATE TABLE rsib2(x int);
+INSERT INTO rsib2 VALUES (1);
+SELECT add_provenance('rsib2');
+CREATE TABLE rsib2_r AS
+  SELECT 'constant sibling, base term' AS q, y FROM (
+    WITH RECURSIVE ids(a) AS (SELECT 1),
+         r(y) AS (SELECT t.x FROM rsib2 t, ids WHERE t.x = ids.a
+                  UNION ALL SELECT y + 1 FROM r WHERE y < 3)
+    SELECT y FROM r) s
+  UNION ALL
+  SELECT 'constant sibling, recursive term', y FROM (
+    WITH RECURSIVE ids(a) AS (SELECT 2),
+         r(y) AS (SELECT x FROM rsib2 WHERE x = 1
+                  UNION ALL SELECT y + i.a FROM r, ids i WHERE y < 3)
+    SELECT y FROM r) s
+  UNION ALL
+  SELECT 'sibling renaming its column', y FROM (
+    WITH RECURSIVE s(a) AS (SELECT x FROM rsib2 WHERE x = 1),
+         r(y) AS (SELECT a FROM s UNION ALL SELECT y + 1 FROM r WHERE y < 3)
+    SELECT y FROM r) s;
+SELECT remove_provenance('rsib2_r');
+SELECT q, y FROM rsib2_r ORDER BY q, y;
+DROP TABLE rsib2_r;
+SELECT remove_provenance('rsib2');
+DROP TABLE rsib2;

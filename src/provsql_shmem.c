@@ -161,6 +161,7 @@ void provsql_shmem_startup(void)
   provsql_shared_state->pipembr=pipes_m_to_b[0];
   provsql_shared_state->pipembw=pipes_m_to_b[1];
   provsql_shared_state->kcmcp_endpoint[0]='\0';
+  provsql_shared_state->worker_ready=false;
 }
 
 Size provsql_memsize(void)

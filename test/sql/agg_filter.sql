@@ -127,9 +127,10 @@ SELECT remove_provenance('af_t14'); SELECT 'expected' AS q, g, ec, es FROM af_t1
 CREATE TABLE af_g AS SELECT g,
     count(*) AS c, count(*) FILTER (WHERE v>5) AS cf,
     sum(v) AS s, sum(v) FILTER (WHERE v>5) AS sf,
-    string_agg(w, ',') FILTER (WHERE v<>5) AS st,
-    array_agg(w) AS aa, array_agg(w) FILTER (WHERE v<>6) AS aaf,
-    json_agg(w) AS ja
+    string_agg(w, ',' ORDER BY id) FILTER (WHERE v<>5) AS st,
+    array_agg(w ORDER BY id) AS aa,
+    array_agg(w ORDER BY id) FILTER (WHERE v<>6) AS aaf,
+    json_agg(w ORDER BY id) AS ja
   FROM af WHERE g=1 GROUP BY g;
 SELECT remove_provenance('af_g');
 SELECT 'values' AS q, c, cf, s, sf, st, aa, aaf FROM af_g;

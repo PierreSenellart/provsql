@@ -142,7 +142,8 @@ CREATE TABLE wa_shown AS
          count(*) OVER (PARTITION BY g ORDER BY x) AS rc,
          count(y) OVER () AS cy,
          avg(x) OVER (PARTITION BY g) AS a,
-         array_agg(y) OVER (PARTITION BY g) AS ys
+         array_agg(y) OVER (PARTITION BY g ORDER BY id RANGE BETWEEN
+                           UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS ys
   FROM wa;
 SELECT remove_provenance('wa_shown');
 SELECT * FROM wa_shown ORDER BY id;
@@ -152,7 +153,8 @@ SELECT id,
        count(*) OVER (PARTITION BY g ORDER BY x) AS rc,
        count(y) OVER () AS cy,
        avg(x) OVER (PARTITION BY g) AS a,
-       array_agg(y) OVER (PARTITION BY g) AS ys
+       array_agg(y) OVER (PARTITION BY g ORDER BY id RANGE BETWEEN
+                           UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS ys
 FROM wa_plain ORDER BY id;
 
 -- A whole-partition window is, for each row, the aggregate of the GROUP BY on
@@ -330,10 +332,31 @@ DROP FUNCTION wa_report(text, text, text);
 DROP FUNCTION wa_check(text, text);
 DROP TABLE wa, wa_plain;
 
+-- ntile, percent_rank and cume_dist over a window ordered by an aggregate
+-- result: the window is not tracked (a warning), and the values are
+-- PostgreSQL's.  The check an ntile is tracked through read the untracked
+-- counts as agg_tokens, which crashed the backend.
+CREATE TABLE wa_nt(g int, x int);
+INSERT INTO wa_nt VALUES (1,1), (1,2), (2,3), (2,4), (3,5);
+SELECT add_provenance('wa_nt');
+CREATE TABLE wa_ntr AS
+  SELECT g, ntile(2) OVER (ORDER BY count(*), g) AS nt,
+         percent_rank() OVER (ORDER BY sum(x)) AS pr,
+         cume_dist() OVER (ORDER BY sum(x)) AS cd
+  FROM wa_nt GROUP BY g;
+SELECT remove_provenance('wa_ntr');
+SELECT g, nt, round(pr::numeric, 4) AS pr, round(cd::numeric, 4) AS cd
+FROM wa_ntr ORDER BY g;
+DROP TABLE wa_ntr;
+SELECT remove_provenance('wa_nt');
+DROP TABLE wa_nt;
+
 -- A window aggregate over an outer join: the null-padded row is kept for the
 -- world where the right row is absent, and the value shown counts only the
 -- rows of the database as it is, as plain SQL does (1, not 2).  The row
--- number is checked against the rank over those same rows: no warning.
+-- number is tracked as the rank, and ties are looked for among the rows of
+-- every world: the padded row ties with the matched one, although the two
+-- are never present together, so this warns (the check is conservative).
 CREATE TABLE wa_l(id int, g int);
 CREATE TABLE wa_r(id int);
 INSERT INTO wa_l VALUES (1, 7);
