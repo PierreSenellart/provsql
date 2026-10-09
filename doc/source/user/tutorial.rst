@@ -271,7 +271,7 @@ with :sqlfunc:`present`:
 
     SELECT *, sr_formula(provenance(), 'witness_mapping')
     FROM consistent_s
-    WHERE provsql.present(provenance());
+    WHERE present(provenance());
 
 (:sqlfunc:`nonzero` is the general form, testing the annotation against
 a chosen semiring's zero; see :doc:`the chapter on NULL values and
