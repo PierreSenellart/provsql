@@ -74,7 +74,9 @@ Your tasks:
 * build a maintenance-triage headline with ``CASE`` over
   aggregates and read its exact expectation;
 * quantify the shared-plume coupling in nats with
-  :sqlfunc:`mutual_information`.
+  :sqlfunc:`mutual_information`;
+* read the calibration scores as graded confidence, combined with
+  :sqlfunc:`sr_lukasiewicz` and :sqlfunc:`sr_viterbi`.
 
 Setup
 -----
@@ -939,6 +941,41 @@ Delete the placeholder row to return to the running dataset:
 The general rules -- which predicates treat NULLs as unknown and what
 that means for the circuits -- are in :doc:`the NULL semantics chapter
 <nulls>`.
+
+Step 20: Calibration as Graded Confidence
+-----------------------------------------
+
+The calibration scores of ``calibration_status`` can also be read as
+*degrees of confidence* rather than probabilities. A district's alert is
+corroborated when two of its stations agree; how confident is that
+corroboration? A fuzzy semiring combines the degrees, with ``max`` over
+alternatives and a t-norm for a conjunction:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS calibration_degree;
+    SELECT create_provenance_mapping('calibration_degree',
+                                     'calibration_status', 'p');
+
+    SELECT s1.district,
+           round(sr_lukasiewicz(provenance(), 'calibration_degree')::numeric, 4)
+             AS lukasiewicz,
+           round(sr_viterbi(provenance(), 'calibration_degree')::numeric, 4)
+             AS product
+    FROM calibration_status c1
+    JOIN stations s1 ON s1.id = c1.station_id
+    JOIN calibration_status c2 ON c2.station_id > c1.station_id
+    JOIN stations s2 ON s2.id = c2.station_id AND s2.district = s1.district
+    GROUP BY s1.district
+    ORDER BY s1.district;
+
+:sqlfunc:`sr_lukasiewicz` conjoins with the Łukasiewicz t-norm
+:math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre
+(0.95) and Riverside Park (0.70), gets 0.65, the confidence lost by each
+station adding up. :sqlfunc:`sr_viterbi` multiplies instead, 0.665. With
+the fully trusted Suburban Reference (1.00), the east district keeps the
+Industrial Estate's 0.60 under both: a certain station costs nothing. The
+stations' own tokens are not in the mapping and count as fully true.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full reference and

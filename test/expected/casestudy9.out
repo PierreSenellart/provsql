@@ -80,6 +80,40 @@ West|true|0.5680
 remove_provenance
 
 (1 row)
+region|growth
+North|-34.50
+South|-4.50
+West|0.00
+(3 rows)
+remove_provenance
+
+(1 row)
+region|p_growth
+North|0.2580
+South|0.4852
+West|0.3720
+(3 rows)
+remove_provenance
+
+(1 row)
+region|big_deal|p_big
+North|true (*)|0.3021
+South|false (*)|0.0000
+West|true (*)|0.2066
+(3 rows)
+remove_provenance
+
+(1 row)
+name|big_deal|p
+North|f|0.7000
+North|t|0.3000
+South|f|1.0000
+West|f|0.8000
+West|t|0.2000
+(5 rows)
+remove_provenance
+
+(1 row)
 region|pct_big
 North|49.35
 South|40.03
@@ -136,6 +170,17 @@ North|275 k€
 South|215 k€
 West|310 k€
 (3 rows)
+remove_provenance
+
+(1 row)
+region|label
+North|275 k€
+South|215 k€
+West|310 k€
+(3 rows)
+ERROR:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks cs9_deal (provsql.implicit_freeze is 'error')
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

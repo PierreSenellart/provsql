@@ -114,10 +114,11 @@ SELECT remove_provenance('result_single');
 SELECT * FROM result_single ORDER BY exposure, outcome, effect;
 DROP TABLE result_single;
 
--- Step 5: Why-provenance for two replicated multi-study findings
+-- Step 5: Why- and which-provenance for two replicated multi-study findings
 CREATE TABLE result_why AS
 SELECT exposure, outcome, effect,
-    sr_why(provenance(), 'study_mapping') AS witnesses
+    sr_why(provenance(), 'study_mapping') AS witnesses,
+    sr_which(provenance(), 'study_mapping') AS lineage
 FROM f
 WHERE (exposure = 'Exercise' AND outcome = 'Cardiovascular Disease')
    OR (exposure = 'Aspirin'  AND outcome = 'Cardiovascular Disease')

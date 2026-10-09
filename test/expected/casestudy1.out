@@ -103,3 +103,11 @@ Beijing|{}|f|unclassified|f|unavailable
 Nairobi|{unclassified}|t|restricted|f|unclassified
 Paris|{restricted}|f|confidential|f|restricted
 (3 rows)
+remove_provenance
+
+(1 row)
+city|allies
+Beijing|{bnd,dgse}
+Nairobi|{dgse}
+Paris|{mi6}
+(3 rows)

@@ -444,6 +444,26 @@ product of the two marginals. It is a comparison against a constant on one
 distribution, so the answer is closed-form -- exact even with
 ``provsql.rv_mc_samples = 0``.
 
+The referral threshold of 25 is itself a convention, and labs calibrate
+it differently. Say it varies between labs as a `logistic distribution
+<https://en.wikipedia.org/wiki/Logistic_distribution>`_ centred on 25 --
+the S-shaped curve of the logit link, close to a Normal but with heavier
+tails:
+
+.. code-block:: postgresql
+
+    WITH r AS (SELECT normal(20, 5) AS x, logistic(25, 1.5) AS threshold)
+    SELECT probability(x > threshold) AS p_referred,
+           probability(x > 25)        AS p_referred_fixed
+    FROM r;
+
+About **0.1886**, against **0.1587** at the fixed threshold. The
+Normal's tail thins quickly above 25, so the labs with a lower threshold
+gain more referrals than the labs with a higher one lose.
+This compares two random variables of different families, which ProvSQL
+integrates numerically -- still exact to quadrature precision, with no
+sampling.
+
 Problem 5: A Probabilistic Total
 --------------------------------
 
@@ -653,6 +673,28 @@ About **0.31**: the wild type outlasts the variant in under a third of
 pairings, since the variant's larger location parameter shifts its whole
 distribution right. The comparison is between two log-normals, which
 have a registered closed form -- exact, no Monte Carlo.
+
+The log-normal is not the only model of a duration. If symptoms start
+when a growing viral load first crosses a threshold, the incubation is a
+*first-passage time*, whose distribution is the `inverse Gaussian
+<https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`_ (also
+called the Wald distribution). Fit one with the same mean and variance,
+``inverse_gaussian(5.41, 28)`` (its variance is :math:`\mu^3/\lambda`),
+and compare the tails:
+
+.. code-block:: postgresql
+
+    WITH m AS (SELECT lognormal(1.6, 0.42)       AS lognormal_model,
+                      inverse_gaussian(5.41, 28) AS first_passage_model)
+    SELECT probability(lognormal_model > 10)     AS p_lognormal,
+           probability(first_passage_model > 10) AS p_first_passage,
+           quantile(first_passage_model, 0.95)   AS p95_first_passage
+    FROM m;
+
+The two models agree on the first two moments and nearly on the tail:
+**0.0472** and **0.0485** of cases are still incubating after ten days,
+and the first-passage model's 95th percentile is **9.94** days. The
+quarantine window holds under either model.
 
 Problem 8: How Many, and How Often
 ----------------------------------
@@ -869,6 +911,28 @@ from the fixed ``2``, so the compound (hierarchical) structure is visible
 at a glance -- one random leaf feeding the mean wire, a constant feeding
 the spread.
 
+The spread can be uncertain too. If the assay's noise variance is not
+known to be 4 but drawn from an `inverse-gamma
+<https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`_ distribution,
+the usual prior for a variance, the standard deviation is its square
+root:
+
+.. code-block:: postgresql
+
+    WITH m AS (SELECT normal(20, sqrt(inverse_gamma(3, 8))) AS reading)
+    SELECT expected(inverse_gamma(3, 8)) AS mean_noise_variance,
+           expected(reading)             AS mean_reading,
+           variance(reading)             AS var_reading
+    FROM m;
+
+``inverse_gamma(3, 8)`` has mean :math:`8/(3-1) = 4`, so on average the
+noise is the same as before, and the reading's variance is again about
+**4** (a Monte-Carlo estimate): by the law of total variance, the
+variance of the reading is the mean of the noise variance when the mean
+is fixed. The uncertainty in the spread shows in the shape instead: the
+reading has heavier tails than a ``normal(20, 2)``, the more so as the
+prior on the variance is vaguer.
+
 Problem 13: Learning That Parameter From Data
 ---------------------------------------------
 
@@ -929,6 +993,60 @@ arithmetic -- is answered by importance sampling instead: each
 ``| (normal(mu, 2) = d)`` reweights the prior draws of ``mu`` by the
 observation's density, giving the same posterior to Monte Carlo tolerance
 under the sample budget.
+
+Which reading moved the posterior most? :sqlfunc:`shapley_observe`
+attributes the shift of the posterior mean, from the prior's 20 to
+22.8481, to the observations, by their Shapley values; each observation
+records its value, which :sqlfunc:`get_extra` reads back:
+
+.. code-block:: postgresql
+
+    WITH g  AS (SELECT normal(20, 5) AS mu),
+         ev AS (SELECT and_agg(| (normal(g.mu, 2) = d)) AS e
+                FROM g CROSS JOIN (VALUES (23.0), (24.0), (22.0)) AS t(d))
+    SELECT get_extra(s.observation) AS reading,
+           round(s.value::numeric, 4) AS shift
+    FROM g, ev, shapley_observe(g.mu::uuid, ev.e) s
+    ORDER BY reading;
+
+The reading of 24, farthest from the prior, contributes **1.6119**, the
+23 **0.9494**, the 22 **0.2869**; together they make the whole shift,
+2.848. The second argument of :sqlfunc:`shapley_observe` can be
+``'variance'``, to attribute the shrinking of the posterior variance
+instead.
+
+Likelihood weighting has a weak point: data far from the prior. Suppose
+another batch is read on an analyser with a known bias of +1, and its
+readings, ``38``, ``39``, ``37``, sit more than three prior standard
+deviations above 20. The bias puts the latent behind arithmetic, outside
+the conjugate shapes:
+
+.. code-block:: postgresql
+
+    SET provsql.rv_mc_samples = 10000;
+    WITH g  AS (SELECT normal(20, 5) AS mu),
+         ev AS (SELECT and_agg(| (normal(g.mu + 1, 2) = d)) AS e
+                FROM g CROSS JOIN (VALUES (38.0), (39.0), (37.0)) AS t(d))
+    SELECT expected(g.mu, ev.e) AS posterior_mean FROM g, ev;
+
+Almost no prior draw of ``mu`` comes near the data, so a few draws carry
+all the weight. ProvSQL answers about **36.0**, with a ``WARNING`` that
+the *effective sample size* is low (around 14 of the 10,000 draws): the
+estimate rests on a handful of them. The warning fires when the effective
+sample size falls below ``provsql.ess_warn_fraction`` of the draws, 10%
+by default (``0`` silences it). Here the cure is to give the model back
+its conjugate shape, moving the bias to the data side:
+
+.. code-block:: postgresql
+
+    WITH g  AS (SELECT normal(20, 5) AS mu),
+         ev AS (SELECT and_agg(| (normal(g.mu, 2) = d - 1)) AS e
+                FROM g CROSS JOIN (VALUES (38.0), (39.0), (37.0)) AS t(d))
+    SELECT expected(g.mu, ev.e) AS posterior_mean FROM g, ev;
+    RESET provsql.rv_mc_samples;
+
+The exact posterior mean is **36.1392**: the sampled answer was close, but
+only the closed form says so.
 
 Recap
 -----

@@ -205,3 +205,13 @@ remove_provenance
 avg_skips_null
 t
 (1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+district|confidence|product
+centre|0.6500|0.6650
+east|0.6000|0.6000
+(2 rows)

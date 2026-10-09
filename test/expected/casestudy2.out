@@ -16,9 +16,9 @@ Exercise|Inflammation|beneficial|Smith2018
 remove_provenance
 
 (1 row)
-exposure|outcome|effect|witnesses
-Aspirin|Cardiovascular Disease|beneficial|{{Smith2018},{Williams2021}}
-Exercise|Cardiovascular Disease|beneficial|{{Johnson2020},{Smith2018},{Williams2021}}
+exposure|outcome|effect|witnesses|lineage
+Aspirin|Cardiovascular Disease|beneficial|{{Smith2018},{Williams2021}}|{Smith2018,Williams2021}
+Exercise|Cardiovascular Disease|beneficial|{{Johnson2020},{Smith2018},{Williams2021}}|{Johnson2020,Smith2018,Williams2021}
 (2 rows)
 create_provenance_mapping
 

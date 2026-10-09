@@ -574,6 +574,35 @@ value only absorptive semirings justify. Under :guilabel:`Semiring`,
 why-provenance gives its witnesses, and counting refuses: the number of
 derivations is infinite.)
 
+The same walk gives *degrees of separation*: count one hop per
+co-review and take the cheapest path, in the tropical (min-plus) semiring.
+With ``nonnegative => true``, :sqlfunc:`sr_tropical` checks the costs
+nonnegative, which makes it absorptive -- a cycle can only add to a path's
+cost -- so it accepts the absorptive tokens, as probability does:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS coreview_hops;
+    SELECT create_provenance_mapping('coreview_hops', 'coreview', '1::float8');
+
+    SET provsql.provenance = 'absorptive';
+    WITH RECURSIVE conn(node) AS (
+        SELECT 'r1'
+      UNION
+        SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+    )
+    SELECT r.id, r.name,
+           sr_tropical(provenance(), 'coreview_hops', nonnegative => true)
+             AS hops
+    FROM conn JOIN reviewers r ON conn.node = r.id
+    WHERE conn.node <> 'r1' ORDER BY r.id;
+    RESET provsql.provenance;
+
+``r2`` and ``r3`` are one co-review away from ``r1``, ``r4`` (through
+``r3``) and ``r5`` (through ``r2``) two. Without ``nonnegative``, costs may
+be negative and a cycle could lower them, so :sqlfunc:`sr_tropical`
+refuses these tokens, like counting.
+
 .. seealso::
 
    - :doc:`The knowledge-compilation chapter <knowledge-compilation>`

@@ -8,8 +8,8 @@ This case study, loosely inspired by a ProvSQL demonstration at EDBT 2025
 :cite:`DBLP:conf/edbt/YunusKSAB25`, applies ProvSQL to a database of wildlife
 photographs annotated by a species-detection model. It demonstrates the
 ``VALUES`` clause, :sqlfunc:`repair_key` and the ``mulinput`` gate, ranking
-by probability versus thresholding, ``EXCEPT``, common table expressions, and
-:sqlfunc:`expected` aggregates.
+by probability versus thresholding, ``EXCEPT``, common table expressions,
+:sqlfunc:`expected` aggregates, and the :sqlfunc:`choose` aggregate.
 
 The Scenario
 ------------
@@ -29,7 +29,8 @@ Your tasks:
 * rank results by the probability that the combination is truly present,
 * compare probabilistic ranking against naive confidence thresholding,
 * exclude photos that contain unwanted species,
-* compute expected species counts per photo.
+* compute expected species counts per photo,
+* read the label of each bounding box as a distribution.
 
 Setup
 -----
@@ -641,3 +642,33 @@ Torridon is seen either at both stations or only there, so its
 add up to the probability that it is seen at Loch Torridon at all -- for
 the Red Deer, 0.9909 + 0.0091 = 1, and for the unidentified row,
 0.30 + 0.30 = 0.60.
+
+
+Step 14: The Label of Each Bounding Box
+---------------------------------------
+
+Since Step 5, the candidate species of a bounding box are mutually
+exclusive: in each world, at most one of them is the true species. The
+:sqlfunc:`choose` aggregate picks a value of its group, so over a box's
+candidates it is *the* label of the box in each world. Grouping by that
+value turns it into a distribution over labels:
+
+.. code-block:: postgresql
+
+    SELECT photo_id, bbox_id, label,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT d.photo_id, d.bbox_id, choose(s.name ORDER BY s.name) AS label
+      FROM detection d JOIN species s ON s.id = d.species_id
+      WHERE d.photo_id = 5
+      GROUP BY d.photo_id, d.bbox_id
+    ) t
+    GROUP BY photo_id, bbox_id, label
+    ORDER BY photo_id, bbox_id, label;
+
+Box 1 of photo 5 is a Red Deer with probability 0.40 and a Roe Deer with
+0.30, its two candidates' confidences; in the remaining worlds, neither
+candidate is right and the box has no label. ``ORDER BY s.name`` fixes
+which value :sqlfunc:`choose` returns where several are present, which
+mutual exclusion rules out here. Box 6, whose only candidate is
+unidentified, has no species to join and no row.

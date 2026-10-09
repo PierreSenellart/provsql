@@ -23,9 +23,9 @@ from *unclassified* to *top secret*. Your tasks:
   the sole agent is exposed),
 * track where in the database each output value originated,
 * compute the probability that a city remains a single-agent post
-  after accounting for possible-world uncertainty.
+  after accounting for possible-world uncertainty,
 * find at which clearance levels an analyst would wrongly conclude
-  that a city has a single agent.
+  that a city has a single agent, and which allied services would.
 
 
 Setup
@@ -680,3 +680,49 @@ visible; Beijing never does. :sqlfunc:`sr_minmax` would answer
 :sqlfunc:`clearance_settling` gives the level from which the answer no
 longer changes (``restricted`` for Nairobi, ``confidential`` for Paris)
 and that answer at the top level.
+
+
+Step 18: What Allied Services Conclude
+--------------------------------------
+
+The agency shares some personnel files with allied services, each ally
+seeing its own subset of the agents, in no order of clearance. Which
+allies would see a city as single-agent? :sqlfunc:`sr_subset` reads the
+labels of an enum as worlds, one per ally, the mapping giving the allies
+each file is shared with, and returns the allies whose view returns the
+row:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS personnel_shared;
+    DROP TYPE IF EXISTS ally;
+    CREATE TYPE ally AS ENUM ('bnd', 'dgse', 'mi6');
+    CREATE TABLE personnel_shared AS
+      SELECT provsql AS provenance,
+             CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
+                       WHEN 'Paul'   THEN '{mi6}'
+                       WHEN 'David'  THEN '{dgse,bnd}'
+                       WHEN 'Ellen'  THEN '{bnd}'
+                       WHEN 'Aaheli' THEN '{}'
+                       WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
+                       WHEN 'Jing'   THEN '{dgse}' END::ally[] AS value
+      FROM personnel;
+
+    SELECT city,
+           sr_subset(provenance(), 'personnel_shared', 'mi6'::ally) AS allies
+    FROM (
+        SELECT DISTINCT city FROM personnel
+      EXCEPT
+        SELECT p1.city
+        FROM personnel p1
+        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
+        GROUP BY p1.city
+    ) t
+    ORDER BY city;
+
+The third argument only names the enum. No city has a single agent, yet
+each looks so to some ally: Nairobi to the DGSE, which has Juma's file
+but not Paul's; Paris to MI6, which has Nancy's alone (Aaheli's file is
+shared with no one); Beijing to both the BND and the DGSE, each with one
+of its two agents. The set difference of ``EXCEPT`` is read exactly, ally
+by ally.

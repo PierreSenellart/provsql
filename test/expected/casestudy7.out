@@ -159,6 +159,16 @@ r4|0.585600|0.585600
 r5|0.549600|0.549600
 (4 rows)
 NOTICE:  not absorptive: why-provenance refused on 4, counting on 4, of 4 nodes
+create_provenance_mapping
+
+(1 row)
+node|hops
+r2|1
+r3|1
+r4|2
+r5|2
+(4 rows)
+NOTICE:  not absorptive: plain tropical refused on 4 of 4 nodes
 NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to constraint recommend_paper_fkey on table recommend
 drop cascades to constraint champion_paper_fkey on table champion

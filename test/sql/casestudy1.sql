@@ -238,6 +238,39 @@ SELECT remove_provenance('result_cs1_clearance');
 SELECT * FROM result_cs1_clearance ORDER BY city;
 DROP TABLE result_cs1_clearance;
 
+-- Step 18: the allied services each personnel file is shared with; the
+-- services whose view of the files makes a city look single-agent.  MI6 sees
+-- Juma and Paul, DGSE only Juma: Nairobi single-agent for DGSE.  Paris: MI6
+-- sees Nancy alone (David with DGSE and BND, Aaheli shared with none).
+-- Beijing: Ellen for BND, Jing for DGSE, both single-agent.  Over all files,
+-- no city is.
+CREATE TYPE cs1_ally AS ENUM ('bnd', 'dgse', 'mi6');
+CREATE TABLE agents_shared AS
+  SELECT provsql AS provenance,
+         CASE name WHEN 'Juma'   THEN '{mi6,dgse}'
+                   WHEN 'Paul'   THEN '{mi6}'
+                   WHEN 'David'  THEN '{dgse,bnd}'
+                   WHEN 'Ellen'  THEN '{bnd}'
+                   WHEN 'Aaheli' THEN '{}'
+                   WHEN 'Nancy'  THEN '{mi6,dgse,bnd}'
+                   WHEN 'Jing'   THEN '{dgse}' END::cs1_ally[] AS value
+  FROM agents;
+CREATE TABLE result_cs1_allies AS
+SELECT city,
+    sr_subset(provenance(), 'agents_shared', 'mi6'::cs1_ally) AS allies
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+      JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t;
+SELECT remove_provenance('result_cs1_allies');
+SELECT * FROM result_cs1_allies ORDER BY city;
+DROP TABLE result_cs1_allies;
+DROP TABLE agents_shared;
+DROP TYPE cs1_ally;
+
 -- Clean up
 DROP TABLE agents_level;
 DROP TABLE agents_name;

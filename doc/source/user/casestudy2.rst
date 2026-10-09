@@ -194,15 +194,16 @@ findings of interest: the (Coffee, Cardiovascular Disease, harmful),
 Observe that each formula is just a single study name: these findings have
 only one source.
 
-Step 5: Why-Provenance for Replicated Findings
------------------------------------------------
+Step 5: Why- and Which-Provenance for Replicated Findings
+---------------------------------------------------------
 
 For replicated findings, the *why-provenance* returns a set of *witness
 sets*. Each witness set is a minimal collection of studies that together
 (⊗) suffice to derive the finding; the outer set collects all such
-independent alternatives (⊕). Use :sqlfunc:`sr_why` on ``f`` with
-``GROUP BY`` for the (Exercise, Cardiovascular Disease, beneficial) and
-(Aspirin, Cardiovascular Disease, beneficial) pairs.
+independent alternatives (⊕). Use :sqlfunc:`sr_why`, and
+:sqlfunc:`sr_which` for comparison, on ``f`` with ``GROUP BY`` for the
+(Exercise, Cardiovascular Disease, beneficial) and (Aspirin, Cardiovascular
+Disease, beneficial) pairs.
 
 .. raw:: html
 
@@ -212,7 +213,8 @@ independent alternatives (⊕). Use :sqlfunc:`sr_why` on ``f`` with
 .. code-block:: postgresql
 
     SELECT exposure, outcome, effect,
-        sr_why(provenance(), 'study_mapping') AS witnesses
+        sr_why(provenance(), 'study_mapping') AS witnesses,
+        sr_which(provenance(), 'study_mapping') AS lineage
     FROM f
     WHERE (exposure = 'Exercise' AND outcome = 'Cardiovascular Disease')
        OR (exposure = 'Aspirin'  AND outcome = 'Cardiovascular Disease')
@@ -226,6 +228,11 @@ independent alternatives (⊕). Use :sqlfunc:`sr_why` on ``f`` with
 Each inner set in ``witnesses`` is a minimal group of studies that together
 (⊗) derive the finding; the multiple inner sets are independent
 alternatives (⊕): any one of them alone suffices.
+
+The *which-provenance* of :sqlfunc:`sr_which`, in ``lineage``, flattens
+them into the single set of studies the finding draws on, here
+``{Smith2018,Williams2021}`` for Aspirin: it lists the studies to check,
+but not that either one alone suffices.
 
 Step 6: Evidence Grade Semiring
 --------------------------------

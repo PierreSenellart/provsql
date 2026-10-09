@@ -106,8 +106,50 @@ SELECT region, coalesce(on_target::text, 'unknown') AS on_target, p
 FROM cs9_r ORDER BY region, on_target;
 DROP TABLE cs9_r;
 
--- Step 8: a percentage with FILTER and a NULLIF divisor (North 49.35).
--- Step 9: best and average region (194.73 and 137.14).
+-- Step 8: growth from Q1 to Q2, a difference of two aggregates (North
+-- (36 + 24) - (72 + 22.5) = -34.50, South -4.50, West 0.00), and the regions
+-- whose Q2 beats their Q1 in a HAVING (North 0.2580, South 0.4852, West
+-- 0.3720).
+CREATE TABLE cs9_r AS
+  SELECT region,
+         round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
+                        - coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
+                       )::numeric, 2) AS growth
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+CREATE TABLE cs9_r AS
+  SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_growth
+  FROM cs9_deal GROUP BY region
+  HAVING sum(amount) FILTER (WHERE quarter = 'Q2')
+       > sum(amount) FILTER (WHERE quarter = 'Q1');
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+
+-- Step 10: a big deal (>= 100) closes: bool_or, read in the worlds where the
+-- region closes a deal (North 0.3 / 0.993 = 0.3021, West 0.2066), and EXISTS
+-- over the untracked regions, in every world (North 0.3000, West 0.2000).
+CREATE TABLE cs9_r AS
+  SELECT region, bool_or(amount >= 100) AS big_deal,
+         round(expected(bool_or(amount >= 100)::int)::numeric, 4) AS p_big
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+CREATE TABLE cs9_r AS
+  SELECT r.name,
+         EXISTS (SELECT * FROM cs9_deal d
+                 WHERE d.region = r.name AND d.amount >= 100) AS big_deal,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM cs9_region r;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY name, big_deal;
+DROP TABLE cs9_r;
+
+-- Step 9: a percentage with FILTER and a NULLIF divisor (North 49.35).
+-- Step 11: best and average region (194.73 and 137.14).
 CREATE TABLE cs9_r AS
   SELECT region,
          round(expected(100.0 * count(*) FILTER (WHERE amount >= 60)
@@ -124,7 +166,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r;
 DROP TABLE cs9_r;
 
--- Step 10: regions grouped by the number of deals they close (2: 0.7629).
+-- Step 12: regions grouped by the number of deals they close (2: 0.7629).
 CREATE TABLE cs9_r AS
   SELECT n AS deals_closed, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM (SELECT region, count(*) AS n FROM cs9_deal GROUP BY region) t
@@ -133,7 +175,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY deals_closed;
 DROP TABLE cs9_r;
 
--- Step 11: the largest deal of each region (Arctis 0.9 * (1 - 0.3) = 0.63).
+-- Step 13: the largest deal of each region (Arctis 0.9 * (1 - 0.3) = 0.63).
 CREATE TABLE cs9_r AS
   SELECT region, customer, amount,
          round(probability_evaluate(provenance())::numeric, 4) AS p
@@ -143,7 +185,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region, amount DESC;
 DROP TABLE cs9_r;
 
--- Step 12: the standard deviation when every deal closes (North 40.1 (*)), and
+-- Step 14: the standard deviation when every deal closes (North 40.1 (*)), and
 -- its expectation over the worlds with two deals or more (North 33.31).
 CREATE TABLE cs9_r AS
   SELECT region, round(stddev(amount), 1) AS sd,
@@ -153,7 +195,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 13: a label reads the value on the data as it is, with a warning;
+-- Step 15: a label reads the value on the data as it is, with a warning;
 -- plain() says it is meant, and the warning goes away.
 CREATE TABLE cs9_r AS
   SELECT region, sum(amount)::text || ' k€' AS label
@@ -168,7 +210,19 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 14: the regions with no big deal (>= 100), for each purpose.  South:
+-- Step 15 (continued): with provsql.implicit_freeze = 'error', the label is
+-- refused, and the plain() one still runs.
+SET provsql.implicit_freeze = 'error';
+SELECT region, sum(amount)::text || ' k€' AS label FROM cs9_deal GROUP BY region;
+CREATE TABLE cs9_r AS
+  SELECT region, plain(sum(amount))::text || ' k€' AS label
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+RESET provsql.implicit_freeze;
+
+-- Step 16: the regions with no big deal (>= 100), for each purpose.  South:
 -- every purpose.  North: analytics and marketing only, because Fjordline's
 -- deal (120, forecasting only) is hidden from them; over all deals it is
 -- there, so North is not consented for marketing and both purposes conflict.
