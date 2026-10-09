@@ -28,6 +28,23 @@ West||126.00
 remove_provenance
 
 (1 row)
+customer|region|quarter|amount|to_date|expected_to_date|pct_of_region|pct_unconditioned
+Arctis|North|Q1|80|125 (*)|102.50|56.14|64.15
+Borealis|North|Q1|45|125 (*)|117.00|29.17|36.08
+Fjordline|North|Q2|120|275 (*)|238.50|51.69|96.23
+Glacier|North|Q2|30|275 (*)|160.50|23.35|24.06
+Meridian|South|Q1|60|85 (*)|82.50|47.72|65.44
+Solstice|South|Q1|25|85 (*)|67.00|27.09|27.26
+Tropica|South|Q2|90|215 (*)|178.50|52.76|98.15
+Zenith|South|Q2|40|215 (*)|140.50|33.98|43.62
+Canyon|West|Q1|70|105 (*)|98.00|50.69|77.87
+Horizon|West|Q1|35|105 (*)|70.00|38.77|38.94
+Mesa|West|Q2|55|310 (*)|148.00|46.26|61.19
+Sierra|West|Q2|150|310 (*)|246.00|63.39|166.87
+(12 rows)
+remove_provenance
+
+(1 row)
 region|share
 North|0.3891
 South|0.3144

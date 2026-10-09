@@ -1,7 +1,9 @@
 .. cs4 is not generated as a Studio notebook (unlike the other case
-   studies): its setup loads external CSV files via psql's \copy,
-   which a self-contained .ipynb cannot ship. Like cs3 (external GTFS
-   download). The remaining nb: comment markers below are inert
+   studies): its setup loads some 185 KB of bundled CSV files via
+   psql's \copy, and inlining them as INSERT cells would swamp the
+   notebook; the Playground's cs4 database covers it instead. (cs3 is
+   excluded for a different reason: its GTFS data is an external
+   download.) The remaining nb: comment markers below are inert
    without an nb:name and are kept in case the data is ever inlined.
 
 Case Study: Government Ministers Over Time

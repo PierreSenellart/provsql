@@ -5,7 +5,7 @@ Case Studies: Overview
 
 The :doc:`tutorial <tutorial>` introduces the core workflow -- add
 provenance to a table, run a query, evaluate the result in a semiring --
-on a single small example. The **case studies** are longer worked
+on a single small example. The **case studies** are further worked
 examples, each built around a realistic dataset and centred on a
 different aspect of ProvSQL.
 
@@ -139,9 +139,9 @@ Columns:
 
 Cells: ``✓`` the feature is exercised; ``(✓)`` it is mentioned in
 passing but not actually executed; empty means it is not covered. The
-administration and tuning features (the circuit store, replication, the
-cache and limit settings) are shown in their reference pages, not in a case
-study.
+administration features (the circuit store and its maintenance,
+replication, the gate cache) are shown in their reference pages, not in a
+case study.
 
 .. raw:: html
 
@@ -177,6 +177,7 @@ Supported SQL constructs
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
    "SELECT-FROM-WHERE / inner JOIN", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "", "✓"
+   "``NATURAL JOIN``", "", "", "", "", "", "", "", "", "", ""
    "Self-join", "✓", "✓", "", "✓", "", "✓", "", "✓", "", ""
    "Subqueries in FROM / nested", "", "✓", "✓", "", "", "✓", "", "", "", "✓"
    "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
@@ -190,6 +191,7 @@ Supported SQL constructs
    "LATERAL", "", "", "", "✓", "", "", "✓", "", "", ""
    "FILTER clause on aggregates", "", "", "✓", "", "", "", "", "", "", "✓"
    "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓", ""
+   "``CREATE MATERIALIZED VIEW``", "", "", "", "", "", "", "", "", "", ""
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", "", ""
    "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", "", ""
@@ -197,12 +199,16 @@ Supported SQL constructs
    "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", "", ""
    "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "✓", "", "", "", ""
    "Scalar subquery", "", "", "", "", "", "", "✓", "", "✓", "✓"
+   "``ARRAY(SELECT …)``", "", "", "", "", "", "", "", "", "", ""
+   "``EXISTS (…)`` as a Boolean value in the ``SELECT`` list", "", "", "", "", "", "", "", "", "", ""
    "``INTERSECT``", "", "", "", "", "", "✓", "", "", "", ""
    "``DISTINCT ON``", "", "", "", "", "", "", "", "", "", "✓"
    "``LIMIT`` / ``ORDER BY … LIMIT``", "", "", "", "✓", "", "✓", "", "", "", "✓"
+   "``FETCH … WITH TIES`` / ``OFFSET``", "", "", "", "", "", "", "", "", "", "✓"
    "``plain()`` (a value read without provenance)", "", "", "", "✓", "", "", "", "", "", "✓"
+   "``provsql.implicit_freeze`` GUC (warn or refuse on an untracked part)", "", "", "", "", "", "", "", "", "", ""
    "Window functions (``row_number`` / ``rank`` / ``dense_rank`` / ``cume_dist`` / ``percent_rank`` / ``ntile``)", "", "", "", "", "", "", "", "", "", "✓"
-   "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", "", ""
+   "Aggregates as window functions (``sum(…) OVER``)", "", "", "", "", "", "", "", "", "", "✓"
    "``GROUPING SETS`` / ``ROLLUP`` / ``CUBE``", "", "", "", "", "", "", "", "", "", "✓"
 
 NULL values and zero-annotated rows
@@ -245,6 +251,7 @@ Aggregation
    "``GROUP BY`` / ``DISTINCT`` on an aggregate value", "", "", "", "", "", "", "", "", "", "✓"
    "Comparison over an aggregate in the ``SELECT`` list", "", "", "", "", "", "", "", "", "", "✓"
    "Ranking groups by an aggregate (``rank() OVER (ORDER BY count(*))``)", "", "", "", "", "", "", "", "", "", "✓"
+   "``provsql.max_worlds`` GUC (worlds enumerated for a condition on an aggregate)", "", "", "", "", "", "", "", "", "", ""
 
 Circuit inspection
 ~~~~~~~~~~~~~~~~~~~
@@ -293,6 +300,7 @@ Knowledge compilation and safe queries
    "``provsql.kcmcp_server`` GUC (managed KCMCP server)", "", "", "", "", "", "", "", "", "", ""
    "``provsql.joint_max_states`` / ``provsql.joint_max_treewidth`` GUCs", "", "", "", "", "", "", "", "", "", ""
    "``provsql.mobius_max_cnf`` / ``provsql.mobius_max_gates`` GUCs", "", "", "", "", "", "", "", "", "", ""
+   "``provsql.max_memory`` GUC (memory limit of an evaluation)", "", "", "", "", "", "", "", "", "", ""
 
 Semiring evaluation
 ~~~~~~~~~~~~~~~~~~~
@@ -310,6 +318,7 @@ Semiring evaluation
    "``sr_how``", "", "", "", "", "", "", "", "(✓)", "", ""
    "``sr_which``", "", "", "", "", "", "", "", "", "", ""
    "``sr_tropical``", "", "", "", "", "", "", "", "", "", ""
+   "``sr_tropical(…, nonnegative => true)`` (absorptive min-plus)", "", "", "", "", "", "", "", "", "", ""
    "``sr_viterbi``", "", "", "", "", "", "", "", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "", "", "", ""
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", "", ""
@@ -452,21 +461,6 @@ Temporal features
    "``time_validity_view`` extension", "", "", "", "", "✓", "", "", "", "", ""
    "``get_valid_time``", "", "", "", "", "", "", "", "", "", ""
 
-Persistence and administration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. csv-table::
-   :class: coverage-matrix
-   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
-   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
-
-   "``check_store``", "", "", "", "", "", "", "", "", "", ""
-   "``circuit_cleanup``", "", "", "", "", "", "", "", "", "", ""
-   "``migrate_table_info``", "", "", "", "", "", "", "", "", "", ""
-   "``provsql.gate_cache_size`` GUC", "", "", "", "", "", "", "", "", "", ""
-   "``provsql.store_synchronous_commit`` / ``provsql.store_wal_logging`` GUCs (replication)", "", "", "", "", "", "", "", "", "", ""
-   "``provsql.implicit_freeze`` GUC", "", "", "", "", "", "", "", "", "", ""
-
 Export and visualisation
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -478,5 +472,6 @@ Export and visualisation
    "``to_provxml``", "", "✓", "", "", "", "", "", "", "", ""
    "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", "", "", ""
    "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)", "", ""
+   "``provsql.trace_rewrite`` / ``provsql.verify_rewrite`` GUCs (debugging the rewriting)", "", "", "", "", "", "", "", "", "", ""
    "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓", "", ""
    "ProvSQL Studio (Contributions mode)", "", "", "✓", "", "", "", "", "", "", ""
