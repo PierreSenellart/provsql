@@ -230,8 +230,11 @@ warning names it; setting :ref:`provsql.implicit_freeze
 
 Wrapping the part in :sqlfunc:`plain` says that computing it without
 provenance is meant, and silences the warning: ``plain((SELECT max(x) FROM
-t))``, ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``. In
-``FROM``, ``plain(NULL::t)`` reads table ``t`` without its provenance:
+t))``, ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``. A ``LIMIT``
+in a subquery is the exception: the rows it keeps feed the rest of the
+query, whose provenance does not record the cut, and the warning remains,
+with ``plain`` or without. In ``FROM``, ``plain(NULL::t)`` reads table
+``t`` without its provenance:
 
 .. code-block:: postgresql
 

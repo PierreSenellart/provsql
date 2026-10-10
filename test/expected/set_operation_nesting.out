@@ -147,7 +147,7 @@ ORDER BY 1 NULLS FIRST|NULL 1 2 3 5 7 9
 (1 row)
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks sn_r
 DETAIL:  provsql-reason: limit-in-subquery; scope: gap
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 remove_provenance
 
 (1 row)
@@ -169,7 +169,7 @@ EXCEPT DESC LIMIT 2|7 5
 (1 row)
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks sn_r
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 remove_provenance
 
 (1 row)
