@@ -222,7 +222,8 @@ std::string BooleanCircuit::toStringHelper(
     if(labels) {
       auto it = labels->find(g);
       if(it != labels->end())
-        return it->second + "[" + std::to_string(getProb(g)) + "]";
+        return "{" + to_string(*getWires(g).begin()) + "=" + it->second +
+               "}[" + std::to_string(getProb(g)) + "]";
     }
     return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
   case BooleanGate::NOT:

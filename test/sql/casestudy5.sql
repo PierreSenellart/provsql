@@ -2,7 +2,7 @@
 \pset format unaligned
 
 -- Case Study 5: The Wildlife Photo Archive
--- Tests VALUES, repair_key with synthetic key, mulinput probability,
+-- Tests VALUES, repair_key on a two-column key, mulinput probability,
 -- EXCEPT with monus, CTEs, and expected() aggregates.
 
 CREATE TABLE photo (
@@ -184,9 +184,7 @@ DROP TABLE result_cs5_naive;
 DROP TABLE species_mapping;
 SELECT remove_provenance('detection');
 
-ALTER TABLE detection ADD COLUMN photo_bbox text;
-UPDATE detection SET photo_bbox = photo_id || '/' || bbox_id;
-SELECT repair_key('detection', 'photo_bbox');
+SELECT repair_key('detection', 'photo_id,bbox_id');
 
 CREATE TABLE species_mapping AS
   SELECT s.name AS value, d.provsql AS provenance
@@ -225,6 +223,22 @@ GROUP BY photo_id, bbox_id;
 SELECT remove_provenance('result_cs5_mutex');
 SELECT photo_id, bbox_id, bexpr, p FROM result_cs5_mutex;
 DROP TABLE result_cs5_mutex;
+
+-- A mapping labels the values of a multivalued input too: the Boolean
+-- expression keeps the shared variable, the formula and why-provenance
+-- read the labels.
+CREATE TABLE result_cs5_labels AS
+SELECT photo_id, bbox_id,
+    sr_boolexpr(provenance(), 'species_mapping') AS bexpr,
+    sr_formula(provenance(), 'species_mapping') AS formula,
+    sr_why(provenance(), 'species_mapping') AS why
+FROM detection
+WHERE photo_id = 5 AND bbox_id = 1 AND species_id IN (1, 2)
+GROUP BY photo_id, bbox_id;
+SELECT remove_provenance('result_cs5_labels');
+SELECT photo_id, bbox_id, bexpr, formula, why FROM result_cs5_labels;
+DROP TABLE result_cs5_labels;
+
 
 -- Step 7: probabilistic ranking
 CREATE TABLE result_cs5_pqe AS

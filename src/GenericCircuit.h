@@ -161,6 +161,21 @@ const std::set<gate_t> &getInputs() const {
 }
 
 /**
+ * @brief The UUIDs a provenance mapping can label: those of the input
+ *        gates, and of the @c mulinput gates, each value of a multivalued
+ *        input (from @c repair_key) being a row of its own.
+ */
+std::vector<std::string> getMappableUUIDs() const {
+  std::vector<std::string> r;
+  for(auto x : inputs)
+    r.push_back(getUUID(x));
+  for(std::size_t i = 0; i < getNbGates(); ++i)
+    if(getGateType(static_cast<gate_t>(i)) == gate_mulinput)
+      r.push_back(getUUID(static_cast<gate_t>(i)));
+  return r;
+}
+
+/**
  * @brief Set the probability for gate @p g.
  * @param g  Gate identifier.
  * @param p  Probability in [0, 1].

@@ -445,13 +445,7 @@ static Datum provenance_evaluate_compiled_internal
 
   GenericCircuit c = getGenericCircuit(token);
   auto g = c.getGate(uuid2string(token));
-  auto inputs = c.getInputs();
-
-  std::vector<std::string> inputs_uuid;
-  std::transform(inputs.begin(), inputs.end(), std::back_inserter(inputs_uuid), [&c](auto x) {
-    return c.getUUID(x);
-  });
-  bool drop_table = join_with_temp_uuids(table, inputs_uuid);
+  bool drop_table = join_with_temp_uuids(table, c.getMappableUUIDs());
 
   if(semiring=="boolexpr") {
     // boolexpr with a mapping: build the gate-to-label map on the
@@ -564,9 +558,7 @@ static std::pair<double, std::string> tropical_paths_internal
 
   GenericCircuit c = getGenericCircuit(token);
   auto g = c.getGate(uuid2string(token));
-  std::vector<std::string> inputs_uuid;
-  for(auto x : c.getInputs())
-    inputs_uuid.push_back(c.getUUID(x));
+  const std::vector<std::string> inputs_uuid = c.getMappableUUIDs();
 
   std::unordered_map<gate_t, double> cost;
   initialize_provenance_mapping<double>(constants, c, cost,
@@ -579,7 +571,12 @@ static std::pair<double, std::string> tropical_paths_internal
 
   semiring::TropicalPaths sr;
   std::unordered_map<gate_t, semiring::tropical_paths_t> mapping;
-  for(auto x : c.getInputs()) {
+  std::set<gate_t> leaves(c.getInputs());
+  for(const auto &kv : cost)
+    leaves.insert(kv.first);
+  for(const auto &kv : label)
+    leaves.insert(kv.first);
+  for(auto x : leaves) {
     auto ic = cost.find(x);
     auto il = label.find(x);
     mapping[x] = semiring::tropical_paths_t{

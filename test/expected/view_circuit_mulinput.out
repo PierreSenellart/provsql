@@ -1,0 +1,22 @@
+\set ECHO none
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+circuit
+╔════╗     ┌──────┐     ┌───┐
+║ ⊕  ║ ──▶ │ deer │ ──▶ │ ⋮ │
+╚════╝     └──────┘     └───┘
+  │                       ▲
+  │                       │
+  ▼                       │
+┌────┐                    │
+│ =3 │ ───────────────────┘
+└────┘
+
+(1 row)

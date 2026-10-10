@@ -641,7 +641,9 @@ function), the call chain is:
    :cfunc:`provenance_evaluate_compiled_internal`.
 
 3. The internal function reads the circuit from mmap (via
-   :cfunc:`getGenericCircuit`), creates a mapping from input gates to their
+   :cfunc:`getGenericCircuit`), creates a mapping from the gates the
+   mapping table can label (input gates, and the ``mulinput`` values of a
+   multivalued input, ``GenericCircuit::getMappableUUIDs``) to their
    annotations, and dispatches to the appropriate ``pec_*`` helper
    based on return type and semiring name.
 

@@ -56,6 +56,12 @@ photo_id|bbox_id|bexpr|p
 remove_provenance
 
 (1 row)
+photo_id|bbox_id|bexpr|formula|why
+5|1|{0=Red Deer}[0.400000] ∨ {0=Roe Deer}[0.300000]|Red Deer ⊕ Roe Deer|{{Red Deer},{Roe Deer}}
+(1 row)
+remove_provenance
+
+(1 row)
 id|prob
 22|0.8760
 2|0.6120

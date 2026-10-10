@@ -158,6 +158,23 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
           //elog(WARNING, "PROJECT cond: %s", cond_final.c_str());
           c.setGate(f, DotGate::PROJECT, cond_final);
         }
+        else if (type == "mulinput")
+        {
+          /* One value of a multivalued input (repair_key): a leaf labelled
+           * by the mapping, whose row for this gate, typed input, sets
+           * the label whichever comes first; without one, by the index of
+           * the value.  Its wire leads to the variable it is a value of,
+           * drawn as a leaf of its own. */
+          if (c.getGateType(id) != DotGate::IN)
+          {
+            std::string infos = SPI_getvalue(tuple, tupdesc, 5);
+            std::string index = infos.substr(1, infos.find(',') - 1);
+            c.setGate(f, DotGate::IN, "=" + index);
+          }
+          const std::string var = SPI_getvalue(tuple, tupdesc, 2);
+          if (c.getGateType(c.getGate(var)) == DotGate::UNDETERMINED)
+            c.setGate(var, DotGate::IN, "⋮");
+        }
         else
         {
           provsql_error("Unknown type of gate: %s", type.c_str());
