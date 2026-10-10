@@ -432,6 +432,24 @@ virtual bool selective() const {
 }
 
 /**
+ * @brief Return @c true if @f$\otimes@f$ is commutative
+ *        (@f$a \otimes b = b \otimes a@f$ for all @f$a, b@f$).
+ *
+ * A product gate keeps its factors in the order of the query (the order
+ * of the @c FROM clause for a join), which a non-commutative semiring
+ * reads as it is: the regular expressions of @c Regex concatenate words in
+ * that order.  The equations of a recursive query then have the recursive
+ * relation on a definite side of each coefficient; Gaussian elimination
+ * (@c GenericCircuit::solveFixSystem) needs it on the same side
+ * throughout, and refuses a non-commutative semiring otherwise.
+ *
+ * @return @c true by default; override to return @c false.
+ */
+virtual bool commutative() const {
+  return true;
+}
+
+/**
  * @brief Return @c true if @c star computes
  *        @f$a^* = \mathbb{1} \oplus a \oplus a^2 \oplus \cdots@f$.
  *

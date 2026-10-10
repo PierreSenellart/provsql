@@ -785,17 +785,20 @@ FixSystemLinear linearizeFixSystem(gate_t sys) const;
  *
  * The system, x_i = f_i(x), is linear (PostgreSQL forbids a recursive
  * reference appearing twice in the recursive term): each f_i is read as
- * b_i ⊕ ⨁_j a_ij ⊗ x_j, where b_i and the a_ij are evaluated in
- * @p semiring like any other sub-circuit, which makes x the path
- * provenance, from a virtual source, of the graph with an edge j → i of
- * weight a_ij.  The system is solved one strongly connected component
- * at a time, in topological order; an acyclic part is exact in every
- * semiring.  A cyclic component is solved by Dijkstra when @p semiring is
- * absorptive and selective, by value iteration when it is only absorptive
- * (a derivation repeating a tuple is absorbed by a shorter one, so the
- * iteration converges), by Gaussian elimination when it has a star, and
- * kept as named equations by a rendering semiring (formula); it is refused
- * otherwise, its least solution being an infinite sum.
+ * b_i ⊕ ⨁_j l_ij ⊗ x_j ⊗ r_ij, where b_i and the l_ij, r_ij (the factors
+ * before and after the unknown, apart for a semiring that does not
+ * commute) are evaluated in @p semiring like any other sub-circuit, which
+ * makes x the path provenance, from a virtual source, of the graph with an
+ * edge j → i of weight l_ij ⊗ · ⊗ r_ij.  The system is solved one strongly
+ * connected component at a time, in topological order; an acyclic part is
+ * exact in every semiring.  A cyclic component is solved by Dijkstra when
+ * @p semiring is absorptive and selective, by value iteration when it is
+ * only absorptive (a derivation repeating a tuple is absorbed by a shorter
+ * one, so the iteration converges), by Gaussian elimination when it has a
+ * star, and kept as named equations by a rendering semiring (formula); it
+ * is refused otherwise, its least solution being an infinite sum.  Gaussian
+ * elimination in a non-commutative semiring needs every unknown on the same
+ * side of its coefficients, and refuses the component otherwise.
  *
  * @param sys                 The @c gate_fixsystem gate.
  * @param provenance_mapping  As in @c evaluate, for the sub-circuits that

@@ -6127,5 +6127,34 @@ BEGIN
 END;
 $$;
 
+-- Non-commutative semirings: regular expressions over the input labels, and
+-- least costs with the derivations of that cost.
+CREATE OR REPLACE FUNCTION sr_regex(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'regex',
+    ''::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate_tropical_paths(
+  token UUID, costs regclass, labels regclass,
+  OUT cost FLOAT, OUT paths TEXT)
+  AS 'provsql', 'provenance_evaluate_tropical_paths'
+  LANGUAGE C PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION sr_tropical_paths(token ANYELEMENT, costs regclass,
+                                             labels regclass,
+                                             OUT cost FLOAT, OUT paths TEXT)
+  AS
+$$
+  SELECT * FROM provsql.provenance_evaluate_tropical_paths(token, costs, labels);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
 SELECT reset_constants_cache();
 

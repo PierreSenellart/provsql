@@ -47,11 +47,14 @@ extern "C" {
 #include "utils/datum.h"
 #include "utils/array.h"
 #include "access/xact.h"
+#include "access/htup_details.h"
+#include "funcapi.h"
 #include "compatibility.h"   /* TYPALIGN_CHAR fallback for PG < 13 */
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
+PG_FUNCTION_INFO_V1(provenance_evaluate_tropical_paths);
 PG_FUNCTION_INFO_V1(plain_truth);
 PG_FUNCTION_INFO_V1(subset_labels);
 PG_FUNCTION_INFO_V1(subset_settling);
@@ -81,6 +84,8 @@ PG_FUNCTION_INFO_V1(subset_member);
 #include "semiring/IntervalUnion.h"
 #include "semiring/MinMax.h"
 #include "semiring/Subset.h"
+#include "semiring/Regex.h"
+#include "semiring/TropicalPaths.h"
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
@@ -114,6 +119,7 @@ Datum to_datum(const semiring::Formula &sr, const std::string &v) { return text_
 Datum to_datum(const semiring::Why &sr, const semiring::why_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::How &sr, const semiring::how_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::Which &sr, const semiring::which_provenance_t &v) { return text_datum(sr.to_text(v)); }
+Datum to_datum(const semiring::Regex &sr, const semiring::regex_t &v) { return text_datum(sr.to_text(v)); }
 #if PG_VERSION_NUM >= 140000
 Datum to_datum(const semiring::IntervalUnion &, Datum v)  { return v; }
 #endif
@@ -471,6 +477,7 @@ static Datum provenance_evaluate_compiled_internal
     if (semiring == "why")     return pec(constants, c, g, semiring::Why{}, drop_table);
     if (semiring == "how")     return pec(constants, c, g, semiring::How{}, drop_table);
     if (semiring == "which")   return pec(constants, c, g, semiring::Which{}, drop_table);
+    if (semiring == "regex")   return pec(constants, c, g, semiring::Regex{}, drop_table);
     throw CircuitException("Unknown semiring for type varchar: " + semiring);
   }
   if (type == constants.OID_TYPE_INT) {
@@ -518,6 +525,87 @@ static Datum provenance_evaluate_compiled_internal
     throw CircuitException("Unknown semiring for enum type: " + semiring);
   }
   throw CircuitException("Unknown element type for provenance_evaluate_compiled");
+}
+
+/**
+ * @brief Min-cost derivations of @p token and the derivations of that cost
+ *        (@c semiring::TropicalPaths), each leaf with its cost from
+ *        @p costs and its label from @p labels.
+ *
+ * An input missing from @p costs costs 0, one missing from @p labels is
+ * the empty word.
+ *
+ * @return The cost (@f$+\infty@f$ with no derivation) and the derivations,
+ *         as a regular expression.
+ */
+static std::pair<double, std::string> tropical_paths_internal
+  (pg_uuid_t token, Oid costs, Oid labels)
+{
+  constants_t constants = get_constants(true);
+  fixpoint_cache_ctx.clear();
+
+  GenericCircuit c = getGenericCircuit(token);
+  auto g = c.getGate(uuid2string(token));
+  std::vector<std::string> inputs_uuid;
+  for(auto x : c.getInputs())
+    inputs_uuid.push_back(c.getUUID(x));
+
+  std::unordered_map<gate_t, double> cost;
+  initialize_provenance_mapping<double>(constants, c, cost,
+    [](const char *v) { return atof(v); },
+    join_with_temp_uuids(costs, inputs_uuid));
+  std::unordered_map<gate_t, std::string> label;
+  initialize_provenance_mapping<std::string>(constants, c, label,
+    [](const char *v) { return std::string(v); },
+    join_with_temp_uuids(labels, inputs_uuid));
+
+  semiring::TropicalPaths sr;
+  std::unordered_map<gate_t, semiring::tropical_paths_t> mapping;
+  for(auto x : c.getInputs()) {
+    auto ic = cost.find(x);
+    auto il = label.find(x);
+    mapping[x] = semiring::tropical_paths_t{
+      ic == cost.end() ? 0. : ic->second,
+      semiring::regex_ops::atom(il == label.end() ? "" : il->second)};
+  }
+
+  provsql_having(c, g, mapping, sr);
+  const auto out = c.evaluate<semiring::TropicalPaths>(g, mapping, sr);
+  return {out.cost, out.paths.render()};
+}
+
+/** @brief PostgreSQL-callable wrapper for tropical_paths_internal(). */
+Datum provenance_evaluate_tropical_paths(PG_FUNCTION_ARGS)
+{
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  try {
+    provsql_interrupt_scope interrupt_scope;
+    const Oid costs = PG_ARGISNULL(1) ? InvalidOid : PG_GETARG_OID(1);
+    const Oid labels = PG_ARGISNULL(2) ? InvalidOid : PG_GETARG_OID(2);
+    const auto [cost, paths] =
+      tropical_paths_internal(*DatumGetUUIDP(PG_GETARG_DATUM(0)), costs, labels);
+
+    TupleDesc tupdesc;
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      throw CircuitException("tropical paths must return a record");
+    tupdesc = BlessTupleDesc(tupdesc);
+    Datum values[2] = {Float8GetDatum(cost), text_datum(paths)};
+    bool nulls[2] = {false, false};
+    PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+  } catch(const CircuitRefusal &r) {
+    provsql_cancel_if_interrupted();
+    provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
+  } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("provenance_evaluate_tropical_paths: %s", e.what());
+  } catch(...) {
+    provsql_cancel_if_interrupted();
+    provsql_error("provenance_evaluate_tropical_paths: Unknown exception");
+  }
+
+  PG_RETURN_NULL();
 }
 
 /** @brief PostgreSQL-callable wrapper for provenance_evaluate_compiled(). */

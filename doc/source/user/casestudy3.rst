@@ -430,7 +430,7 @@ of the same station:
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station)
     SELECT count(*) FROM reach;
 
 The whole network, in a few seconds. The network is
@@ -455,7 +455,7 @@ it has no provenance of its own:
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station)
     SELECT d.name,
            round(sr_tropical(provenance(), 'hop_minutes',
                              nonnegative => true)::numeric, 1) AS minutes,
@@ -493,7 +493,7 @@ Each semiring solves the equations by the method its properties allow.
 The Boolean semiring, and the tropical one over the nonnegative costs that
 ``nonnegative => true`` declares, are *absorptive* (a cycle never improves
 a journey) and *selective* (an alternative is one of the two), which
-licenses Dijkstra's algorithm; without ``nonnegative``, a cost might be
+makes Dijkstra's algorithm correct; without ``nonnegative``, a cost might be
 negative and a cycle could lower it, and the equations are solved by
 Gaussian elimination instead, for the same values here.
 
@@ -510,7 +510,7 @@ Counting the derivations of a station in the counting semiring:
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station)
     SELECT sr_counting(provenance(), 'hop_one')
     FROM reach WHERE station = 'IDFM:474151';
 
@@ -521,12 +521,13 @@ derivations, which no integer counts.
 Step 11: The Equations of a Recursion
 -------------------------------------
 
-:sqlfunc:`sr_formula` shows the equations themselves. On the whole network
-they are far too long to read; restricted to RER B between
-Luxembourg and its two neighbours, with each hop labelled by its stations,
-they read. ``plain(NULL::stops)`` reads the station names without their
-provenance, so that the stops' own tokens stay out of the labels and of the
-result:
+:sqlfunc:`sr_formula` shows the equations themselves, and
+:sqlfunc:`sr_regex` their solution, as a regular expression over the hops.
+On the whole network they are far too long to read; here they are
+restricted to RER B between Luxembourg and its two neighbours, with each
+hop labelled by its stations. ``plain(NULL::stops)`` reads the station
+names without their provenance, so that the stops' own tokens stay out of
+the labels and of the result:
 
 .. code-block:: postgresql
 
@@ -539,24 +540,39 @@ result:
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station
         WHERE h.line = 'B'
           AND h.to_station IN ('IDFM:71161', 'IDFM:71106', 'IDFM:73620'))
-    SELECT s.stop_name, sr_formula(provenance(), 'hop_name')
+    SELECT s.stop_name, sr_formula(provenance(), 'hop_name'),
+           sr_regex(provenance(), 'hop_name')
     FROM reach r JOIN plain(NULL::stops) s ON s.stop_id = r.station;
 
-For Port Royal:
+For Port Royal, the equations are:
 
 .. code-block:: text
 
-    x₁ where x₁ = Luxembourg → Port Royal ⊗ x₂,
-             x₂ = 𝟙 ⊕ (Port Royal → Luxembourg ⊗ x₁)
-                    ⊕ (Saint-Michel Notre-Dame → Luxembourg ⊗ x₃),
-             x₃ = Luxembourg → Saint-Michel Notre-Dame ⊗ x₂
+    x₁ where x₁ = x₂ ⊗ Luxembourg → Port Royal,
+             x₂ = 𝟙 ⊕ (x₁ ⊗ Port Royal → Luxembourg)
+                    ⊕ (x₃ ⊗ Saint-Michel Notre-Dame → Luxembourg),
+             x₃ = x₂ ⊗ Luxembourg → Saint-Michel Notre-Dame
 
 One unknown per station: Luxembourg (``x₂``) holds from the start (``𝟙``)
 or by coming back from either neighbour, and each neighbour by a hop from
-Luxembourg.
+Luxembourg. The regular expression lists the journeys themselves, any
+number of round trips from Luxembourg (``*``, with ``|`` between the two
+neighbours), then the hop to Port Royal:
+
+.. code-block:: text
+
+    (Luxembourg → Port Royal · Port Royal → Luxembourg
+     | Luxembourg → Saint-Michel Notre-Dame · Saint-Michel Notre-Dame → Luxembourg)*
+    · Luxembourg → Port Royal
+
+Unlike the other semirings so far, the concatenation ``·`` of
+:sqlfunc:`sr_regex` does not commute, and follows the order of the query:
+``reach`` comes first in the recursive ``FROM`` clause, so that each
+journey reads in the order it is made; with ``hop`` first, the journeys
+would read backwards.
 
 
 Step 12: A Day of Rail Disruptions
@@ -582,7 +598,7 @@ a Boolean circuit of billions of gates, and is refused:
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station)
     SELECT probability_evaluate(provenance())
     FROM reach WHERE station = 'IDFM:73699';
 
@@ -598,7 +614,7 @@ branches show (the seed makes the sampling reproducible):
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
-        SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station
         WHERE h.route_type <> 3)
     SELECT d.name,
            round(probability_evaluate(provenance(), 'additive',

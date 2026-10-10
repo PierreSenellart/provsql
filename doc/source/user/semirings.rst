@@ -202,6 +202,51 @@ already-structured sets (``{}`` for the multiplicative identity,
 ``{a,b,c}`` for a non-empty set), so the output of one ``sr_which``
 query can be reused as input to another.
 
+Regular Expressions
+-------------------
+
+:sqlfunc:`sr_regex` describes the derivations of a result as a regular
+expression over the labels of its input tokens: a derivation is the word
+of its labels, in the order of the query (that of the ``FROM`` clause for
+a join), and alternatives are joined by union:
+
+.. code-block:: postgresql
+
+    SELECT e1.src, e2.dst, sr_regex(provenance(), 'label_mapping')
+    FROM edges e1 JOIN edges e2 ON e1.dst = e2.src;
+
+The result reads ``ab · bc`` for the path through the edges labelled
+``ab`` then ``bc``: ``|`` is union, ``·`` concatenation, ``*`` the Kleene
+star, ``ε`` the empty word (also what an empty label stands for) and
+``∅`` the absence of any derivation.
+
+Unlike the other semirings of this chapter, this multiplication does not
+commute: ``ab · bc`` and ``bc · ab`` are two different words. Over a
+recursive query on a cyclic graph, the regular expression is the exact
+language of the derivations, a cycle appearing under a star:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(node) AS (
+        SELECT 'a'::text
+      UNION
+        SELECT e.dst FROM reach r JOIN edges e ON e.src = r.node
+    )
+    SELECT node, sr_regex(provenance(), 'label_mapping')
+    FROM reach;
+
+With edges ``a → b`` (labelled ``ab``), ``b → c`` (``bc``), ``c → a``
+(``ca``) and ``a → c`` (``ac``), node ``c`` is reached by
+``((ac | ab · bc) · ca)* · (ac | ab · bc)``. The recursive relation comes
+first in the recursive ``FROM`` clause, so that each path reads in the
+order it is followed; see :ref:`recursive-queries` for what the order
+changes.
+
+Equality of two expressions is syntactic: an alternative is merged with
+an identical one, but two expressions of the same language are not
+recognised as such. The semiring has no monus, and ``HAVING`` conditions
+are not supported, as they have no order of the query to follow.
+
 Tropical Semiring (m-semiring)
 -------------------------------
 
@@ -242,6 +287,37 @@ Under ``provsql.provenance = 'absorptive'`` on bounded-treewidth data,
 this evaluation, like that of every absorptive semiring on this page,
 is linear in the data, including hop-bounded variants, per-group minima
 and directed Steiner costs; see :ref:`network-reliability-btw`.
+
+Least Cost with Its Paths
+-------------------------
+
+:sqlfunc:`sr_tropical_paths` combines the two previous semirings: the
+least cost of a derivation, as :sqlfunc:`sr_tropical`, together with the
+derivations of that cost, as a regular expression over the labels, as
+:sqlfunc:`sr_regex`. On a path query, these are the shortest paths. It
+takes two mappings, one of costs and one of labels (an input missing from
+the first costs 0, one missing from the second is the empty word), and
+returns a ``cost`` and a ``paths`` column:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(node) AS (
+        SELECT 'a'::text
+      UNION
+        SELECT e.dst FROM reach r JOIN edges e ON e.src = r.node
+    )
+    SELECT node, (sr_tropical_paths(provenance(), 'cost_mapping',
+                                    'label_mapping')).*
+    FROM reach;
+
+On the graph above, with costs 1 for ``ab``, 2 for ``bc``, 0 for ``ca``
+and 3 for ``ac``, node ``c`` has cost 3 and paths ``ac | ab · bc``: the
+two derivations of that cost. Two alternatives of the same cost keep both
+their paths; a cycle of positive cost never lies on a shortest path, one of
+cost zero can be followed any number of times and appears under a star, and
+one of negative cost, which makes the cost unbounded, is refused. As for
+:sqlfunc:`sr_regex`, the multiplication does not commute, there is no monus
+and ``HAVING`` is refused.
 
 Viterbi Semiring (m-semiring)
 ------------------------------
@@ -542,7 +618,8 @@ any circuit, including rewritten ones: :sqlfunc:`sr_boolean`,
 rewritten circuits: :sqlfunc:`sr_counting`, :sqlfunc:`sr_how`,
 :sqlfunc:`sr_why`, :sqlfunc:`sr_which`, :sqlfunc:`sr_tropical`,
 :sqlfunc:`sr_viterbi`, :sqlfunc:`sr_lukasiewicz`,
-:sqlfunc:`sr_minmax`, :sqlfunc:`sr_maxmin`.
+:sqlfunc:`sr_minmax`, :sqlfunc:`sr_maxmin`, :sqlfunc:`sr_regex`,
+:sqlfunc:`sr_tropical_paths`.
 
 To run a refused semiring, switch
 the provenance class below ``'boolean'`` (in the current session, or for

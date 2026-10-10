@@ -34,6 +34,11 @@ test: absorptive_recursion
 # equations), the refusals, PROV-XML labels and the per-statement cache
 test: recursion_equations
 
+# Non-commutative semirings (regular expressions, least cost with its paths):
+# factors in query order, Gaussian elimination on either side, two-sided
+# recursions refused
+test: noncommutative_semirings
+
 # Case Study 3, Part 2 (journeys over a miniature network): the recursion
 # evaluated in several semirings, and its sampled probabilities.
 test: casestudy3_network

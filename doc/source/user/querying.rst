@@ -125,11 +125,22 @@ as in SQL.
 Over cyclic data, a row has infinitely many derivations. ProvSQL records
 its provenance as equations between the rows of the cycle, and the
 semiring evaluating it solves them: probabilities and the Boolean,
-tropical, Viterbi, temporal, why- and which-provenance semirings give a
-value, while counting and how-provenance raise an error, the result being
-infinite. :sqlfunc:`sr_formula` prints the equations::
+tropical, Viterbi, temporal, why- and which-provenance and
+regular-expression semirings give a value, while counting and
+how-provenance raise an error, the result being infinite.
+:sqlfunc:`sr_formula` prints the equations::
 
     x₂ where x₁ = a ⊗ x₂, x₂ = 𝟙 ⊕ (c ⊗ x₃), x₃ = b ⊗ x₁
+
+A product keeps the order of the query, that of the ``FROM`` clause, which
+matters to the semirings whose multiplication does not commute: the regular
+expressions of :sqlfunc:`sr_regex` and the shortest paths of
+:sqlfunc:`sr_tropical_paths` (see :doc:`semirings`). Write the recursive
+relation first in the recursive ``FROM`` clause (``FROM reach r JOIN edges
+e``) to read a path in the order it is followed, last to read it backwards.
+These semirings need the recursive relation at the same place of every
+recursive ``FROM`` clause, and refuse a recursion that has it between two
+other relations.
 
 An exact probability of such a row expands the equations into a Boolean
 circuit, of about the size of a cycle's rows times its terms: on a large
