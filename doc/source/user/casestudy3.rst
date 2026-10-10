@@ -20,8 +20,17 @@ reaching a station when parts of the network are disrupted.
 The Scenario
 ------------
 
+Île-de-France is the region around Paris. Its network combines the
+*metro*, inside Paris; the *RER*, express trains crossing the city and
+running out to the suburbs (lines A to E); suburban trains; trams; and
+buses, including the night buses (*Noctilien*, lines numbered ``N…``).
+
 The `STIF GTFS dataset <https://www.data.gouv.fr/datasets/horaires-prevus-sur-les-lignes-de-transport-en-commun-dile-de-france-gtfs-datahub/>`_
-describes hundreds of transit routes and tens of thousands of stops.
+describes hundreds of transit routes and tens of thousands of stops, in
+GTFS, the General Transit Feed Specification: a set of CSV files whose
+columns the `GTFS reference
+<https://gtfs.org/documentation/schedule/reference/>`_ documents.
+
 Starting from **Luxembourg** station, in the centre of Paris (served by
 RER B and several bus lines), you want to know:
 
@@ -61,7 +70,8 @@ and run it from the directory containing the four GTFS files:
     cd /path/to/gtfs-files
     psql -d mydb -f /path/to/setup.sql
 
-This creates four tables:
+Loading the files, millions of rows of timetable among them, takes a
+couple of minutes. This creates four tables:
 
 * ``routes`` -- transit lines (RER A, B, M1, bus 91…)
 * ``stops`` -- individual stop points with GPS coordinates and a
@@ -70,8 +80,8 @@ This creates four tables:
   ``wheelchair_accessible`` flag
 * ``stop_times`` -- arrival and departure times at each stop for each trip
 
-The script also adds provenance tracking and creates a combined
-``wheelchair`` mapping table from both the trip and stop wheelchair columns.
+The script also adds provenance tracking to ``trips`` and ``stops``, and
+normalises their wheelchair columns to 1 (accessible) or 0.
 
 .. note::
 
@@ -96,27 +106,45 @@ Inspect the four tables:
     SELECT COUNT(*) FROM trips;
     SELECT COUNT(*) FROM stop_times;
 
-To find the stop IDs for Luxembourg station and its platforms:
+The ``stops`` table has two kinds of rows, told apart by
+``location_type``. A *stop* (``location_type`` 0) is where a vehicle
+calls: a platform, or a bus stop; it is what ``stop_times`` refers to. A
+*station* (``location_type`` 1) groups the stops of one place: each of
+its stops names it in its ``parent_station`` column. Luxembourg station
+thus groups its RER platforms and the bus stops around it. To find it and
+its stops:
 
 .. code-block:: postgresql
 
     SELECT * FROM stops WHERE stop_name = 'Luxembourg';
 
-Two stations carry the name: ``IDFM:71161``, the RER B station in Paris,
-and ``IDFM:65716``, a bus stop elsewhere in the region. The queries below
-start from the first.
+Two stations carry the name: ``IDFM:71161``, Luxembourg in Paris, and
+``IDFM:65716``, a namesake elsewhere in the region. The queries below
+start from the first, and reach its trips through its stops.
 
 
 Step 2: Provenance and Wheelchair Mapping
 ------------------------------------------
 
-Provenance has already been added by ``setup.sql``.  The ``wheelchair``
-mapping table combines ``wheelchair_accessible`` from ``trips`` and
-``wheelchair_boarding`` from ``stops``.  A result token evaluates to
-``true`` (1) under :sqlfunc:`sr_boolean` if *every* contributing row
-has its wheelchair column set to 1.
+Provenance has already been added to ``trips`` and ``stops`` by
+``setup.sql``: every row of a query over them carries the provenance of the
+trip and stop records it reads. Their wheelchair columns become the values
+of a provenance mapping, which associates each input token with a value.
+Each call below builds a mapping for one table; their union covers the
+tokens of both, and an index speeds up the lookups in this large mapping:
 
-Inspect the mapping:
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS w_trips, w_stops, wheelchair;
+    SELECT create_provenance_mapping('w_trips', 'trips', 'wheelchair_accessible');
+    SELECT create_provenance_mapping('w_stops', 'stops', 'wheelchair_boarding');
+    CREATE TABLE wheelchair AS
+      SELECT * FROM w_trips UNION SELECT * FROM w_stops;
+    CREATE INDEX ON wheelchair(provenance);
+
+A result token evaluates to ``true`` (1) under :sqlfunc:`sr_boolean` if
+*every* contributing row has its wheelchair column set to 1. Inspect the
+mapping:
 
 .. code-block:: postgresql
 
@@ -124,7 +152,7 @@ Inspect the mapping:
 
 
 Step 3: Reachable Stops from Luxembourg
--------------------------------------
+---------------------------------------
 
 Find all stops reachable from Luxembourg on the same trip and later in the
 sequence -- in other words, stops you can reach by boarding a vehicle at
@@ -144,9 +172,8 @@ Luxembourg without changing:
     WHERE s0.stop_id = 'IDFM:71161'
     ORDER BY r2.route_long_name, s2.stop_name;
 
-This returns some 430 distinct (stop, route) pairs, on RER B and the bus
-lines through the station (the exact number depends on the GTFS dataset
-version).
+This returns every (stop, line) pair reachable without changing, on RER B
+and on the bus lines through the station.
 
 
 Step 4: Boolean Provenance -- Full Wheelchair Accessibility
@@ -159,7 +186,7 @@ result first and then aggregate per destination:
 
 .. code-block:: postgresql
 
-    CREATE TEMP TABLE bagneux_b AS
+    CREATE TEMP TABLE from_luxembourg AS
       SELECT s2.stop_name,
              r2.route_long_name,
              sr_boolean(provenance(), 'wheelchair') AS accessible
@@ -173,24 +200,26 @@ result first and then aggregate per destination:
       JOIN routes     r2 ON r2.route_id = u2.route_id
       WHERE s0.stop_id = 'IDFM:71161';
 
-    SELECT remove_provenance('bagneux_b');
+    SELECT remove_provenance('from_luxembourg');
 
     SELECT stop_name, route_long_name, bool_or(accessible) AS accessible
-    FROM bagneux_b
+    FROM from_luxembourg
     GROUP BY stop_name, route_long_name
     ORDER BY route_long_name, stop_name;
 
-The materialised table still carries the ``provsql`` provenance column,
-so :sqlfunc:`remove_provenance` drops tracking first and the
-``bool_or`` aggregation runs outside ProvSQL.
+:sqlfunc:`sr_boolean` evaluates the provenance token of each row under
+the Boolean semiring, looking up each leaf token in the ``wheelchair``
+table: ``true`` when every record the row reads (the station, its platform,
+the stop, the trip) has the wheelchair flag set, i.e., when that trip
+makes that journey accessibly. The table holds a row per trip and stop,
+hundreds of thousands of them, so this step takes a little while.
 
-:sqlfunc:`sr_boolean` evaluates the provenance token under the Boolean
-semiring, looking up each leaf token in the ``wheelchair`` table.
-A result of ``true`` means every record along *some* trip from Luxembourg
-to that stop has the wheelchair flag set; ``false`` means no fully
-accessible trip exists. The table holds some 200,000 rows, one per trip and
-stop, so this step takes a few seconds; every stop of RER B comes out
-accessible, while a few dozen bus stops do not.
+The materialised table still carries the ``provsql`` provenance column,
+so :sqlfunc:`remove_provenance` drops tracking first, and the final
+aggregation runs outside ProvSQL. ``bool_or`` asks whether *some* trip
+of the line reaches the stop accessibly from Luxembourg: one can wait for
+an accessible vehicle. ``bool_and`` would ask that *every* trip does; on
+this network, the two rarely differ.
 
 
 Step 5: Inspect Individual Results with :sqlfunc:`sr_formula`
@@ -291,8 +320,11 @@ next stop is wheelchair-accessible.
 
 Without ``plain``, ``ORDER BY … LIMIT 1`` would be read in every
 possible world: each later stop would be a candidate, conditioned on no
-earlier stop being present. Here the tokens stand for wheelchair
-accessibility and every stop exists, so which stop comes next is a plain
+earlier stop being present. Here a token stands for an accessible record,
+so this would ask for the next *accessible* stop, another question, and a
+costly one: each row would carry a condition over all the later stops of
+its trip, for every trip through Luxembourg, and the query does not finish
+in reasonable time. Every stop exists, so which stop comes next is a plain
 fact of the timetable: ``LIMIT plain(1)`` keeps the next stop of the
 actual data, with the provenance its row has in the full result.
 ProvSQL emits a ``WARNING`` about this ``LIMIT`` in a subquery, since
@@ -306,50 +338,84 @@ Step 7: The Network as a Table
 Steps 3 to 6 stayed on one vehicle. To change lines, describe the network
 itself: one row per pair of consecutive stations on a line, with the
 average scheduled time between them and whether some trip makes that hop
-accessibly. Computing the table needs no provenance, so turn the rewriting
-off with ``provsql.active`` while it is built; the table then gets tokens
-of its own, as a new input to the queries below:
+accessibly. This is plain SQL over the timetable, a long computation that
+needs no provenance: turn the rewriting off with ``provsql.active`` while
+it runs, rather than tracking the provenance of millions of rows for
+nothing.
 
 .. code-block:: postgresql
 
-    DROP TABLE IF EXISTS hop_minutes, hop_access, hop_name, hop_one, hop;
     SET provsql.active = off;
-    CREATE TABLE hop AS
-    WITH seq AS (
-      SELECT r.route_short_name AS line, r.route_type,
+    DROP TABLE IF EXISTS hop_minutes, hop_access, hop_name, hop_one, hop;
+    DROP VIEW IF EXISTS trip_hops, calls;
+
+First, every call of a trip at a stop, with its line, the station of the
+stop, its arrival time in seconds since midnight, and whether both the
+trip and the stop are accessible:
+
+.. code-block:: postgresql
+
+    CREATE TEMP VIEW calls AS
+      SELECT st.trip_id, st.stop_sequence, r.route_short_name AS line,
+             r.route_type,
              coalesce(nullif(s.parent_station, ''), s.stop_id) AS station,
-             lead(coalesce(nullif(s.parent_station, ''), s.stop_id))
-               OVER w AS next_station,
-             split_part(st.departure_time, ':', 1)::int * 60
-               + split_part(st.departure_time, ':', 2)::int AS departure,
-             lead(split_part(st.arrival_time, ':', 1)::int * 60
-                  + split_part(st.arrival_time, ':', 2)::int) OVER w AS arrival,
+             split_part(st.arrival_time, ':', 1)::int * 3600
+               + split_part(st.arrival_time, ':', 2)::int * 60
+               + split_part(st.arrival_time, ':', 3)::int AS arrival,
              t.wheelchair_accessible = 1 AND s.wheelchair_boarding = 1
-               AND lead(s.wheelchair_boarding) OVER w = 1 AS accessible
+               AS accessible
       FROM stop_times st
       JOIN trips t  ON t.trip_id = st.trip_id
       JOIN routes r ON r.route_id = t.route_id
-      JOIN stops s  ON s.stop_id = st.stop_id
-      WINDOW w AS (PARTITION BY st.trip_id ORDER BY st.stop_sequence)
-    )
-    SELECT station AS from_station, next_station AS to_station, line,
-           route_type,
-           round(avg(arrival - departure), 1)::float8 AS minutes,
-           bool_or(accessible)::int AS accessible
-    FROM seq
-    WHERE next_station IS NOT NULL AND next_station <> station
-    GROUP BY station, next_station, line, route_type
-    HAVING avg(arrival - departure) IS NOT NULL;
+      JOIN stops s  ON s.stop_id = st.stop_id;
+
+Then every hop of a trip, a call and the next call of the same trip, which
+the window function ``lead`` reads in the order of the trip. Its time runs
+from arrival to arrival, so that it counts the stop at the station, still
+on board; the hop is accessible when both its calls are:
+
+.. code-block:: postgresql
+
+    CREATE TEMP VIEW trip_hops AS
+      SELECT line, route_type, station AS from_station,
+             lead(station) OVER w AS to_station,
+             (lead(arrival) OVER w - arrival) / 60.0 AS minutes,
+             accessible AND lead(accessible) OVER w AS accessible
+      FROM calls
+      WINDOW w AS (PARTITION BY trip_id ORDER BY stop_sequence);
+
+Finally, one row per hop of a line, over all its trips: the average time,
+and whether some trip makes it accessibly. Bus schedules give times to the
+minute, so a single trip often shows a hop as 0 or 1 minute; the average
+evens this rounding out. The last call of a trip has no next one, and a
+hop with no scheduled time is left out:
+
+.. code-block:: postgresql
+
+    CREATE TABLE hop AS
+      SELECT from_station, to_station, line, route_type,
+             round(avg(minutes), 1)::float8 AS minutes,
+             bool_or(accessible)::int AS accessible
+      FROM trip_hops
+      WHERE to_station IS NOT NULL AND to_station <> from_station
+      GROUP BY from_station, to_station, line, route_type
+      HAVING avg(minutes) IS NOT NULL;
     RESET provsql.active;
+
+The table has tens of thousands of rows and takes up to a minute to build,
+over the millions of rows of ``stop_times``. Since the rewriting was off,
+its rows carry no provenance at all: the link with the tokens of ``trips``
+and ``stops`` is lost, and ``accessible`` is just a copied value, no longer
+a formula over the trips and stops it came from. ``add_provenance`` makes
+``hop`` a base relation of its own, each hop with a fresh token, which the
+queries below combine like those of any other input; map these tokens to
+the times and accessibility of their hops:
+
+.. code-block:: postgresql
 
     SELECT add_provenance('hop');
     SELECT create_provenance_mapping('hop_minutes', 'hop', 'minutes');
     SELECT create_provenance_mapping('hop_access', 'hop', 'accessible');
-
-The table has some 75,000 rows and takes under a minute to build, over the
-13 million rows of ``stop_times``. The schedule gives times to the minute,
-so a single trip often shows a hop as 0 or 1 minute; the average over the
-trips evens this rounding out. Hops with no scheduled time are left out.
 
 
 Step 8: Every Station Reachable from Luxembourg
@@ -367,7 +433,7 @@ of the same station:
         SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
     SELECT count(*) FROM reach;
 
-Some 15,400 stations, the whole network, in a few seconds. The network is
+The whole network, in a few seconds. The network is
 full of cycles (every line runs both ways), so a station has infinitely
 many derivations: ProvSQL records the provenance of each row as one
 unknown of a system of equations over the rows of the cycle, which every
@@ -391,11 +457,12 @@ it has no provenance of its own:
       UNION
         SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
     SELECT d.name,
-           sr_tropical(provenance(), 'hop_minutes', nonnegative => true)
-             AS minutes,
+           round(sr_tropical(provenance(), 'hop_minutes',
+                             nonnegative => true)::numeric, 1) AS minutes,
            sr_boolean(provenance(), 'hop_access') AS accessible
     FROM reach r
-    JOIN (VALUES ('IDFM:71264', 'Châtelet'), ('IDFM:71410', 'Gare du Nord'),
+    JOIN (VALUES ('IDFM:474151', 'Châtelet - Les Halles'),
+                 ('IDFM:71410', 'Gare du Nord'),
                  ('IDFM:71517', 'La Défense'),
                  ('IDFM:73721', 'Versailles Château Rive Gauche'),
                  ('IDFM:73699', 'Aéroport CDG (Terminal 2)'),
@@ -404,19 +471,23 @@ it has no provenance of its own:
       USING (station)
     ORDER BY minutes;
 
-.. code-block:: text
+Châtelet - Les Halles, two stops away on RER B, comes first; the airport
+and Chessy, at the far ends of the network, last.
 
-                 name              | minutes | accessible
-    -------------------------------+---------+------------
-    Châtelet                       |     3.5 | t
-    Gare du Nord                   |     6.1 | t
-    La Défense                     |    11.1 | t
-    Versailles Château Rive Gauche |    17.7 | t
-    Aéroport CDG (Terminal 2)      |    28.9 | t
-    Marne-la-Vallée - Chessy       |    35.5 | t
-
-The times are time on board, without waiting or changing: Versailles
-comes in under 18 minutes through a direct train from Gare Montparnasse.
+These are times on board only, well below what a traveller would see. In
+this network, changing lines is instant, and a train is always there to
+board: a journey is free to hop from line to line at every station, and
+the fastest ones do, catching a bus or a night bus for a single stop when
+it saves a minute. Real journeys add, at every change, the walk between
+platforms, sometimes several minutes in a large station, and, at every
+boarding, the wait for the next departure. The dataset has what it takes
+to account for both: the departure times are in ``stop_times``, and a file
+this case study does not load, ``transfers.txt``, gives the minimum time to
+change between two stops (another, ``pathways.txt``, even gives the walks
+from the entrances of a station, with their stairs). A model using them would
+have a node per station and line, with change hops between them, or, to
+count the waits, a node per departure; the queries stay the same recursion
+over a larger table.
 
 Each semiring solves the equations by the method its properties allow.
 The Boolean semiring, and the tropical one over the nonnegative costs that
@@ -441,7 +512,7 @@ Counting the derivations of a station in the counting semiring:
       UNION
         SELECT h.to_station FROM hop h JOIN reach r ON h.from_station = r.station)
     SELECT sr_counting(provenance(), 'hop_one')
-    FROM reach WHERE station = 'IDFM:71264';
+    FROM reach WHERE station = 'IDFM:474151';
 
 is refused: going round a cycle any number of times gives infinitely many
 derivations, which no integer counts.
@@ -451,7 +522,7 @@ Step 11: The Equations of a Recursion
 -------------------------------------
 
 :sqlfunc:`sr_formula` shows the equations themselves. On the whole network
-they run to tens of kilobytes per station; restricted to RER B between
+they are far too long to read; restricted to RER B between
 Luxembourg and its two neighbours, with each hop labelled by its stations,
 they read. ``plain(NULL::stops)`` reads the station names without their
 provenance, so that the stops' own tokens stay out of the labels and of the
@@ -504,7 +575,7 @@ probability 0.9:
 
 The probability of still reaching a station is a network-reliability
 problem, hard in general. An exact answer would expand the equations into
-a Boolean circuit of over two billion gates, and is refused:
+a Boolean circuit of billions of gates, and is refused:
 
 .. code-block:: postgresql
 
@@ -533,7 +604,8 @@ branches show (the seed makes the sampling reproducible):
            round(probability_evaluate(provenance(), 'additive',
                                       'eps=0.01,delta=0.05')::numeric, 3) AS p
     FROM reach r
-    JOIN (VALUES ('IDFM:71264', 'Châtelet'), ('IDFM:71517', 'La Défense'),
+    JOIN (VALUES ('IDFM:474151', 'Châtelet - Les Halles'),
+                 ('IDFM:71517', 'La Défense'),
                  ('IDFM:73721', 'Versailles Château Rive Gauche'),
                  ('IDFM:73699', 'Aéroport CDG (Terminal 2)'),
                  ('IDFM:68385', 'Marne-la-Vallée - Chessy'))
@@ -541,16 +613,7 @@ branches show (the seed makes the sampling reproducible):
       USING (station)
     ORDER BY p DESC;
 
-.. code-block:: text
-
-                 name              |   p
-    -------------------------------+-------
-    La Défense                     | 0.996
-    Châtelet                       | 0.995
-    Aéroport CDG (Terminal 2)      | 0.988
-    Versailles Château Rive Gauche | 0.897
-    Marne-la-Vallée - Chessy       | 0.843
-
-The centre of the network has many alternatives; Chessy, at the end of a
-branch of RER A, depends on every hop of that branch. Each estimate is
-within 0.01 of the true probability with probability 95%.
+The centre of the network, with many alternatives, stays almost certain to
+be reached; Chessy, at the end of a branch of RER A, depends on every hop
+of that branch, and is markedly less likely. Each estimate is within 0.01
+of the true probability with probability 95%.

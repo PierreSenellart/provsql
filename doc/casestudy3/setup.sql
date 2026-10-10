@@ -88,17 +88,19 @@ CREATE INDEX stops_parent_station_idx ON stops USING btree (parent_station);
 CREATE INDEX stops_stop_name_idx ON stops USING btree (stop_name);
 CREATE INDEX trips_route_id_idx ON trips USING btree (route_id);
 
--- Normalize GTFS wheelchair values: 0=no info→1 (accessible by default),
--- 1=accessible→1, 2=not accessible→0
-UPDATE stops SET wheelchair_boarding = CASE WHEN wheelchair_boarding = 2 THEN 0 ELSE 1 END;
-UPDATE trips SET wheelchair_accessible = CASE WHEN wheelchair_accessible = 2 THEN 0 ELSE 1 END;
+-- Normalize GTFS wheelchair values: 1=accessible→1; 0=no information and
+-- 2=not accessible→0 (most of the network is not accessible, so a record
+-- without information is not taken as accessible).  A station record
+-- (location_type 1) is the exception: this dataset gives its stations no
+-- information at all, only their stops, which decide the accessibility of a
+-- journey; a station counts as 1.
+UPDATE stops SET wheelchair_boarding =
+  CASE WHEN location_type = 1 OR wheelchair_boarding = 1 THEN 1 ELSE 0 END;
+UPDATE trips SET wheelchair_accessible = CASE WHEN wheelchair_accessible = 1 THEN 1 ELSE 0 END;
 
 select add_provenance('trips');
 select add_provenance('stops');
 \set ECHO none
 SET search_path TO public, provsql;
 
-SELECT create_provenance_mapping('w_trips','trips','wheelchair_accessible');
-SELECT create_provenance_mapping('w_stops','stops','wheelchair_boarding');
-CREATE TABLE wheelchair as select * from w_trips union select * from w_stops;
-CREATE INDEX on wheelchair(provenance);
+-- The wheelchair mapping is built in Step 2 of the case study.
