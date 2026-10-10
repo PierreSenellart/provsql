@@ -45,7 +45,9 @@ extern "C" {
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/datum.h"
+#include "utils/array.h"
 #include "access/xact.h"
+#include "compatibility.h"   /* TYPALIGN_CHAR fallback for PG < 13 */
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
 
@@ -290,25 +292,39 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   initStringInfo(&join_query);
   bool drop_table = false;
 
+  // The UUIDs as a uuid[] parameter, when there are at most
+  // nb_max_uuid_value of them; a parameter rather than a literal list keeps
+  // the query text short, which is also what an error or a cancellation
+  // reports as its context.
+  Datum uuid_array = (Datum) 0;
+
   // Two different mechanisms to implement the join (unless there are no
   // UUIDs):
-  // if there are less than nb_max_uuid_value UUIDs, we do a join
-  // with a VALUES() list;
+  // if there are less than nb_max_uuid_value UUIDs, we join with the
+  // unnested uuid[] parameter;
   // otherwise we create a temporary table where we dump the inserts
   // and join with it.
   if(uuids.size() == 0) {
     appendStringInfo(&join_query,
                      "SELECT value, provenance FROM %s WHERE 'f'", qualified);
   } else if(uuids.size() <= nb_max_uuid_value) {
-    appendStringInfo(&join_query,
-                     "SELECT value, provenance FROM %s t JOIN (VALUES", qualified);
-    bool first=true;
-    for(auto u: uuids) {
-      appendStringInfo(&join_query, "%s('%s'::uuid)", first?"":",", u.c_str());
-      first=false;
+    pg_uuid_t *values =
+      static_cast<pg_uuid_t *>(palloc(uuids.size() * sizeof(pg_uuid_t)));
+    Datum *elems = static_cast<Datum *>(palloc(uuids.size() * sizeof(Datum)));
+    for(size_t i = 0; i < uuids.size(); ++i) {
+      values[i] = string2uuid(uuids[i]);
+      elems[i] = UUIDPGetDatum(&values[i]);
     }
+    uuid_array = PointerGetDatum(
+      construct_array(elems, uuids.size(), UUIDOID, UUID_LEN, false,
+                      TYPALIGN_CHAR));
+    pfree(elems);
+    pfree(values);
 
-    appendStringInfo(&join_query, ") AS u(id) ON t.provenance=u.id");
+    appendStringInfo(&join_query,
+                     "SELECT value, provenance FROM %s t "
+                     "JOIN unnest($1) AS u(id) ON t.provenance=u.id",
+                     qualified);
   } else {
     const char *create_temp_table = "CREATE TEMP TABLE tmp_uuids(id uuid);";
     if (SPI_exec(create_temp_table, 0) != SPI_OK_UTILITY) {
@@ -346,7 +362,12 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   /* Read-only unless it reads the temporary table just filled: an sr_*
    * evaluation is PARALLEL SAFE, and a parallel worker can only run a
    * read-only command. */
-  if (SPI_execute(join_query.data, !drop_table, 0) != SPI_OK_SELECT) {
+  Oid argtypes[1] = {UUIDARRAYOID};
+  const int ret = uuid_array != (Datum) 0
+    ? SPI_execute_with_args(join_query.data, 1, argtypes, &uuid_array,
+                            nullptr, true, 0)
+    : SPI_execute(join_query.data, !drop_table, 0);
+  if (ret != SPI_OK_SELECT) {
     if(drop_table)
       SPI_exec(drop_temp_table, 0);
     SPI_finish();
