@@ -338,9 +338,10 @@ custom and “Other” entries below:
 * **Compiled semirings**
 
   * *Boolean*: ``boolexpr``, ``boolean``.
-  * *Lineage*: ``formula``, ``how``, ``why``, ``which``.
-  * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
-    ``lukasiewicz``.
+  * *Lineage*: ``formula``, ``how``, ``why``, ``which``, ``regex``
+    (:sqlfunc:`sr_regex`).
+  * *Numeric*: ``counting``, ``tropical``, ``tropical-paths``
+    (:sqlfunc:`sr_tropical_paths`), ``viterbi``, ``lukasiewicz``.
   * *Intervals*: ``interval-union``, i.e., :sqlfunc:`sr_temporal`,
     :sqlfunc:`sr_interval_num` or :sqlfunc:`sr_interval_int` according
     to the mapping's multirange type (PostgreSQL 14+).
@@ -368,6 +369,8 @@ the selected semiring (``(no compatible mappings : expected …)`` when
 none does). ``boolexpr``, ``formula`` and ``PROV-XML export`` take an
 optional, possibly partial mapping: leaves it does not cover are
 identified by their gate UUID or an ``x<id>`` placeholder.
+``tropical-paths`` takes two mappings: the costs in the mapping picker,
+and the labels the paths are written with in a second picker next to it.
 
 :fa:`play` :guilabel:`Run` reports the result inline along with the
 runtime. For an approximate method the strip also shows the

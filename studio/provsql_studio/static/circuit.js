@@ -1645,6 +1645,11 @@
     'which':       { label: 'Which-provenance',          group: 'lin',
                      needsMapping: true,  types: null,                hint: null,
                      booleanCompatible: false, absorptive: false, aggCompatible: false },
+    // Not commutative: concatenation follows the order of the query.
+    'regex':       { label: 'Regular expression',        group: 'lin',
+                     needsMapping: true,  types: null,
+                     hint: 'Derivations as a regular expression over the labels, factors in query (FROM) order.',
+                     booleanCompatible: false, absorptive: false, aggCompatible: false },
     // Numeric / scoring. The [0, 1] constraint for Viterbi / Łukasiewicz
     // can't be enforced at type level (no PG type for "numeric in [0, 1]")
     // so the hint flags it; the kernel itself doesn't reject out-of-range
@@ -1659,6 +1664,12 @@
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES,
                      hint: 'Expects nonnegative cost values; absorptive, so it accepts the bounded-treewidth reachability route\u2019s tokens, and solves the cycles of a recursive query fastest (min-cost reachability).',
                      booleanCompatible: false, absorptive: true, aggCompatible: false },
+    // Two mappings: costs in the main picker, labels in the second one
+    // (`labels`, any value type).
+    'tropical-paths': { label: 'Least cost with its paths', group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, labels: true,
+                     hint: 'Costs (numeric), then labels: the least cost, and its derivations as a regular expression.',
+                     booleanCompatible: false, absorptive: false, aggCompatible: false },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
                      booleanCompatible: false, absorptive: true, aggCompatible: false },
@@ -1725,6 +1736,11 @@
   }
   function mappingOptional(v) {
     return _OPTIONAL_MAPPING.has(v);
+  }
+  // True for the semiring that takes a second mapping, of labels.
+  function needsLabels(v) {
+    const spec = _COMPILED_REGISTRY[v];
+    return !!(spec && spec.labels);
   }
 
   // Gate types whose value is a *scalar* (deterministic constant, random
@@ -2020,6 +2036,7 @@
   function initEvalStrip() {
     const sel    = document.getElementById('eval-semiring');
     const map    = document.getElementById('eval-mapping');
+    const labels = document.getElementById('eval-labels');
     const meth   = document.getElementById('eval-method');
     const run    = document.getElementById('eval-run');
     const result = document.getElementById('eval-result');
@@ -2305,6 +2322,7 @@
       syncDropdownVisibility();
       const v = sel.value;
       map.hidden  = !needsMapping(v);
+      if (labels) labels.hidden = !needsLabels(v);
       meth.hidden = v !== 'probability';
       // Show only the args control(s) that match the current semiring,
       // hide every other one so the row stays compact.  Most semirings
@@ -2399,6 +2417,7 @@
         renderMappingOptions();
       }
       updateMappingHint();
+      renderLabelOptions();
     }
 
     // Set of value base types accepted for the mapping's `value` column
@@ -2488,6 +2507,30 @@
       }).join('');
       if (previousValue && [...map.options].some(o => o.value === previousValue)) {
         map.value = previousValue;
+      }
+      renderLabelOptions();
+    }
+
+    // The labels picker of `tropical-paths`: every mapping, whatever its
+    // value type (a label is rendered as text).
+    function renderLabelOptions() {
+      if (!labels || labels.hidden) return;
+      if (!_mappings.length) {
+        labels.innerHTML =
+          '<option value="">(no mappings : run create_provenance_mapping)</option>';
+        labels.disabled = true;
+        return;
+      }
+      labels.disabled = false;
+      const previousValue = labels.value || '';
+      labels.innerHTML = _mappings.map(m => {
+        const label = m.display_name || m.qname;
+        const tagged = `labels: ${label} (${m.value_type})`;
+        const title = `${m.qname} : value ${m.value_type}`;
+        return `<option value="${escapeHtml(m.qname)}" title="${escapeHtml(title)}">${escapeHtml(tagged)}</option>`;
+      }).join('');
+      if (previousValue && [...labels.options].some(o => o.value === previousValue)) {
+        labels.value = previousValue;
       }
     }
 
@@ -2597,6 +2640,9 @@
       if (!customsLoaded || metadataDirty('customsDirty')) loadCustomSemirings();
     });
     map.addEventListener('mousedown', () => {
+      if (metadataDirty('mappingsDirty')) loadMappings();
+    });
+    labels?.addEventListener('mousedown', () => {
       if (metadataDirty('mappingsDirty')) loadMappings();
     });
     // Method change also affects whether the args input is shown / what
@@ -3262,6 +3308,15 @@
         return;
       }
       if (m) body.mapping = m;
+      if (needsLabels(selValue)) {
+        const l = document.getElementById('eval-labels')?.value || '';
+        if (!l) {
+          result.textContent = 'pick a mapping of labels';
+          result.dataset.kind = 'error';
+          return;
+        }
+        body.labels = l;
+      }
     }
     if (!isKc && semiring === 'probability') {
       body.method = meth.value || '';

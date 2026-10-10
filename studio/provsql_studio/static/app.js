@@ -3720,6 +3720,10 @@
           <select class="cv-eval__mapping" id="eval-mapping" hidden>
             <option value="">(no mappings found)</option>
           </select>
+          <select class="cv-eval__mapping" id="eval-labels" hidden
+                  title="Mapping of the labels the derivations are written with">
+            <option value="">(no mappings found)</option>
+          </select>
           <span class="cv-eval__hint" id="eval-mapping-hint" hidden></span>
           <select class="cv-eval__method" id="eval-method" hidden>
             <optgroup label="By guarantee">

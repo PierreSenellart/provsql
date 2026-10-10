@@ -222,6 +222,38 @@ def test_circuit_eval_strip_runs_boolexpr(
     expect(page.locator("#eval-result")).not_to_be_empty(timeout=8000)
 
 
+def test_circuit_eval_strip_tropical_paths_labels_picker(
+    page: Page, studio_url: str
+) -> None:
+    """`tropical-paths` takes a second mapping: the labels picker shows
+    for it alone, and a run with costs and labels reports both."""
+    page.goto(studio_url + "/circuit")
+    _run_query_and_wait(
+        page,
+        "DROP TABLE IF EXISTS e2e_ids; DROP TABLE IF EXISTS e2e_names;"
+        " SELECT create_provenance_mapping('e2e_ids', 'personnel', 'id');"
+        " SELECT create_provenance_mapping('e2e_names', 'personnel', 'name');"
+        " SELECT name FROM personnel WHERE id = 1;",
+        1,
+    )
+    try:
+        page.locator("#result-body tr").first.locator("td").last.click()
+        expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+        page.locator("#eval-semiring").select_option(value="tropical")
+        expect(page.locator("#eval-labels")).to_be_hidden()
+        page.locator("#eval-semiring").select_option(value="tropical-paths")
+        expect(page.locator("#eval-labels")).to_be_visible(timeout=8000)
+        page.locator("#eval-mapping").select_option(value="provsql_test.e2e_ids")
+        page.locator("#eval-labels").select_option(
+            value="provsql_test.e2e_names")
+        page.locator("#eval-run").click()
+        expect(page.locator("#eval-result")).to_contain_text(
+            "1: John", timeout=8000)
+    finally:
+        _run_query_and_wait(
+            page, "DROP TABLE e2e_ids; DROP TABLE e2e_names; SELECT 1;", 1)
+
+
 def test_circuit_eval_strip_karp_luby_options_and_bound(
     page: Page, studio_url: str
 ) -> None:

@@ -1055,6 +1055,10 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                  "boolean_rewrite_compatible": False, "absorptive": False},
     "how":      {"func": "sr_how",      "types": None,
                  "boolean_rewrite_compatible": False, "absorptive": False},
+    # Regular expressions over the mapping's labels: concatenation in
+    # query order, so neither commutative nor Boolean-rewrite compatible.
+    "regex":    {"func": "sr_regex",    "types": None,
+                 "boolean_rewrite_compatible": False, "absorptive": False},
     # Numeric / scoring.
     "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES,
                     "boolean_rewrite_compatible": False,
@@ -1071,6 +1075,13 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                         "nonneg": True,
                         "boolean_rewrite_compatible": False,
                         "absorptive": True},
+    # Least cost with the derivations of that cost.  `labels` marks the
+    # one kernel taking a second mapping (the labels of the derivations,
+    # any type), passed as `labels`; `mapping` holds the costs.
+    "tropical-paths": {"func": "sr_tropical_paths", "types": _NUMERIC_TYPES,
+                       "labels": True,
+                       "boolean_rewrite_compatible": False,
+                       "absorptive": False},
     "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES,
                     "boolean_rewrite_compatible": False,
                     "absorptive": True},
@@ -1267,6 +1278,7 @@ def evaluate_circuit(
     tool_search_path: str = "",
     extra_gucs: dict[str, str] | None = None,
     condition_uuid: str | None = None,
+    labels: str | None = None,
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -1280,7 +1292,11 @@ def evaluate_circuit(
     (`distribution-profile`, `moment`, `sample`).  When provided, it's
     spliced as the `prov` argument to provsql.rv_moment / rv_support /
     rv_histogram / rv_sample so the truncated distribution is returned
-    instead of the unconditional one.  Ignored by every other semiring."""
+    instead of the unconditional one.  Ignored by every other semiring.
+
+    `labels` is the second mapping of `tropical-paths` (the labels of
+    the derivations; `mapping` holds their costs).  Ignored by every
+    other semiring."""
     if semiring == "boolexpr":
         # Like prov-xml: the mapping is optional. With one, leaves are
         # labelled by the mapping's `value` column; without one, leaves
@@ -1703,6 +1719,20 @@ def evaluate_circuit(
                     fn, sql.Literal(token), sql.Literal(mapping),
                     sql.SQL(base_type),
                 )
+        elif spec.get("labels"):
+            # Two mappings, and a (cost, paths) record, rendered as one
+            # line.  The ::regclass cast validates the labels mapping too.
+            if not labels:
+                raise ValueError(
+                    f"semiring {semiring!r} requires a mapping of labels"
+                )
+            sql_stmt = sql.SQL(
+                "SELECT cost::text || ': ' || paths"
+                " FROM {}({}::uuid, {}::regclass, {}::regclass)"
+            ).format(
+                fn, sql.Literal(token), sql.Literal(mapping),
+                sql.Literal(labels),
+            )
         elif spec.get("nonneg"):
             # The nonnegative (absorptive) min-plus variant.
             sql_stmt = sql.SQL(
