@@ -7,8 +7,9 @@ real-world GTFS dataset for Île-de-France public transit. It demonstrates
 Boolean provenance at scale for wheelchair accessibility reasoning, then
 journeys with changes as a ``WITH RECURSIVE`` query over the whole network,
 whose rows the same query evaluates in several semirings: shortest travel
-time, accessibility, the equations of the recursion, and the probability of
-reaching a station when parts of the network are disrupted.
+time, accessibility, the equations of the recursion and the journeys they
+describe, the fastest journey itself, and the probability of reaching a
+station when parts of the network are disrupted.
 
 .. note::
 
@@ -524,18 +525,20 @@ Step 11: The Equations of a Recursion
 :sqlfunc:`sr_formula` shows the equations themselves, and
 :sqlfunc:`sr_regex` their solution, as a regular expression over the hops.
 On the whole network they are far too long to read; here they are
-restricted to RER B between Luxembourg and its two neighbours, with each
-hop labelled by its stations. ``plain(NULL::stops)`` reads the station
-names without their provenance, so that the stops' own tokens stay out of
-the labels and of the result:
+restricted to RER B between Luxembourg and its two neighbours. Label
+every metro and RER hop (``route_type`` 1 and 2) with its line and
+stations. ``plain(NULL::stops)`` reads the station names without their
+provenance, so that ``provenance()`` is the token of the hop alone, and
+the stops' own tokens stay out of the result as well:
 
 .. code-block:: postgresql
 
     CREATE TABLE hop_name AS
-      SELECT h.provsql AS provenance, f.stop_name || ' → ' || t.stop_name AS value
+      SELECT provenance(), h.line || ': ' || f.stop_name || ' → ' || t.stop_name
+               AS value
       FROM hop h JOIN plain(NULL::stops) f ON f.stop_id = h.from_station
                  JOIN plain(NULL::stops) t ON t.stop_id = h.to_station
-      WHERE h.line = 'B';
+      WHERE h.route_type IN (1, 2);
 
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
@@ -551,10 +554,10 @@ For Port Royal, the equations are:
 
 .. code-block:: text
 
-    x₁ where x₁ = x₂ ⊗ Luxembourg → Port Royal,
-             x₂ = 𝟙 ⊕ (x₁ ⊗ Port Royal → Luxembourg)
-                    ⊕ (x₃ ⊗ Saint-Michel Notre-Dame → Luxembourg),
-             x₃ = x₂ ⊗ Luxembourg → Saint-Michel Notre-Dame
+    x₁ where x₁ = x₂ ⊗ B: Luxembourg → Port Royal,
+             x₂ = 𝟙 ⊕ (x₁ ⊗ B: Port Royal → Luxembourg)
+                    ⊕ (x₃ ⊗ B: Saint-Michel Notre-Dame → Luxembourg),
+             x₃ = x₂ ⊗ B: Luxembourg → Saint-Michel Notre-Dame
 
 One unknown per station: Luxembourg (``x₂``) holds from the start (``𝟙``)
 or by coming back from either neighbour, and each neighbour by a hop from
@@ -564,18 +567,49 @@ neighbours), then the hop to Port Royal:
 
 .. code-block:: text
 
-    (Luxembourg → Port Royal · Port Royal → Luxembourg
-     | Luxembourg → Saint-Michel Notre-Dame · Saint-Michel Notre-Dame → Luxembourg)*
-    · Luxembourg → Port Royal
+    (B: Luxembourg → Port Royal · B: Port Royal → Luxembourg
+     | B: Luxembourg → Saint-Michel Notre-Dame
+       · B: Saint-Michel Notre-Dame → Luxembourg)*
+    · B: Luxembourg → Port Royal
 
 Unlike the other semirings so far, the concatenation ``·`` of
 :sqlfunc:`sr_regex` does not commute, and follows the order of the query:
 ``reach`` comes first in the recursive ``FROM`` clause, so that each
-journey reads in the order it is made; with ``hop`` first, the journeys
-would read backwards.
+journey reads in the order it is made.
 
 
-Step 12: A Day of Rail Disruptions
+Step 12: The Fastest Journey Itself
+-----------------------------------
+
+:sqlfunc:`sr_tropical` gives the shortest travel time, not the journey
+that takes it. :sqlfunc:`sr_tropical_paths` gives both: the least cost,
+from a first mapping, and the journeys of that cost, as a regular
+expression over the labels of a second one, alternatives of the same cost
+joined by ``|``. With the labels of Step 11, look for La Défense, on
+metro and RER only:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(station) AS (
+        SELECT 'IDFM:71161'::text
+      UNION
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station
+        WHERE h.route_type IN (1, 2))
+    SELECT (sr_tropical_paths(provenance(), 'hop_minutes', 'hop_name')).*
+    FROM reach WHERE station = 'IDFM:71517';
+
+The fastest journey takes RER B to Châtelet - Les Halles, and changes
+there to RER A:
+
+.. code-block:: text
+
+    B: Luxembourg → Saint-Michel Notre-Dame
+    · B: Saint-Michel Notre-Dame → Châtelet - Les Halles
+    · A: Châtelet - Les Halles → Auber · A: Auber → Charles de Gaulle - Étoile
+    · A: Charles de Gaulle - Étoile → La Défense
+
+
+Step 13: A Day of Rail Disruptions
 ----------------------------------
 
 Suppose each rail hop runs with probability 0.95, and each bus hop with
@@ -606,11 +640,10 @@ An approximation with an *additive* guarantee (see
 :ref:`probability-guarantees`) samples instead, solving the equations in
 each sampled world. With the buses, every destination is reached in
 practically every world; on the rail network alone, the ends of the
-branches show (the seed makes the sampling reproducible):
+branches show:
 
 .. code-block:: postgresql
 
-    SET provsql.monte_carlo_seed = 1;
     WITH RECURSIVE reach(station) AS (
         SELECT 'IDFM:71161'::text
       UNION
@@ -633,3 +666,10 @@ The centre of the network, with many alternatives, stays almost certain to
 be reached; Chessy, at the end of a branch of RER A, depends on every hop
 of that branch, and is markedly less likely. Each estimate is within 0.01
 of the true probability with probability 95%.
+
+These estimates assume that every hop runs or not independently of all
+the others. In practice, the hops of the same line are correlated: a
+signal failure or a strike stops a whole stretch of a line at once, and
+an express train and the stopping service between the same stations, two
+alternatives here, share the same track. Such correlations would lower
+these probabilities a lot.
