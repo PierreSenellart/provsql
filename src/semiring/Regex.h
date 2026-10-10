@@ -30,6 +30,9 @@
 #ifndef REGEX_H
 #define REGEX_H
 
+#include <cstddef>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,177 +40,224 @@
 
 namespace semiring {
 
+struct regex_node;
+
 /**
- * @brief A regular expression, with its rendering and the operator at its
- *        root.
+ * @brief A regular expression: an immutable tree, shared between the
+ *        expressions built from it.
  *
- * A union keeps its alternatives apart, so that a union of unions is
- * flattened and an alternative already present is not repeated.
+ * Copying an expression, or concatenating two, copies no text: the text is
+ * rendered only once, by @c render(), for a result.  Unions and
+ * concatenations are kept flat, so that a union of unions is one union,
+ * without an alternative already present.
  */
 struct regex_t {
   /** @brief The operator at the root of the expression. */
   enum Kind : unsigned char { EMPTY, EPSILON, ATOM, STAR, CONCAT, UNION };
-  Kind kind = EMPTY;              ///< The operator at the root
-  std::string text;               ///< Rendering, for every kind but UNION
-  std::vector<std::string> alts;  ///< Alternatives of a UNION, rendered
+  std::shared_ptr<const regex_node> node; ///< The root; null for ∅
 
+  inline Kind kind() const;
+  inline std::size_t hash() const;
   /** @brief Syntactic equality. */
-  bool operator==(const regex_t &o) const {
-    return kind == o.kind && text == o.text && alts == o.alts;
-  }
+  inline bool operator==(const regex_t &o) const;
   /** @brief Syntactic inequality. */
   bool operator!=(const regex_t &o) const {
     return !(*this == o);
   }
-
   /** @brief The expression, as text. */
   std::string render() const {
-    switch(kind) {
-    case EMPTY: return "∅";
-    case EPSILON: return "ε";
-    case UNION: {
-      std::string r;
-      for(const auto &a : alts)
-        r += (r.empty() ? "" : " | ") + a;
-      return r;
-    }
-    default: return text;
-    }
+    std::string out;
+    render(out);
+    return out;
   }
-
-  /** @brief The expression, as an operand of a concatenation. */
-  std::string as_factor() const {
-    return kind == UNION ? "(" + render() + ")" : render();
-  }
+  /** @brief Append the expression, as text, to @p out. */
+  inline void render(std::string &out) const;
 };
+
+/** @brief A node of a @c regex_t. */
+struct regex_node {
+  regex_t::Kind kind;          ///< Its operator
+  std::string label;           ///< The label of an ATOM
+  std::vector<regex_t> kids;   ///< The operands of STAR, CONCAT and UNION
+  std::size_t hash;            ///< Of the whole expression
+};
+
+regex_t::Kind regex_t::kind() const {
+  return node ? node->kind : EMPTY;
+}
+
+std::size_t regex_t::hash() const {
+  return node ? node->hash : 0;
+}
+
+bool regex_t::operator==(const regex_t &o) const {
+  if(node == o.node)
+    return true;
+  if(!node || !o.node || node->hash != o.node->hash ||
+     node->kind != o.node->kind || node->label != o.node->label ||
+     node->kids.size() != o.node->kids.size())
+    return false;
+  for(std::size_t i = 0; i < node->kids.size(); ++i)
+    if(node->kids[i] != o.node->kids[i])
+      return false;
+  return true;
+}
+
+void regex_t::render(std::string &out) const {
+  switch(kind()) {
+  case EMPTY: out += "∅"; return;
+  case EPSILON: out += "ε"; return;
+  case ATOM: out += node->label; return;
+  case UNION:
+  case CONCAT: {
+    const char *sep = kind() == UNION ? " | " : " · ";
+    bool first = true;
+    for(const auto &k : node->kids) {
+      if(!first)
+        out += sep;
+      first = false;
+      /* A union is an operand of a concatenation in parentheses. */
+      if(kind() == CONCAT && k.kind() == UNION) {
+        out += "(";
+        k.render(out);
+        out += ")";
+      } else
+        k.render(out);
+    }
+    return;
+  }
+  case STAR: {
+    const regex_t &k = node->kids[0];
+    /* No parentheses around a single code point. */
+    bool bare = false;
+    if(k.kind() == ATOM && !k.node->label.empty()) {
+      bare = true;
+      const std::string &t = k.node->label;
+      for(std::size_t i = 1; i < t.size(); ++i)
+        if(((unsigned char) t[i] & 0xC0) != 0x80)
+          bare = false;
+    }
+    if(bare)
+      out += k.node->label;
+    else {
+      out += "(";
+      k.render(out);
+      out += ")";
+    }
+    out += "*";
+    return;
+  }
+  }
+}
 
 /**
  * @brief Operations on regular expressions, shared by @c Regex and
  *        @c TropicalPaths.
  */
 struct regex_ops {
-  /** @brief A one-letter language. */
-  static regex_t atom(const std::string &label) {
+  /** @brief A node of kind @p k. */
+  static regex_t make(regex_t::Kind k, std::string label,
+                      std::vector<regex_t> kids) {
+    std::size_t h = std::hash<std::string>()(label) * 31 + k + 1;
+    for(const auto &x : kids)
+      h = h * 1000003 ^ x.hash();
     regex_t r;
-    if(label.empty())
-      r.kind = regex_t::EPSILON;
-    else {
-      r.kind = regex_t::ATOM;
-      r.text = label;
-    }
+    r.node = std::make_shared<const regex_node>(
+      regex_node{k, std::move(label), std::move(kids), h});
     return r;
+  }
+
+  /** @brief A one-letter language; @f$\varepsilon@f$ for an empty label. */
+  static regex_t atom(const std::string &label) {
+    return make(label.empty() ? regex_t::EPSILON : regex_t::ATOM, label, {});
   }
 
   /** @brief The union of @p v. */
   static regex_t plus(const std::vector<regex_t> &v) {
-    regex_t r;
+    std::vector<regex_t> alts;
     bool epsilon = false, starred = false;
-    for(const auto &x : v) {
-      std::vector<std::string> add;
-      switch(x.kind) {
-      case regex_t::EMPTY:
-        continue;
-      case regex_t::EPSILON:
-        epsilon = true;
-        continue;
-      case regex_t::UNION:
-        add = x.alts;
-        break;
-      case regex_t::STAR:
-        starred = true;
-        add.push_back(x.text);
-        break;
-      default:
-        add.push_back(x.text);
-      }
-      for(const auto &a : add) {
-        bool seen = false;
-        for(const auto &b : r.alts)
-          seen = seen || a == b;
-        if(!seen)
-          r.alts.push_back(a);
-      }
-    }
-    if(r.alts.empty()) {
-      r.kind = epsilon ? regex_t::EPSILON : regex_t::EMPTY;
-      return r;
-    }
+    const auto add = [&](const regex_t &a) {
+                       switch(a.kind()) {
+                       case regex_t::EMPTY:
+                         return;
+                       case regex_t::EPSILON:
+                         epsilon = true;
+                         return;
+                       case regex_t::STAR:
+                         starred = true;
+                         break;
+                       default:
+                         break;
+                       }
+                       for(const auto &b : alts)
+                         if(a == b)
+                           return;
+                       alts.push_back(a);
+                     };
+    for(const auto &x : v)
+      if(x.kind() == regex_t::UNION)
+        for(const auto &a : x.node->kids)
+          add(a);
+      else
+        add(x);
+    if(alts.empty())
+      return epsilon ? atom("") : regex_t();
     /* ε is in every starred expression already. */
     if(epsilon && !starred)
-      r.alts.insert(r.alts.begin(), "ε");
-    /* A single alternative: the expression it came from (a union has
-     * at least two). */
-    if(r.alts.size() == 1)
-      for(const auto &x : v)
-        if(x.kind != regex_t::UNION && x.text == r.alts[0])
-          return x;
-    r.kind = regex_t::UNION;
-    return r;
+      alts.insert(alts.begin(), atom(""));
+    if(alts.size() == 1)
+      return alts[0];
+    return make(regex_t::UNION, "", std::move(alts));
   }
 
   /** @brief The concatenation of @p v, in this order. */
   static regex_t times(const std::vector<regex_t> &v) {
-    regex_t r;
-    r.kind = regex_t::EPSILON;
-    std::size_t factors = 0;
-    const regex_t *last = nullptr;
-    for(const auto &x : v) {
-      if(x.kind == regex_t::EMPTY)
+    std::vector<regex_t> factors;
+    for(const auto &x : v)
+      switch(x.kind()) {
+      case regex_t::EMPTY:
         return regex_t();
-      if(x.kind == regex_t::EPSILON)
-        continue;
-      r.text += (factors ? " · " : "") + x.as_factor();
-      ++factors;
-      last = &x;
-    }
-    if(factors == 1)
-      return *last;
-    if(factors > 1)
-      r.kind = regex_t::CONCAT;
-    return r;
+      case regex_t::EPSILON:
+        break;
+      case regex_t::CONCAT:
+        factors.insert(factors.end(), x.node->kids.begin(),
+                       x.node->kids.end());
+        break;
+      default:
+        factors.push_back(x);
+      }
+    if(factors.empty())
+      return atom("");
+    if(factors.size() == 1)
+      return factors[0];
+    return make(regex_t::CONCAT, "", std::move(factors));
   }
 
   /** @brief The Kleene star of @p a. */
   static regex_t star(const regex_t &a) {
-    switch(a.kind) {
+    switch(a.kind()) {
     case regex_t::EMPTY:
     case regex_t::EPSILON:
       return atom("");
     case regex_t::STAR:
       return a;
+    case regex_t::UNION: {
+      /* (ε | a)* = a* */
+      std::vector<regex_t> alts;
+      for(const auto &x : a.node->kids)
+        if(x.kind() != regex_t::EPSILON)
+          alts.push_back(x);
+      if(alts.size() == 1)
+        return star(alts[0]);
+      if(alts.size() < a.node->kids.size())
+        return make(regex_t::STAR, "",
+                    {make(regex_t::UNION, "", std::move(alts))});
+      break;
+    }
     default:
       break;
     }
-    regex_t b = a;
-    if(b.kind == regex_t::UNION) {
-      /* (ε | a)* = a* */
-      std::vector<std::string> alts;
-      for(const auto &x : b.alts)
-        if(x != "ε")
-          alts.push_back(x);
-      b.alts = alts;
-      if(b.alts.size() == 1) {
-        b.kind = regex_t::CONCAT;
-        b.text = b.alts[0];
-        b.alts.clear();
-      }
-    }
-    regex_t r;
-    r.kind = regex_t::STAR;
-    const std::string t = b.render();
-    r.text = b.kind == regex_t::ATOM && single_code_point(t) ? t + "*"
-                                                             : "(" + t + ")*";
-    return r;
-  }
-
-  /** @brief Whether the UTF-8 string @p t is a single code point. */
-  static bool single_code_point(const std::string &t) {
-    if(t.empty())
-      return false;
-    for(std::size_t i = 1; i < t.size(); ++i)
-      if(((unsigned char) t[i] & 0xC0) != 0x80)
-        return false;
-    return true;
+    return make(regex_t::STAR, "", {a});
   }
 };
 
@@ -238,7 +288,7 @@ virtual value_type monus(value_type, value_type) const override {
           "of two languages is not, in general, a semiring difference.");
 }
 virtual value_type delta(value_type x) const override {
-  return x.kind == regex_t::EMPTY ? zero() : one();
+  return x.kind() == regex_t::EMPTY ? zero() : one();
 }
 /** @brief Union is idempotent. */
 virtual bool idempotent() const override {

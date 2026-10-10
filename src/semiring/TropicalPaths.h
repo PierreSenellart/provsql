@@ -81,7 +81,7 @@ virtual value_type times(const std::vector<value_type> &v) const override {
   value_type r = one();
   std::vector<regex_t> words;
   for(const auto &x : v) {
-    if(x.cost == zero().cost || x.paths.kind == regex_t::EMPTY)
+    if(x.cost == zero().cost || x.paths.kind() == regex_t::EMPTY)
       return zero();
     r.cost += x.cost;
     words.push_back(x.paths);

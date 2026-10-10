@@ -146,9 +146,16 @@ std::string fixpoint_cache_ctx;
 int16 fixpoint_cache_typlen;
 bool fixpoint_cache_typbyval;
 
+/* The same, for sr_tropical_paths, whose (cost, paths) results are no
+ * Datum of one type: kept as they are, under the key
+ * "<costs>|<labels>|<command>|<fixpoint token>". */
+std::unordered_map<std::string, std::pair<double, std::string> >
+tropical_paths_cache;
+
 void fixpoint_cache_clear()
 {
   fixpoint_cache.clear();
+  tropical_paths_cache.clear();
   if(fixpoint_cache_cxt)
     MemoryContextReset(fixpoint_cache_cxt);
 }
@@ -544,6 +551,17 @@ static std::pair<double, std::string> tropical_paths_internal
   constants_t constants = get_constants(true);
   fixpoint_cache_ctx.clear();
 
+  /* A component of an equation system solved earlier in this command,
+   * with the same mappings: no circuit to load. */
+  const std::string ctx = std::to_string(costs) + "|" +
+                          std::to_string(labels) + "|" +
+                          std::to_string(GetCurrentCommandId(false));
+  {
+    auto it = tropical_paths_cache.find(ctx + "|" + uuid2string(token));
+    if(it != tropical_paths_cache.end())
+      return it->second;
+  }
+
   GenericCircuit c = getGenericCircuit(token);
   auto g = c.getGate(uuid2string(token));
   std::vector<std::string> inputs_uuid;
@@ -571,6 +589,24 @@ static std::pair<double, std::string> tropical_paths_internal
 
   provsql_having(c, g, mapping, sr);
   const auto out = c.evaluate<semiring::TropicalPaths>(g, mapping, sr);
+
+  if(!c.solved_systems.empty() && !fixpoint_cache_callback) {
+    RegisterXactCallback(fixpoint_cache_xact_callback, nullptr);
+    fixpoint_cache_callback = true;
+  }
+  for(const auto &[sys, p] : c.solved_systems) {
+    const auto &vec =
+      *static_cast<const std::vector<semiring::tropical_paths_t> *>(p.get());
+    if(tropical_paths_cache.size() + vec.size() > fixpoint_cache_max)
+      tropical_paths_cache.clear();
+    const std::string prefix = "fixpoint:" + c.getUUID(sys) + ":";
+    for(std::size_t i = 0; i < vec.size(); ++i)
+      tropical_paths_cache.emplace(
+        ctx + "|" +
+        uuid2string(provsqlUuidV5(prefix + std::to_string(i + 1))),
+        std::make_pair(vec[i].cost, vec[i].paths.render()));
+  }
+
   return {out.cost, out.paths.render()};
 }
 
