@@ -635,8 +635,8 @@ static Node *frozen_agg_value(Node *arg, Oid target_type,
     return NULL;
   /* A cast, which the rewritings peel as such (peel_agg_casts) */
   value = makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE,
-                       TEXTOID, list_make1(arg), InvalidOid,
-                       DEFAULT_COLLATION_OID, COERCE_IMPLICIT_CAST);
+                       TEXTOID, list_make1(arg), DEFAULT_COLLATION_OID,
+                       InvalidOid, COERCE_IMPLICIT_CAST);
   if (target_type == TEXTOID)
     return (Node *)value;
   io = makeNode(CoerceViaIO);
@@ -666,8 +666,8 @@ static Node *plain_agg_value(Node *arg, Oid target_type,
   if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
     return NULL;
   value = makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
-                       TEXTOID, list_make1(arg), InvalidOid,
-                       DEFAULT_COLLATION_OID, COERCE_IMPLICIT_CAST);
+                       TEXTOID, list_make1(arg), DEFAULT_COLLATION_OID,
+                       InvalidOid, COERCE_IMPLICIT_CAST);
   if (target_type == TEXTOID)
     return (Node *)value;
   io = makeNode(CoerceViaIO);
@@ -4922,7 +4922,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       CoerceViaIO *io = makeNode(CoerceViaIO);
       io->arg = (Expr *)makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
                                      TEXTOID, list_make1(copyObject(token_var)),
-                                     InvalidOid, DEFAULT_COLLATION_OID,
+                                     DEFAULT_COLLATION_OID, InvalidOid,
                                      COERCE_EXPLICIT_CALL);
       io->resulttype = argtype;
       io->resultcollid = get_typcollation(argtype);
@@ -11112,7 +11112,7 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
                                    COERCION_EXPLICIT, &castfuncid);
   if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
     FuncExpr *totext = makeFuncExpr(castfuncid, TEXTOID, list_make1(arg),
-                                    InvalidOid, DEFAULT_COLLATION_OID,
+                                    DEFAULT_COLLATION_OID, InvalidOid,
                                     COERCE_IMPLICIT_CAST);
     CoerceViaIO *io = makeNode(CoerceViaIO);
     io->arg = (Expr *)totext;
