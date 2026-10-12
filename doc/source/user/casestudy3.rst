@@ -613,9 +613,10 @@ there to RER A:
 Step 13: One Journey, Step by Step
 ----------------------------------
 
-Two journeys may take the same time. To La Motte-Picquet - Grenelle, from
-Gare Montparnasse, metro 6 over four stops and metro 13 then 10 over three
-both take 11.8 minutes, and :sqlfunc:`sr_tropical_paths` lists both:
+Two journeys may take the same time. From Luxembourg to La Motte-Picquet -
+Grenelle, the fastest journeys part at Gare Montparnasse: metro 6 over
+four stops, or metro 13 then 10 over three, take the same time, and
+:sqlfunc:`sr_tropical_paths` lists both:
 
 .. code-block:: postgresql
 
@@ -722,11 +723,11 @@ faster to reach by metro than by train (the RER and the suburban trains,
 
 All five are reached both ways, so that plain SQL would return none of
 them. In :sqlfunc:`sr_best_path`, the difference of two journeys is the
-first one where it is strictly faster than the second, and nothing
+first one where it is better than the second (faster or, as fast, with
+fewer hops, then first in alphabetical order of its hops), and nothing
 otherwise: the metro wins to four of the terminals, with the journey that
 does, while the train is faster to Gare du Nord (RER A then B, through
-Châtelet - Les Halles, in 6.9 minutes against 11.9 by metro), which has
-no journey left.
+Châtelet - Les Halles), which has no journey left.
 
 
 Step 15: A Day of Rail Disruptions

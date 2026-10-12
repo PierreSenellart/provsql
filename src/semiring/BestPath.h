@@ -79,7 +79,7 @@ static bool better(const best_path_t &a, const best_path_t &b) {
 }
 
 /** @brief The value of an input of cost @p cost and label @p label, no
- *  label being the empty word. */
+ *  label being the empty word, and an infinite cost @f$\mathbb{0}@f$. */
 static best_path_t leaf(double cost, const std::string *label) {
   if(!(cost >= 0.))
     throw CircuitRefusal(
@@ -88,6 +88,8 @@ static best_path_t leaf(double cost, const std::string *label) {
             "the empty derivation is no longer the best, and a cycle may "
             "improve a derivation without end.");
   best_path_t r;
+  if(cost == std::numeric_limits<double>::infinity())
+    return r;   // 𝟘, whatever its label
   r.cost = cost;
   if(label != nullptr)
     r.word.push_back(*label);

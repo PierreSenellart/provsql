@@ -73,6 +73,12 @@ l1|l2|cost|path
 ab|bc|3|{ab,bc}
 ab||1|{ab}
 (2 rows)
+remove_provenance
+
+(1 row)
+lbl|cost|path
+ac|Infinity|
+(1 row)
 ERROR:  ProvSQL: A HAVING condition's provenance is a product over the worlds of its group, in no order of the query: it has no value in a semiring whose multiplication does not commute.
 DETAIL:  provsql-reason: having-noncommutative; scope: gap
 CONTEXT:  SQL function "sr_best_path" statement 1

@@ -105,6 +105,15 @@ SELECT remove_provenance('bp_res');
 SELECT l1, l2, cost, path FROM bp_res ORDER BY l2;
 DROP TABLE bp_res;
 
+-- An infinite cost is 0, whatever its label: no derivation, and no path.
+UPDATE bp_cost2 SET value = 'Infinity' WHERE value = 3;
+CREATE TABLE bp_res AS
+  SELECT lbl, (sr_best_path(provenance(), 'bp_cost2', 'bp_lbl2')).*
+  FROM bp_e WHERE lbl = 'ac';
+SELECT remove_provenance('bp_res');
+SELECT lbl, cost, path FROM bp_res;
+DROP TABLE bp_res;
+
 -- Refused: HAVING (no order of the query on the worlds of a group), the
 -- 'absorptive' provenance class (its circuits do not keep the order of the
 -- query), and a negative cost.

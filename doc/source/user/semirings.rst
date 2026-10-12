@@ -339,8 +339,10 @@ On the same graph, node ``c`` has cost 3 and path ``{ac}``, shorter than
 ``ab · bc`` of the same cost. Costs must be nonnegative. The multiplication
 does not commute, but the semiring has a monus (a value minus one at least
 as good is :math:`\mathbb{0}`, and it is kept otherwise), so that outer
-joins and ``EXCEPT`` are evaluated, and a recursion may have the recursive
-relation anywhere in its ``FROM`` clause. ``HAVING`` is refused, and so are
+joins and ``EXCEPT`` are evaluated. As a longer path is never better than
+its beginning or its end, a cycle never improves a path, and a recursion
+may have the recursive relation anywhere in its ``FROM`` clause. ``HAVING``
+is refused, and so are
 the circuits of the ``'absorptive'`` provenance class (see
 :ref:`provsql-provenance-class`), which do not keep the order of the query.
 
