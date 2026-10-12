@@ -1961,6 +1961,7 @@ typedef struct rec_guard_ctx {
   const constants_t *constants;
   bool frozen;
   Node *first;       /**< the first bound frozen, for the coherence test */
+  Query *arm;        /**< the term whose condition is walked */
 } rec_guard_ctx;
 
 /**
@@ -1978,12 +1979,50 @@ typedef struct rec_guard_ctx {
  *
  * Only an uncorrelated body: one reading the working relation is the recursion
  * itself, not a bound.
+ *
+ * The same holds of a column of the term's FROM computed by a window function
+ * or an aggregate over a tracked relation (a row_number() the recursion steps
+ * through): a comparison with it is uncertain too, and the rounds never ended
+ * (a two-row table ran for ever).  It is read as plain SQL as well.
  */
 static Node *freeze_recursive_guard_mutator(Node *node, void *cx) {
   rec_guard_ctx *ctx = (rec_guard_ctx *)cx;
 
   if (node == NULL)
     return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0 && ctx->arm != NULL &&
+      OidIsValid(ctx->constants->OID_FUNCTION_PLAIN)) {
+    Var *v = (Var *)node;
+    RangeTblEntry *r;
+    TargetEntry *te;
+
+    if (v->varno < 1 || v->varno > (Index)list_length(ctx->arm->rtable) ||
+        v->varattno < 1)
+      return node;
+    r = rt_fetch(v->varno, ctx->arm->rtable);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      return node;
+    te = get_tle_by_resno(r->subquery->targetList, v->varattno);
+    if (te == NULL ||
+        !(contain_windowfuncs((Node *)te->expr) ||
+          contain_aggs_of_level((Node *)te->expr, 0)) ||
+        !has_provenance(ctx->constants, r->subquery))
+      return node;
+    /* Frozen where it is computed, plain(row_number() OVER ...), which the
+     * rewriting of that subquery reads as a plain value; the column then has
+     * no token for the condition to compare. */
+    if (!(IsA(te->expr, FuncExpr) &&
+          ((FuncExpr *)te->expr)->funcid == ctx->constants->OID_FUNCTION_PLAIN))
+      te->expr = (Expr *)makeFuncExpr(ctx->constants->OID_FUNCTION_PLAIN,
+                                      exprType((Node *)te->expr),
+                                      list_make1(te->expr), InvalidOid,
+                                      exprCollation((Node *)te->expr),
+                                      COERCE_EXPLICIT_CALL);
+    ctx->frozen = true;
+    if (ctx->first == NULL)
+      ctx->first = (Node *)r->subquery;
+    return node;
+  }
   if (IsA(node, SubLink)) {
     SubLink *sl = (SubLink *)node;
     Query *body;
@@ -2026,6 +2065,7 @@ static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
     Query *arm = (r->rtekind == RTE_SUBQUERY) ? r->subquery : NULL;
     if (arm == NULL || arm->jointree == NULL || arm->jointree->quals == NULL)
       continue;
+    ctx.arm = arm;
     arm->jointree->quals =
       freeze_recursive_guard_mutator(arm->jointree->quals, (void *)&ctx);
     if (ctx.frozen)
@@ -35309,6 +35349,27 @@ static Node *coerce_retyped_output(const constants_t *constants, Node *expr,
   return coerced;
 }
 
+/** @brief The statement serial for which a stored aggregate value was last
+ *  reported (see @c restore_insert_source_types). */
+static unsigned stored_freeze_reported = (unsigned)-1;
+
+/** @brief Whether @p q inserts into a working table of a recursion ProvSQL
+ *  evaluates (@c provsql_rec_...). */
+static bool inserts_into_recursion_table(Query *q) {
+  RangeTblEntry *t;
+  char *name;
+  bool rec;
+
+  if (q->resultRelation == 0)
+    return false;
+  t = rt_fetch(q->resultRelation, q->rtable);
+  if (t->rtekind != RTE_RELATION)
+    return false;
+  name = get_rel_name(t->relid);
+  rec = name != NULL && strncmp(name, "provsql_rec_", 12) == 0;
+  return rec;
+}
+
 /**
  * @brief Coerce the rewritten source SELECT back to the types the INSERT expects.
  *
@@ -35381,12 +35442,25 @@ static void restore_insert_source_types(const constants_t *constants,
   pfree(ctx.types);
   pfree(ctx.typmods);
   /* The row stores the value of the aggregate, not its token: reported as a
-   * SELECT reports its frozen values, which this statement is not. */
-  if (frozen && provsql_executor_depth == 0)
-    report_freeze(constants, NULL,
-                  scope_with_readers(PROVSQL_GAP, list_make1((void *)"cast")),
-                  "aggregate-read-as-plain-value",
-                  "aggregate result read as a plain value", NULL);
+   * SELECT reports its frozen values, which this statement is not.  Also from
+   * the rounds of a recursion, which ProvSQL runs as INSERTs of its own into
+   * its working tables, once for the user's statement. */
+  if (frozen && stored_freeze_reported != provsql_stmt_serial) {
+    bool round = inserts_into_recursion_table(q);
+    if (provsql_executor_depth == 0 || round) {
+      /* A round's statement is ProvSQL's own: the relations it reads are
+       * working tables, not the user's, and are not named. */
+      Query *saved = freeze_statement;
+      stored_freeze_reported = provsql_stmt_serial;
+      if (round)
+        freeze_statement = NULL;
+      report_freeze(constants, NULL,
+                    scope_with_readers(PROVSQL_GAP, list_make1((void *)"cast")),
+                    "aggregate-read-as-plain-value",
+                    "aggregate result read as a plain value", NULL);
+      freeze_statement = saved;
+    }
+  }
 }
 
 /**
