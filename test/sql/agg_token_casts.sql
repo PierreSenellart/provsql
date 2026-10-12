@@ -224,3 +224,21 @@ SELECT (count(DISTINCT a) * 2)::text AS t,
 FROM atc_arr;
 SELECT remove_provenance('atc_arr');
 DROP TABLE atc_arr;
+
+-- A subscript of an aggregate, (array_agg(x))[1], reads the array the
+-- aggregate gives: the agg_token was taken for an array (garbage positions,
+-- or "compressed pglz data is corrupt").  As in SQL: 2 and 6.
+CREATE TABLE atc_foo(id integer PRIMARY KEY, name text[] NOT NULL);
+INSERT INTO atc_foo VALUES (1, array[NULL,'c7b7',NULL]),
+  (2, array[NULL,NULL,NULL,NULL,NULL,'4bf4',NULL,'4bf4',NULL]);
+SELECT add_provenance('atc_foo');
+CREATE TABLE atc_foo_r AS
+  SELECT array_position(d.name,
+           (array_agg(x.v) FILTER (WHERE x.v IS NOT NULL))[1]) AS pos
+  FROM atc_foo d CROSS JOIN LATERAL unnest(d.name) AS x(v)
+  GROUP BY d.name;
+SELECT remove_provenance('atc_foo_r');
+SELECT pos FROM atc_foo_r ORDER BY pos;
+DROP TABLE atc_foo_r;
+SELECT remove_provenance('atc_foo');
+DROP TABLE atc_foo;

@@ -24,19 +24,21 @@ Magdalen|Nancy|Magdalen ⊗ Nancy
 WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
 DETAIL:  provsql-reason: insert-select-untracked; scope: deliberate
 HINT:  Track the target with add_provenance() first, or store provenance() in a column.
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
 DETAIL:  provsql-reason: insert-select-untracked; scope: deliberate
 HINT:  Track the target with add_provenance() first, or store provenance() in a column.
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 c|s
 7|28
 (1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks personnel
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 WARNING:  ProvSQL: INSERT ... SELECT: provenance not propagated to the inserted rows
 DETAIL:  provsql-reason: insert-select-untracked; scope: deliberate
 HINT:  Track the target with add_provenance() first, or store provenance() in a column.
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 city|n
 Berlin|2
 New York|2
@@ -45,8 +47,9 @@ Paris|3
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks insert_agg_tracked
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast
+HINT:  Mark it plain() to say so.
 remove_provenance
 
 (1 row)

@@ -227,8 +227,14 @@ public:
     } else if (type == gate_plus || type == gate_times || type == gate_monus
             || type == gate_project || type == gate_eq
             || type == gate_cmp || type == gate_update
-            || type == gate_annotation || type == gate_conditioned) {
+            || type == gate_annotation || type == gate_conditioned
+            || type == gate_delta || type == gate_assumed
+            || type == gate_agg || type == gate_semimod) {
       // Boolean gates: footprint is the union of children's footprints.
+      // So are an aggregate and its contributions: two aggregates over the
+      // same rows (count(*) of a table times sum(x) of the same table) are
+      // not independent, and an empty footprint made their product the
+      // product of their expectations.
       // Lets a compound `p` wire feeding a mixture propagate its atom
       // dependencies to FootprintCache for the disjoint-children
       // shortcuts in rec_expectation / rec_variance / rec_raw_moment.

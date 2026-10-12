@@ -184,6 +184,40 @@ DROP TABLE ci_t1;
 DROP TABLE ci_t2;
 DROP TABLE ci_t3;
 DROP TABLE ci_t5;
+-- A materialized view over an aggregate whose value is no number (array_agg,
+-- string_agg) stores the value with the type its column is declared with: no
+-- cast takes the agg_token there, and the token's bytes were stored in the
+-- integer[] column (reading it crashed the backend).  Read as text, converted.
+CREATE TABLE ci_ug(user_id int, group_id int);
+INSERT INTO ci_ug VALUES (1,1), (1,2), (1,3), (2,4);
+SELECT add_provenance('ci_ug');
+CREATE MATERIALIZED VIEW ci_mv3 AS
+  SELECT user_id, array_agg(group_id ORDER BY group_id) AS groups,
+         string_agg(group_id::text, ',' ORDER BY group_id) AS s
+  FROM ci_ug GROUP BY user_id;
+SELECT format_type(atttypid, atttypmod) FROM pg_attribute
+  WHERE attrelid = 'ci_mv3'::regclass AND attname = 'groups';
+-- read without the rewriting: the tokens of the rows differ from run to run
+SET provsql.active = off;
+SELECT user_id, groups, s FROM ci_mv3 ORDER BY user_id;
+SELECT user_id FROM ci_mv3 WHERE groups @> ARRAY[1,2,3];
+RESET provsql.active;
+REFRESH MATERIALIZED VIEW ci_mv3;
+SET provsql.active = off;
+SELECT user_id, groups FROM ci_mv3 ORDER BY user_id;
+RESET provsql.active;
+DROP MATERIALIZED VIEW ci_mv3;
+-- The same for an INSERT ... SELECT into a tracked table's integer[] column.
+CREATE TABLE ci_ug_into(user_id int, groups int[]);
+SELECT add_provenance('ci_ug_into');
+INSERT INTO ci_ug_into(user_id, groups)
+  SELECT user_id, array_agg(group_id ORDER BY group_id) FROM ci_ug GROUP BY user_id;
+SELECT remove_provenance('ci_ug_into');
+SELECT user_id, groups FROM ci_ug_into ORDER BY user_id;
+DROP TABLE ci_ug_into;
+SELECT remove_provenance('ci_ug');
+DROP TABLE ci_ug;
+
 DROP TABLE ci_t6;
 DROP TABLE ci_t8;
 DROP TABLE ci_src_a;

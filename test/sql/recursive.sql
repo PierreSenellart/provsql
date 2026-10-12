@@ -571,3 +571,35 @@ SELECT q, y FROM rsib2_r ORDER BY q, y;
 DROP TABLE rsib2_r;
 SELECT remove_provenance('rsib2');
 DROP TABLE rsib2;
+
+-- A recursive term stepping through a row_number() of a tracked relation
+-- (JOIN ... ON cte.n = a.row_number - 1): the comparison with the rank is
+-- uncertain, no round was ever empty and the recursion did not end, even over
+-- two rows.  The window is read as plain SQL, as other bounds of a recursive
+-- term are (recursion-bound-read-as-plain-value), and the answer is SQL's.
+-- A row_number() only carried along by the rounds is stored as its value,
+-- with aggregate-read-as-plain-value, once for the statement.
+CREATE TABLE rtx(id int PRIMARY KEY, g int);
+INSERT INTO rtx VALUES (1, 50), (2, 50), (3, 50);
+SELECT add_provenance('rtx');
+CREATE TABLE rtx_r AS
+  WITH RECURSIVE idx AS (SELECT *, row_number() OVER (ORDER BY id) AS rn FROM rtx),
+       c AS (SELECT 0::bigint AS rn, 0 AS id, 0::float AS s
+             UNION ALL
+             SELECT a.rn, a.id,
+                    CASE WHEN c.s + a.g > 75 THEN c.s + a.g ELSE c.s + a.g * 0.5 END
+             FROM idx a JOIN c ON c.rn = a.rn - 1)
+  SELECT id, s FROM c WHERE id > 0;
+SELECT remove_provenance('rtx_r');
+SELECT id, s FROM rtx_r ORDER BY id;
+DROP TABLE rtx_r;
+CREATE TABLE rtx_r AS
+  WITH RECURSIVE idx AS (SELECT *, row_number() OVER (ORDER BY id) AS rn FROM rtx),
+       c AS (SELECT 0::bigint AS rn, 0 AS id
+             UNION ALL SELECT a.rn, a.id FROM idx a JOIN c ON a.id = c.id + 1)
+  SELECT id, rn FROM c WHERE id > 0;
+SELECT remove_provenance('rtx_r');
+SELECT id, rn FROM rtx_r ORDER BY id;
+DROP TABLE rtx_r;
+SELECT remove_provenance('rtx');
+DROP TABLE rtx;

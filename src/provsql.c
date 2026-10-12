@@ -1961,6 +1961,7 @@ typedef struct rec_guard_ctx {
   const constants_t *constants;
   bool frozen;
   Node *first;       /**< the first bound frozen, for the coherence test */
+  Query *arm;        /**< the term whose condition is walked */
 } rec_guard_ctx;
 
 /**
@@ -1978,12 +1979,50 @@ typedef struct rec_guard_ctx {
  *
  * Only an uncorrelated body: one reading the working relation is the recursion
  * itself, not a bound.
+ *
+ * The same holds of a column of the term's FROM computed by a window function
+ * or an aggregate over a tracked relation (a row_number() the recursion steps
+ * through): a comparison with it is uncertain too, and the rounds never ended
+ * (a two-row table ran for ever).  It is read as plain SQL as well.
  */
 static Node *freeze_recursive_guard_mutator(Node *node, void *cx) {
   rec_guard_ctx *ctx = (rec_guard_ctx *)cx;
 
   if (node == NULL)
     return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0 && ctx->arm != NULL &&
+      OidIsValid(ctx->constants->OID_FUNCTION_PLAIN)) {
+    Var *v = (Var *)node;
+    RangeTblEntry *r;
+    TargetEntry *te;
+
+    if (v->varno < 1 || v->varno > (Index)list_length(ctx->arm->rtable) ||
+        v->varattno < 1)
+      return node;
+    r = rt_fetch(v->varno, ctx->arm->rtable);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      return node;
+    te = get_tle_by_resno(r->subquery->targetList, v->varattno);
+    if (te == NULL ||
+        !(contain_windowfuncs((Node *)te->expr) ||
+          contain_aggs_of_level((Node *)te->expr, 0)) ||
+        !has_provenance(ctx->constants, r->subquery))
+      return node;
+    /* Frozen where it is computed, plain(row_number() OVER ...), which the
+     * rewriting of that subquery reads as a plain value; the column then has
+     * no token for the condition to compare. */
+    if (!(IsA(te->expr, FuncExpr) &&
+          ((FuncExpr *)te->expr)->funcid == ctx->constants->OID_FUNCTION_PLAIN))
+      te->expr = (Expr *)makeFuncExpr(ctx->constants->OID_FUNCTION_PLAIN,
+                                      exprType((Node *)te->expr),
+                                      list_make1(te->expr), InvalidOid,
+                                      exprCollation((Node *)te->expr),
+                                      COERCE_EXPLICIT_CALL);
+    ctx->frozen = true;
+    if (ctx->first == NULL)
+      ctx->first = (Node *)r->subquery;
+    return node;
+  }
   if (IsA(node, SubLink)) {
     SubLink *sl = (SubLink *)node;
     Query *body;
@@ -2026,6 +2065,7 @@ static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
     Query *arm = (r->rtekind == RTE_SUBQUERY) ? r->subquery : NULL;
     if (arm == NULL || arm->jointree == NULL || arm->jointree->quals == NULL)
       continue;
+    ctx.arm = arm;
     arm->jointree->quals =
       freeze_recursive_guard_mutator(arm->jointree->quals, (void *)&ctx);
     if (ctx.frozen)
@@ -5430,9 +5470,16 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   }
 
   if (negated) {
-    opno = get_negator(opno);
-    if (!opno)
-      provsql_error("Missing negator");
+    Oid neg = get_negator(opno);
+    /* NOT over a comparison is read as the opposite comparison, which must
+     * hold exactly where SQL's NOT does: "NOT the comparison" would hold in
+     * the worlds where the aggregate has no value, where SQL's is NULL. */
+    if (!OidIsValid(neg))
+      provsql_unsupported(PROVSQL_GAP, "comparison-without-negator",
+                          "NOT over a comparison with an aggregate result "
+                          "whose operator %s has no negator",
+                          get_opname(opno) ? get_opname(opno) : "?");
+    opno = neg;
   }
 
   oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
@@ -11742,6 +11789,34 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
                                     constants);
     if (cast != NULL)
       return cast;
+#if PG_VERSION_NUM >= 120000
+  } else if (IsA(result, SubscriptingRef) &&
+             exprType((Node *)((SubscriptingRef *)result)->refexpr) ==
+               constants->OID_TYPE_AGG_TOKEN) {
+    /* (array_agg(x))[1]: the subscript reads the array the aggregate gives,
+     * not the agg_token's bytes, which it took for an array -- garbage, or
+     * "compressed pglz data is corrupt". */
+    SubscriptingRef *sr = (SubscriptingRef *)result;
+    Node *arg = (Node *)sr->refexpr;
+    if (IsA(arg, FuncExpr) &&
+        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      sr->refexpr = (Expr *)wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+    else
+      sr->refexpr = (Expr *)cast_agg_token_to_type(arg, sr->refcontainertype,
+                                                   constants);
+#else
+  } else if (IsA(result, ArrayRef) &&
+             exprType((Node *)((ArrayRef *)result)->refexpr) ==
+               constants->OID_TYPE_AGG_TOKEN) {
+    ArrayRef *sr = (ArrayRef *)result;
+    Node *arg = (Node *)sr->refexpr;
+    if (IsA(arg, FuncExpr) &&
+        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      sr->refexpr = (Expr *)wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+    else
+      sr->refexpr = (Expr *)cast_agg_token_to_type(arg, sr->refarraytype,
+                                                   constants);
+#endif
   } else if (IsA(result, BoolExpr)) {
     /* bool_or(x) AND y, NOT every(x): the arguments are booleans. */
     ListCell *lc;
@@ -35244,6 +35319,58 @@ static bool collect_source_var_types(Node *node, void *cx) {
 }
 
 /**
+ * @brief An output the rewriting retyped, @p expr of type @p have, back to
+ *        the type @p want (with @p typmod) the statement stores it with, or
+ *        @c NULL.
+ *
+ * An @c agg_token is read as the value it shows on the data as it is
+ * (@c frozen_agg_value), converted from its text: there is no cast from it to
+ * an @c array_agg's or a @c string_agg's type, and without that its bytes were
+ * stored as a value of @p want.  Anything else, as an assignment cast.
+ */
+static Node *coerce_retyped_output(const constants_t *constants, Node *expr,
+                                   Oid have, Oid want, int32 typmod) {
+  Node *coerced = NULL;
+  /* An aggregate stored as a value: the value on the data as it is, read as
+   * a frozen value, which the planner reports (aggregate-read-as-plain-value)
+   * as it does every other such read -- for every aggregate alike, those a
+   * cast takes to the column's type (a count) as those none does (an
+   * array_agg). */
+  if (have == constants->OID_TYPE_AGG_TOKEN)
+    coerced = frozen_agg_value(expr, want, constants);
+  if (coerced == NULL)
+    coerced = coerce_to_target_type(NULL, expr, have, want, typmod,
+                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                    -1);
+  else if (typmod >= 0)
+    coerced = coerce_to_target_type(NULL, coerced, want, want, typmod,
+                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                    -1);
+  return coerced;
+}
+
+/** @brief The statement serial for which a stored aggregate value was last
+ *  reported (see @c restore_insert_source_types). */
+static unsigned stored_freeze_reported = (unsigned)-1;
+
+/** @brief Whether @p q inserts into a working table of a recursion ProvSQL
+ *  evaluates (@c provsql_rec_...). */
+static bool inserts_into_recursion_table(Query *q) {
+  RangeTblEntry *t;
+  char *name;
+  bool rec;
+
+  if (q->resultRelation == 0)
+    return false;
+  t = rt_fetch(q->resultRelation, q->rtable);
+  if (t->rtekind != RTE_RELATION)
+    return false;
+  name = get_rel_name(t->relid);
+  rec = name != NULL && strncmp(name, "provsql_rec_", 12) == 0;
+  return rec;
+}
+
+/**
  * @brief Coerce the rewritten source SELECT back to the types the INSERT expects.
  *
  * The aggregate-provenance rewrite retypes an aggregate over a tracked
@@ -35262,11 +35389,13 @@ static bool collect_source_var_types(Node *node, void *cx) {
  * common (non-aggregate) case.  A column with no reachable cast is left as it
  * is, so the executor's own error still surfaces.
  */
-static void restore_insert_source_types(Query *q, Index src_rteid,
+static void restore_insert_source_types(const constants_t *constants,
+                                        Query *q, Index src_rteid,
                                         Query *subquery) {
   src_var_type_ctx ctx;
   ListCell *lc;
   int i;
+  bool frozen = false;
 
   ctx.src_rteid = src_rteid;
   ctx.natts = list_length(subquery->targetList);
@@ -35292,16 +35421,46 @@ static void restore_insert_source_types(Query *q, Index src_rteid,
     have = exprType((Node *)te->expr);
     if (have == want)
       continue;
-    coerced = coerce_to_target_type(NULL, (Node *)te->expr, have, want,
-                                    ctx.typmods[te->resno - 1],
-                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
-                                    -1);
-    if (coerced != NULL)
+    coerced = coerce_retyped_output(constants, (Node *)te->expr, have, want,
+                                    ctx.typmods[te->resno - 1]);
+    /* Anything else that does not match is for the checks below (a provsql
+     * column the source projects); an aggregate's token is not, and stored
+     * as it is it would be taken for a value of the column's type. */
+    if (coerced == NULL && have == constants->OID_TYPE_AGG_TOKEN)
+      provsql_unsupported(PROVSQL_GAP, "insert-column-type",
+                          "INSERT ... SELECT over provenance-tracked "
+                          "relations: column %d is computed as %s and "
+                          "cannot be stored as %s", te->resno,
+                          format_type_be(have), format_type_be(want));
+    if (coerced != NULL) {
       te->expr = (Expr *)coerced;
+      if (have == constants->OID_TYPE_AGG_TOKEN)
+        frozen = true;
+    }
   }
 
   pfree(ctx.types);
   pfree(ctx.typmods);
+  /* The row stores the value of the aggregate, not its token: reported as a
+   * SELECT reports its frozen values, which this statement is not.  Also from
+   * the rounds of a recursion, which ProvSQL runs as INSERTs of its own into
+   * its working tables, once for the user's statement. */
+  if (frozen && stored_freeze_reported != provsql_stmt_serial) {
+    bool round = inserts_into_recursion_table(q);
+    if (provsql_executor_depth == 0 || round) {
+      /* A round's statement is ProvSQL's own: the relations it reads are
+       * working tables, not the user's, and are not named. */
+      Query *saved = freeze_statement;
+      stored_freeze_reported = provsql_stmt_serial;
+      if (round)
+        freeze_statement = NULL;
+      report_freeze(constants, NULL,
+                    scope_with_readers(PROVSQL_GAP, list_make1((void *)"cast")),
+                    "aggregate-read-as-plain-value",
+                    "aggregate result read as a plain value", NULL);
+      freeze_statement = saved;
+    }
+  }
 }
 
 /**
@@ -35379,7 +35538,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
 
   /* The rewrite may have retyped an output column (an aggregate becomes an
    * agg_token); the INSERT's target row type is already fixed, so cast back. */
-  restore_insert_source_types(q, src_rteid, src_rte->subquery);
+  restore_insert_source_types(constants, q, src_rteid, src_rte->subquery);
 
   /* Check if the target table has a provsql column */
   tgt_rte = list_nth_node(RangeTblEntry, q->rtable, q->resultRelation - 1);
@@ -36037,8 +36196,13 @@ static List *output_types(Query *q) {
  * @c provenance(), so the one the rewriting appends goes; and an output the
  * rewriting retyped (an aggregate become an @c agg_token) is cast back to its
  * type, as for an INSERT ... SELECT, the view storing values, not tokens.
+ * Where no cast takes the token to that type (an @c array_agg, a
+ * @c string_agg: their value is no number), its value is read as text and
+ * converted; anything else is refused rather than stored as what it is not,
+ * which wrote a token's bytes in an array column.
  */
-static void finish_matview_fill(Query *q, List *types) {
+static void finish_matview_fill(const constants_t *constants, Query *q,
+                                List *types) {
   int n = list_length(types) / 2, i = 0;
   ListCell *lc, *prev = NULL;
   int removed = -1;
@@ -36078,11 +36242,16 @@ static void finish_matview_fill(Query *q, List *types) {
     have = exprType((Node *)te->expr);
     if (have == want)
       continue;
-    coerced = coerce_to_target_type(NULL, (Node *)te->expr, have, want, typmod,
-                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
-                                    -1);
-    if (coerced != NULL)
-      te->expr = (Expr *)coerced;
+    coerced = coerce_retyped_output(constants, (Node *)te->expr, have, want,
+                                    typmod);
+    if (coerced == NULL)
+      provsql_unsupported(PROVSQL_GAP, "matview-column-type",
+                          "materialized view over provenance-tracked "
+                          "relations: column \"%s\" is computed as %s and "
+                          "cannot be stored as %s",
+                          te->resname ? te->resname : "?",
+                          format_type_be(have), format_type_be(want));
+    te->expr = (Expr *)coerced;
   }
 }
 
@@ -36372,7 +36541,7 @@ static PlannedStmt *provsql_planner(Query *q,
         rewrite_checkpoint(q, "hoist_shared_ctes", false);
       }
       if (matview_fill)
-        finish_matview_fill(q, matview_fill_types);
+        finish_matview_fill(&constants, q, matview_fill_types);
       recount_cte_refs_walker((Node *)q, NULL);
       if (provsql_active)
         total_division_walker((Node *) q, NULL);

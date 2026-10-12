@@ -200,3 +200,19 @@ t|pct|provsql
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks atc_foo
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: other
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+pos
+2
+6
+(2 rows)
+remove_provenance
+
+(1 row)
