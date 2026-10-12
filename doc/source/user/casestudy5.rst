@@ -392,23 +392,35 @@ written with nested subqueries.
 Step 10: Expected Species Counts with :sqlfunc:`expected`
 -----------------------------------------------------------
 
-How many distinct detections do we *expect* to be true positives in each
-photo?
+How many distinct species do we *expect* to really be in each photo?
+``COUNT(DISTINCT species_id)`` answers it, next to ``COUNT(*)``, which
+counts detections:
 
 .. code-block:: postgresql
 
     SELECT p.id, p.station,
+           ROUND(expected(COUNT(DISTINCT d.species_id))::numeric, 4) AS exp_species,
            ROUND(expected(COUNT(*))::numeric, 4) AS exp_detections
     FROM detection d
     JOIN photo p ON p.id = d.photo_id
     GROUP BY p.id, p.station
-    ORDER BY exp_detections DESC, p.id;
+    ORDER BY exp_species DESC, p.id;
 
 A group's row is there only in the worlds where one of its detections is,
 and the expectation is over those: ``expected(COUNT(*))`` is
 :math:`\sum_i P(\text{detection}_i \text{ is true})` divided by the
-probability that the photo keeps a detection at all. The same holds of
-``SUM`` aggregates: the expected total confidence mass per photo:
+probability that the photo keeps a detection at all.
+``expected(COUNT(DISTINCT d.species_id))`` sums, over the species instead,
+the probability that *at least one* detection of that species is true,
+with the same division. The two differ as soon as a species is detected
+in several bounding boxes: photo 1 has three Red Deer boxes, so about
+2.19 expected detections but exactly one species, whichever boxes are
+real. As in SQL, ``COUNT(DISTINCT …)`` ignores ``NULL``: the
+unidentified animal of photo 9 (more on it in Step 12) counts as a
+detection, not as a species.
+
+The same holds of ``SUM`` aggregates: the expected total confidence mass
+per photo:
 
 .. code-block:: postgresql
 
@@ -419,10 +431,11 @@ probability that the photo keeps a detection at all. The same holds of
     GROUP BY p.id, p.station
     ORDER BY exp_total_conf DESC, p.id;
 
-Both queries use ProvSQL's :sqlfunc:`expected` operator, which computes
+These queries use ProvSQL's :sqlfunc:`expected` operator, which computes
 the expected value of a SQL aggregate over the probabilistic database
-defined by the per-row probabilities set in Step 6. Photos with many
-high-confidence detections rank highest on both metrics.
+defined by the per-row probabilities set in Step 6. Photo 22, with six
+bounding boxes and three species among them, ranks highest on every
+metric.
 
 
 Step 11: Materialising a Subset with ``INSERT … SELECT``

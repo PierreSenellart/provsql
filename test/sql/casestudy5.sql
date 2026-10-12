@@ -311,6 +311,7 @@ DROP TABLE result_cs5_cte;
 -- Step 10: expected aggregates
 CREATE TABLE result_cs5_expected AS
 SELECT p.id,
+    ROUND(expected(COUNT(DISTINCT d.species_id))::numeric, 4) AS exp_species,
     ROUND(expected(COUNT(*))::numeric, 4) AS exp_detections,
     ROUND(expected(SUM(d.confidence))::numeric, 4) AS exp_total_conf
 FROM detection d
@@ -318,7 +319,7 @@ JOIN photo p ON p.id = d.photo_id
 GROUP BY p.id;
 
 SELECT remove_provenance('result_cs5_expected');
-SELECT id, exp_detections, exp_total_conf FROM result_cs5_expected
+SELECT id, exp_species, exp_detections, exp_total_conf FROM result_cs5_expected
 WHERE id IN (1, 5, 7, 9, 22)  -- representative photos
 ORDER BY id;
 DROP TABLE result_cs5_expected;
