@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "Semiring.h"
+#include "../Circuit.h"
 
 namespace semiring {
 
@@ -283,9 +284,13 @@ virtual value_type times(const std::vector<value_type> &v) const override {
   return regex_ops::times(v);
 }
 virtual value_type monus(value_type, value_type) const override {
-  throw SemiringException(
-          "The regular-expression semiring has no monus: the difference "
-          "of two languages is not, in general, a semiring difference.");
+  throw CircuitRefusal(
+          PROVSQL_GAP, "semiring-no-monus",
+          "The regular-expression semiring computes no monus (outer "
+          "joins, EXCEPT and NOT EXISTS need one): its monus, the "
+          "difference of languages, needs automata to compute, and would "
+          "not register an absence (1 minus a language without the empty "
+          "word is 1).");
 }
 virtual value_type delta(value_type x) const override {
   return x.kind() == regex_t::EMPTY ? zero() : one();

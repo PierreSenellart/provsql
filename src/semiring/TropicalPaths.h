@@ -90,8 +90,13 @@ virtual value_type times(const std::vector<value_type> &v) const override {
   return r;
 }
 virtual value_type monus(value_type, value_type) const override {
-  throw SemiringException(
-          "The min-cost-paths semiring has no monus.");
+  throw CircuitRefusal(
+          PROVSQL_GAP, "semiring-no-monus",
+          "The min-cost-paths semiring computes no monus (outer joins, "
+          "EXCEPT and NOT EXISTS need one): on a tie of costs, its monus "
+          "is a difference of languages, which needs automata to "
+          "compute, and it would not register an absence (1 minus a "
+          "positive cost is 1).");
 }
 virtual value_type delta(value_type x) const override {
   return x.cost == zero().cost ? zero() : one();
@@ -113,7 +118,8 @@ virtual value_type star(const value_type &a) const override {
     return one();
   if(a.cost == 0)
     return tropical_paths_t{0., regex_ops::star(a.paths)};
-  throw SemiringException(
+  throw CircuitRefusal(
+          PROVSQL_DELIBERATE, "recursion-cycle-no-value",
           "A cycle of negative cost makes the least cost unbounded, with no "
           "shortest derivation.");
 }

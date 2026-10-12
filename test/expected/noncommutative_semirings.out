@@ -50,7 +50,8 @@ a|0|((ac | ab · bc) · ca)*
 b|0|((ac | ab · bc) · ca)* · ab
 c|0|((ac | ab · bc) · ca)* · (ac | ab · bc)
 (3 rows)
-ERROR:  ProvSQL: provenance_evaluate_tropical_paths: A cycle of negative cost makes the least cost unbounded, with no shortest derivation.
+ERROR:  ProvSQL: A cycle of negative cost makes the least cost unbounded, with no shortest derivation.
+DETAIL:  provsql-reason: recursion-cycle-no-value; scope: deliberate
 CONTEXT:  SQL function "sr_tropical_paths" statement 1
 ERROR:  ProvSQL: This recursion's equations put the recursive relation between factors, or on both sides of them, and the requested semiring is not commutative: its least solution is not given by the star of a value.  Write the recursive relation at the same place of every recursive FROM clause (first, or last).
 DETAIL:  provsql-reason: recursion-two-sided; scope: gap
