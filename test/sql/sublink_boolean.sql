@@ -134,4 +134,25 @@ SELECT remove_provenance('sb_r');
 SELECT * FROM sb_r WHERE p > 0 ORDER BY pid;
 DROP TABLE sb_r;
 
+-- An uncorrelated EXISTS whose body reads a WITH entry or a derived table:
+-- the entry is read like a relation by the gated aggregation.  No child named
+-- a, 0.5 for both parents; a child named a or b, 0.75.
+CREATE TABLE sb_r AS
+  WITH ca AS (SELECT pid FROM sb_c WHERE name = 'a')
+  SELECT p.pid, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM sb_p p WHERE NOT EXISTS (TABLE ca);
+SELECT remove_provenance('sb_r');
+SELECT * FROM sb_r ORDER BY pid;
+DROP TABLE sb_r;
+CREATE TABLE sb_r AS
+  SELECT p.pid, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM sb_p p WHERE EXISTS (SELECT 1 FROM (SELECT pid FROM sb_c) s);
+SELECT remove_provenance('sb_r');
+SELECT * FROM sb_r ORDER BY pid;
+DROP TABLE sb_r;
+-- A derived table reading the outer row is correlated, which this route does
+-- not take: still refused.
+SELECT p.pid FROM sb_p p
+WHERE NOT EXISTS (SELECT 1 FROM (SELECT 1 FROM sb_c c WHERE c.pid = p.pid) s);
+
 DROP TABLE sb_div, sb_syn, sb_p, sb_c;

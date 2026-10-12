@@ -69,3 +69,19 @@ remove_provenance
 pid|p
 1|0.500000
 (1 row)
+remove_provenance
+
+(1 row)
+pid|p
+1|0.500000
+2|0.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+pid|p
+1|0.750000
+2|0.750000
+(2 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body reads a subquery in its own FROM clause
+DETAIL:  provsql-reason: body-from-subquery; scope: gap

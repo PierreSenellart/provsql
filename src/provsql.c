@@ -21713,6 +21713,12 @@ static bool oj_uncorrelated_body_over_tracked(const constants_t *constants,
     return false; /* correlated */
   foreach (lc, sub->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    /* A tracked derived table (a WITH entry is one by now) is read by the
+     * gated aggregation like a relation, as long as it does not itself read
+     * the query around the body */
+    if (r->rtekind == RTE_SUBQUERY && has_provenance(constants, r->subquery) &&
+        !contain_vars_of_level((Node *)r->subquery, 2))
+      continue;
     if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
       return false;
   }
