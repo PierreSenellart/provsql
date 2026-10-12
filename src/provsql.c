@@ -36263,6 +36263,47 @@ static void finish_matview_fill(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief Walker: complete the column names of every relation entry with the
+ *        columns its relation gained since the query was parsed.
+ *
+ * The body of a view keeps the column names its relations had when it was
+ * defined: a table tracked since then has a @c provsql column there that
+ * the names do not show, so that everything finding the column by name
+ * would read the view as untracked, without a word.  The columns added
+ * since come after those named, as @c ALTER @c TABLE @c ADD @c COLUMN puts
+ * them; a dropped one is named @c "", as @c expandRTE does.
+ */
+static bool refresh_relation_colnames_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      int natts, attno;
+      HeapTuple tup;
+      if (r->rtekind != RTE_RELATION || r->relkind == RELKIND_VIEW ||
+          r->eref == NULL)
+        continue;
+      tup = SearchSysCache1(RELOID, ObjectIdGetDatum(r->relid));
+      if (!HeapTupleIsValid(tup))
+        continue;
+      natts = ((Form_pg_class)GETSTRUCT(tup))->relnatts;
+      ReleaseSysCache(tup);
+      for (attno = list_length(r->eref->colnames) + 1; attno <= natts;
+           ++attno)
+        r->eref->colnames = lappend(
+          r->eref->colnames,
+          makeString(OidIsValid(get_atttype(r->relid, attno))
+                     ? get_attname(r->relid, attno, false) : pstrdup("")));
+    }
+    return query_tree_walker(q, refresh_relation_colnames_walker, data, 0);
+  }
+  return expression_tree_walker(node, refresh_relation_colnames_walker, data);
+}
+
+/**
  * @brief PostgreSQL planner hook – entry point for provenance rewriting.
  *
  * Replaces (or chains after) the standard planner.  For every CMD_SELECT
@@ -36327,6 +36368,7 @@ static PlannedStmt *provsql_planner(Query *q,
     }
   }
 #endif
+  refresh_relation_colnames_walker((Node *)q, NULL);
   {
     const constants_t mconstants = get_constants(false);
     if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {
