@@ -1345,6 +1345,12 @@ CREATE TABLE ssp_r AS
 SELECT remove_provenance('ssp_r');
 SELECT a FROM ssp_r ORDER BY a;
 DROP TABLE ssp_r;
+-- The same through a WITH read only in the sublinks of a block with no FROM:
+-- the WITH is tracked, the block has nothing to hang its provenance on, and
+-- says so rather than answering without a provenance column.
+WITH c AS (SELECT n FROM ssp ORDER BY n DESC LIMIT 1)
+SELECT 1000 < (CASE WHEN NOT EXISTS (SELECT 1 FROM c) THEN 0
+                    ELSE (SELECT n FROM c) END) AS a;
 DROP TABLE ssp, ssp_m;
 
 -- An uncorrelated scalar subquery next to an aggregation without GROUP BY

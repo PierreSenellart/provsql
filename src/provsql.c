@@ -15683,6 +15683,13 @@ static bool agg_token_null_test_walker(Node *node, void *cx) {
  * counted.  The body itself is another
  * level, not walked here.
  */
+/** @brief The @c WITH list in scope for @c tracked_value_sublink_walker: a
+ *  body reading a tracked CTE of it reads tracked data. */
+static List *tracked_value_ctes = NIL;
+/** @brief Whether @c tracked_value_sublink_walker counts only the bodies
+ *  reading a tracked CTE of @c tracked_value_ctes. */
+static bool tracked_value_cte_only = false;
+
 static bool tracked_value_sublink_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -15698,7 +15705,9 @@ static bool tracked_value_sublink_walker(Node *node, void *data) {
         if (!te->resjunk && !reads_token_walker((Node *)te->expr, data))
           token_fetch = false;
       }
-      if (has_provenance(constants, sub) && !token_fetch) {
+      if (((!tracked_value_cte_only && has_provenance(constants, sub)) ||
+           body_reads_tracked_cte(constants, tracked_value_ctes, sub)) &&
+          !token_fetch) {
         last_tracked_sublink = sl;
         return true;
       }
@@ -15725,10 +15734,27 @@ static bool untracked_level_with_tracked_sublink_walker(Node *node,
     return false;
   if (IsA(node, Query)) {
     Query *q = (Query *)node;
-    if (q->hasSubLinks && !has_provenance((const constants_t *)data, q) &&
-        query_tree_walker(q, tracked_value_sublink_walker, data,
-                          QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES))
-      return true;
+    bool untracked = !has_provenance((const constants_t *)data, q);
+    /* A level with no source of its own has nothing to hang provenance on
+     * either: a tracked WITH it reads only in its sublinks makes
+     * has_provenance true, and the rewriting then answers with no
+     * provenance column, silently (the bodies over relations are the
+     * rewriting's, which reports them where it freezes them) */
+    bool fromless = q->jointree == NULL || q->jointree->fromlist == NIL;
+    if (q->hasSubLinks && (untracked || fromless)) {
+      List *saved_ctes = tracked_value_ctes;
+      bool saved_cte_only = tracked_value_cte_only;
+      bool found;
+      tracked_value_ctes = q->cteList;
+      tracked_value_cte_only = !untracked;
+      found = query_tree_walker(q, tracked_value_sublink_walker, data,
+                                QTW_IGNORE_RT_SUBQUERIES |
+                                QTW_IGNORE_CTE_SUBQUERIES);
+      tracked_value_ctes = saved_ctes;
+      tracked_value_cte_only = saved_cte_only;
+      if (found)
+        return true;
+    }
     return query_tree_walker(q, untracked_level_with_tracked_sublink_walker,
                              data, 0);
   }
