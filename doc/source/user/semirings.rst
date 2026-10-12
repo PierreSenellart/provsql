@@ -319,6 +319,31 @@ one of negative cost, which makes the cost unbounded, is refused. As for
 :sqlfunc:`sr_regex`, the multiplication does not commute, there is no monus
 and ``HAVING`` is refused.
 
+One Least-Cost Path
+-------------------
+
+:sqlfunc:`sr_best_path` takes the same two mappings, and keeps one
+derivation of least cost instead of all of them: among those, the one with
+the fewest labels, then the first in lexicographic order of its labels. It
+returns a ``cost`` and a ``path`` column, the labels of that derivation as
+an array, in the order of the query; with no derivation, the cost is
+infinite and the path ``NULL``:
+
+.. code-block:: postgresql
+
+    SELECT node, (sr_best_path(provenance(), 'cost_mapping',
+                               'label_mapping')).*
+    FROM reach;
+
+On the same graph, node ``c`` has cost 3 and path ``{ac}``, shorter than
+``ab · bc`` of the same cost. Costs must be nonnegative. The multiplication
+does not commute, but the semiring has a monus (a value minus one at least
+as good is :math:`\mathbb{0}`, and it is kept otherwise), so that outer
+joins and ``EXCEPT`` are evaluated, and a recursion may have the recursive
+relation anywhere in its ``FROM`` clause. ``HAVING`` is refused, and so are
+the circuits of the ``'absorptive'`` provenance class (see
+:ref:`provsql-provenance-class`), which do not keep the order of the query.
+
 Viterbi Semiring (m-semiring)
 ------------------------------
 
@@ -619,7 +644,7 @@ rewritten circuits: :sqlfunc:`sr_counting`, :sqlfunc:`sr_how`,
 :sqlfunc:`sr_why`, :sqlfunc:`sr_which`, :sqlfunc:`sr_tropical`,
 :sqlfunc:`sr_viterbi`, :sqlfunc:`sr_lukasiewicz`,
 :sqlfunc:`sr_minmax`, :sqlfunc:`sr_maxmin`, :sqlfunc:`sr_regex`,
-:sqlfunc:`sr_tropical_paths`.
+:sqlfunc:`sr_tropical_paths`, :sqlfunc:`sr_best_path`.
 
 To run a refused semiring, switch
 the provenance class below ``'boolean'`` (in the current session, or for

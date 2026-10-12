@@ -181,6 +181,15 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
                     "Boolean-compatible semiring (boolean, boolexpr, "
                     "formula, ...).");
         } else if(assumption == "absorptive") {
+          if(semiring.absorptive() && !semiring.commutative())
+            throw CircuitRefusal(
+                    PROVSQL_GAP, "absorptive-noncommutative",
+                    "The wrapped sub-circuit only represents the absorptive "
+                    "quotient of a recursive query's provenance (fixpoint "
+                    "truncation or compiled reachability circuit), whose "
+                    "products are not in the order of the query, and the "
+                    "requested semiring is not commutative.  Re-run the "
+                    "query under the 'semiring' provenance class.");
           if(!semiring.absorptive())
             throw CircuitException(
                     "The requested semiring is not absorptive; the "
@@ -647,6 +656,15 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                 "The requested semiring does not admit a homomorphism from "
                 "Boolean functions; part of this recursion's equations was "
                 "computed under a Boolean-provenance assumption");
+      if(assumption == "absorptive" && semiring.absorptive() &&
+         !semiring.commutative())
+        throw CircuitRefusal(
+                PROVSQL_GAP, "absorptive-noncommutative",
+                "Part of this recursion's equations was computed under an "
+                "absorptive assumption, whose products are not in the "
+                "order of the query, and the requested semiring is not "
+                "commutative.  Re-run the query under the 'semiring' "
+                "provenance class.");
       if(assumption == "absorptive" && !semiring.absorptive())
         throw CircuitException(
                 "The requested semiring is not absorptive; part of this "

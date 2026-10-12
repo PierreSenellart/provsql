@@ -135,12 +135,12 @@ how-provenance raise an error, the result being infinite.
 A product keeps the order of the query, that of the ``FROM`` clause, which
 matters to the semirings whose multiplication does not commute: the regular
 expressions of :sqlfunc:`sr_regex` and the shortest paths of
-:sqlfunc:`sr_tropical_paths` (see :doc:`semirings`). Write the recursive
-relation first in the recursive ``FROM`` clause (``FROM reach r JOIN edges
-e``) to read a path in the order it is followed, last to read it backwards.
-These semirings need the recursive relation at the same place of every
-recursive ``FROM`` clause, and refuse a recursion that has it between two
-other relations.
+:sqlfunc:`sr_tropical_paths` and :sqlfunc:`sr_best_path` (see
+:doc:`semirings`). Write the recursive relation first in the recursive
+``FROM`` clause (``FROM reach r JOIN edges e``) to read a path in the order
+it is followed, last to read it backwards. The first two need the recursive
+relation at the same place of every recursive ``FROM`` clause, and refuse a
+recursion that has it between two other relations.
 
 An exact probability of such a row expands the equations into a Boolean
 circuit, of about the size of a cycle's rows times its terms: on a large

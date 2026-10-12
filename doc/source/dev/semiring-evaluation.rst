@@ -239,7 +239,8 @@ declared, and an operation the semiring does not provide throws.
      - Meaning
    * - ``absorptive()`` (false)
      - :math:`\mathbbm{1} \oplus a = \mathbbm{1}` (see `Absorptive
-       Semirings`_).
+       Semirings`_); in a non-commutative semiring, on both sides of a
+       product (:math:`a \otimes b \oplus a = b \otimes a \oplus a = a`).
    * - ``idempotent()`` (``absorptive()``)
      - :math:`a \oplus a = a`.
    * - ``selective()`` (false)
@@ -248,7 +249,8 @@ declared, and an operation the semiring does not provide throws.
    * - ``commutative()`` (true)
      - :math:`a \otimes b = b \otimes a`.  A product gate keeps its factors
        in query order (``FROM`` order for a join), which a non-commutative
-       semiring (``Regex``, ``TropicalPaths``) reads as it is; such a
+       semiring (``Regex``, ``TropicalPaths``, ``BestPath``) reads as it
+       is; such a
        semiring refuses ``HAVING`` (its world products have no order of
        the query's), and solves a recursion by star only one-sided.
    * - ``mul_sub_left_distributive()`` (false)
@@ -337,7 +339,13 @@ assumption marker the chosen semiring's predicate does not license
 (``compatibleWithBooleanRewrite()`` for ``'boolean'``,
 ``absorptive()`` for ``'absorptive'``), the evaluator throws a
 structured :cfunc:`CircuitException` rather than silently producing
-an incorrect value.
+an incorrect value.  An ``'absorptive'`` ``gate_assumed`` also requires
+``commutative()``: the reachability route and the truncation of cyclic
+recursion build its sub-circuit without the order of the query, so that
+a non-commutative absorptive semiring (``BestPath``) refuses it
+(``absorptive-noncommutative``).  The in-memory absorptive folds only drop
+terms, which absorption on both sides of a product justifies, and are
+accepted.
 
 Per-semiring decisions (see each override under
 ``src/semiring/*.h``) :
@@ -348,7 +356,8 @@ Per-semiring decisions (see each override under
   ``Subset`` (covers ``sr_subset``, ``sr_clearance``, ``sr_consent``).
 - ``false`` : every other compiled semiring (``Counting``,
   ``How``, ``Why``, ``Which``, ``Tropical``, ``Viterbi``,
-  ``Lukasiewicz``, ``MinMax``, ``Regex``, ``TropicalPaths``) ; their
+  ``Lukasiewicz``, ``MinMax``, ``Regex``, ``TropicalPaths``,
+  ``BestPath``) ; their
   algebras carry information (multiplicities, monomials, witness sets,
   lineages, costs, weights, graded truth values, extremal elements,
   words) that the

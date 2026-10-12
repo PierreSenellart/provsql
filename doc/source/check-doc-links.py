@@ -67,8 +67,9 @@ INTERNAL_FUNCTIONS = {
     # bitmask helpers behind the subset semirings (sr_subset, sr_clearance,
     # sr_consent and their predicates); users call those.
     'subset_evaluate', 'subset_labels', 'subset_member', 'subset_settling',
-    # C entry point behind sr_tropical_paths; users call that.
-    'provenance_evaluate_tropical_paths',
+    # C entry points behind sr_tropical_paths and sr_best_path; users call
+    # those.
+    'provenance_evaluate_tropical_paths', 'provenance_evaluate_best_path',
     # jsonb backing function for the tseytin_cnf_mapping SRF; users call
     # tseytin_cnf_mapping (which is in _SQL_FUNC_MAP), not this directly.
     'tseytin_cnf_mapping_json',

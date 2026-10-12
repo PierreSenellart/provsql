@@ -1082,6 +1082,14 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                        "labels": True,
                        "boolean_rewrite_compatible": False,
                        "absorptive": False},
+    # One least-cost derivation, its labels in order (`paths` renders the
+    # text[] column).  Absorptive, but its products keep the order of the
+    # query: the absorptive-assumed tokens, built without it, are refused.
+    "best-path": {"func": "sr_best_path", "types": _NUMERIC_TYPES,
+                  "labels": True,
+                  "paths": "coalesce(array_to_string(path, ' · '), '∅')",
+                  "boolean_rewrite_compatible": False,
+                  "absorptive": False},
     "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES,
                     "boolean_rewrite_compatible": False,
                     "absorptive": True},
@@ -1294,9 +1302,9 @@ def evaluate_circuit(
     rv_histogram / rv_sample so the truncated distribution is returned
     instead of the unconditional one.  Ignored by every other semiring.
 
-    `labels` is the second mapping of `tropical-paths` (the labels of
-    the derivations; `mapping` holds their costs).  Ignored by every
-    other semiring."""
+    `labels` is the second mapping of `tropical-paths` and `best-path`
+    (the labels of the derivations; `mapping` holds their costs).
+    Ignored by every other semiring."""
     if semiring == "boolexpr":
         # Like prov-xml: the mapping is optional. With one, leaves are
         # labelled by the mapping's `value` column; without one, leaves
@@ -1727,7 +1735,7 @@ def evaluate_circuit(
                     f"semiring {semiring!r} requires a mapping of labels"
                 )
             sql_stmt = sql.SQL(
-                "SELECT cost::text || ': ' || paths"
+                "SELECT cost::text || ': ' || " + spec.get("paths", "paths") +
                 " FROM {}({}::uuid, {}::regclass, {}::regclass)"
             ).format(
                 fn, sql.Literal(token), sql.Literal(mapping),

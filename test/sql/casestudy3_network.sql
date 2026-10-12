@@ -64,6 +64,36 @@ SELECT station,
 FROM cs3_reach WHERE station <> 'A' ORDER BY station;
 RESET provsql.monte_carlo_seed;
 
+-- One journey of least time (Step 13): C through B.  The hop comes first
+-- in the recursive FROM clause of cs3_reach, so that the paths read
+-- backwards.
+SELECT station, cost, path
+FROM (SELECT station, (sr_best_path(tok, 'cs3_hop_minutes', 'cs3_hop_name')).*
+      FROM cs3_reach) j
+ORDER BY station;
+
+-- Rail EXCEPT bus (Step 14): the rail journey where it is strictly faster
+-- (B, which no bus reaches; C, 5 minutes against 7), nothing at A, where
+-- both start.
+CREATE TABLE cs3_rail_not_bus AS
+  WITH RECURSIVE
+    rail(station) AS (
+        SELECT 'A'::text
+      UNION
+        SELECT h.to_station FROM rail r JOIN cs3_hop h ON h.from_station = r.station
+        WHERE h.route_type = 2),
+    bus(station) AS (
+        SELECT 'A'::text
+      UNION
+        SELECT h.to_station FROM bus b JOIN cs3_hop h ON h.from_station = b.station
+        WHERE h.route_type = 3)
+  SELECT station, (sr_best_path(provenance(), 'cs3_hop_minutes',
+                                'cs3_hop_name')).*
+  FROM (SELECT station FROM rail EXCEPT SELECT station FROM bus) t;
+SELECT remove_provenance('cs3_rail_not_bus');
+SELECT station, cost, path FROM cs3_rail_not_bus ORDER BY station;
+DROP TABLE cs3_rail_not_bus;
+
 DROP TABLE cs3_reach, cs3_hop_minutes, cs3_hop_access, cs3_hop_one,
            cs3_hop_name;
 SELECT remove_provenance('cs3_hop');

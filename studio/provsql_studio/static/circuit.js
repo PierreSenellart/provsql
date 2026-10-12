@@ -1670,6 +1670,10 @@
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, labels: true,
                      hint: 'Costs (numeric), then labels: the least cost, and its derivations as a regular expression.',
                      booleanCompatible: false, absorptive: false, aggCompatible: false },
+    'best-path':   { label: 'Least cost with one path',   group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, labels: true,
+                     hint: 'Nonnegative costs (numeric), then labels: the least cost, and one derivation of that cost, the one with the fewest labels.',
+                     booleanCompatible: false, absorptive: false, aggCompatible: false },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
                      booleanCompatible: false, absorptive: true, aggCompatible: false },
@@ -1737,7 +1741,7 @@
   function mappingOptional(v) {
     return _OPTIONAL_MAPPING.has(v);
   }
-  // True for the semiring that takes a second mapping, of labels.
+  // True for the semirings that take a second mapping, of labels.
   function needsLabels(v) {
     const spec = _COMPILED_REGISTRY[v];
     return !!(spec && spec.labels);
@@ -2511,8 +2515,8 @@
       renderLabelOptions();
     }
 
-    // The labels picker of `tropical-paths`: every mapping, whatever its
-    // value type (a label is rendered as text).
+    // The labels picker of `tropical-paths` and `best-path`: every
+    // mapping, whatever its value type (a label is rendered as text).
     function renderLabelOptions() {
       if (!labels || labels.hidden) return;
       if (!_mappings.length) {

@@ -377,6 +377,12 @@ virtual ~Semiring() = default;
  * by absorptivity) to deduplicate children of @c plus gates and to
  * short-circuit over the multiplicative identity.
  *
+ * A semiring that does not commute (@c commutative()) is absorptive on
+ * both sides of a product: @f$a \oplus a \otimes b = a \oplus b \otimes a
+ * = a@f$, which the absorptive folds of the circuit rely on.  Circuits
+ * built under an @c 'absorptive' assumption marker do not keep the order
+ * of the query, and require a commutative semiring as well.
+ *
  * @return @c false by default; override to return @c true.
  */
 virtual bool absorptive() const {

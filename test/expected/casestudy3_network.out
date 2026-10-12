@@ -34,6 +34,20 @@ B|0.992750|t|t
 C|0.990250|t|t
 D|0.891225|t|t
 (3 rows)
+station|cost|path
+A|0|{}
+B|2|{A->B}
+C|5|{B->C,A->B}
+D|9|{C->D,B->C,A->B}
+(4 rows)
+remove_provenance
+
+(1 row)
+station|cost|path
+A|Infinity|
+B|2|{A->B}
+C|5|{A->B,B->C}
+(3 rows)
 remove_provenance
 
 (1 row)

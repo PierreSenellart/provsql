@@ -341,7 +341,8 @@ custom and “Other” entries below:
   * *Lineage*: ``formula``, ``how``, ``why``, ``which``, ``regex``
     (:sqlfunc:`sr_regex`).
   * *Numeric*: ``counting``, ``tropical``, ``tropical-paths``
-    (:sqlfunc:`sr_tropical_paths`), ``viterbi``, ``lukasiewicz``.
+    (:sqlfunc:`sr_tropical_paths`), ``best-path`` (:sqlfunc:`sr_best_path`),
+    ``viterbi``, ``lukasiewicz``.
   * *Intervals*: ``interval-union``, i.e., :sqlfunc:`sr_temporal`,
     :sqlfunc:`sr_interval_num` or :sqlfunc:`sr_interval_int` according
     to the mapping's multirange type (PostgreSQL 14+).

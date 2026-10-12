@@ -11914,6 +11914,33 @@ $$
   SELECT * FROM provsql.provenance_evaluate_tropical_paths(token, costs, labels);
 $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
 
+/** @brief C implementation of @c sr_best_path */
+CREATE FUNCTION provenance_evaluate_best_path(
+  token UUID, costs regclass, labels regclass,
+  OUT cost FLOAT, OUT path TEXT[])
+  AS 'provsql', 'provenance_evaluate_best_path'
+  LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance as one least-cost derivation, its cost and
+ *  its labels
+ *
+ * Inputs are read as nonnegative %float8 costs from @p costs (0 if absent)
+ * and as labels from @p labels (no label if absent).  Returns the least
+ * cost, as @c sr_tropical over nonnegative costs, and the labels of one
+ * derivation of that cost, in the order of the query: on a path query, a
+ * shortest path.  Among the derivations of least cost, the one returned has
+ * the fewest labels, and comes first in lexicographic order of its labels
+ * among those.  With no derivation, the cost is infinite and the path
+ * @c NULL.
+ */
+CREATE FUNCTION sr_best_path(token ANYELEMENT, costs regclass,
+                             labels regclass,
+                             OUT cost FLOAT, OUT path TEXT[])
+  AS
+$$
+  SELECT * FROM provsql.provenance_evaluate_best_path(token, costs, labels);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance over the Viterbi (max-times) m-semiring
  *
  * Inputs are read as %float8 probability values in @f$[0,1]@f$.

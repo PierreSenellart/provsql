@@ -1,0 +1,87 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+src|dst|cost|path
+a|a|4|{ac,ca}
+a|c|3|{ab,bc}
+b|a|2|{bc,ca}
+c|b|1|{ca,ab}
+c|c|4|{ca,ac}
+(5 rows)
+remove_provenance
+
+(1 row)
+n|cost|path
+a|0|{}
+b|1|{ab}
+c|3|{ab,bc}
+(3 rows)
+remove_provenance
+
+(1 row)
+n|cost|path
+a|0|{}
+b|1|{ab}
+c|3|{bc,ab}
+(3 rows)
+remove_provenance
+
+(1 row)
+n|cost|path
+a|0|{}
+b|1|{ca,ab}
+c|4|{ca,ac}
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+n|cost|path
+a|0|{}
+b|1|{ab}
+c|3|{ac}
+d|1|{x1}
+(4 rows)
+remove_provenance
+
+(1 row)
+dst|cost|path
+a|0|{ca}
+b|1|{ab}
+c|Infinity|
+d|1|{x1}
+(4 rows)
+remove_provenance
+
+(1 row)
+l1|l2|cost|path
+ab|bc|3|{ab,bc}
+ab||1|{ab}
+(2 rows)
+ERROR:  ProvSQL: A HAVING condition's provenance is a product over the worlds of its group, in no order of the query: it has no value in a semiring whose multiplication does not commute.
+DETAIL:  provsql-reason: having-noncommutative; scope: gap
+CONTEXT:  SQL function "sr_best_path" statement 1
+ERROR:  ProvSQL: The wrapped sub-circuit only represents the absorptive quotient of a recursive query's provenance (fixpoint truncation or compiled reachability circuit), whose products are not in the order of the query, and the requested semiring is not commutative.  Re-run the query under the 'semiring' provenance class.
+DETAIL:  provsql-reason: absorptive-noncommutative; scope: gap
+CONTEXT:  SQL function "sr_best_path" statement 1
+ERROR:  ProvSQL: sr_best_path requires nonnegative costs: with a negative one, the empty derivation is no longer the best, and a cycle may improve a derivation without end.
+DETAIL:  provsql-reason: semiring-negative-cost; scope: deliberate
+CONTEXT:  SQL function "sr_best_path" statement 1
+remove_provenance
+
+(1 row)

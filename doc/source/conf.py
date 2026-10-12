@@ -188,6 +188,7 @@ _SQL_FUNC_MAP = {
     'sr_which':                 '/doxygen-sql/html/group__compiled__semirings.html#ga86da4e2a0f5c0f865e9e30714748679c',
     'sr_tropical':              '/doxygen-sql/html/group__compiled__semirings.html#ga15fd8726d649d735a5e28289cfce071c',
     'sr_tropical_paths':        '/doxygen-sql/html/group__compiled__semirings.html#gaa662211f18037b355f05fbe2b003c6cb',
+    'sr_best_path':             '/doxygen-sql/html/group__compiled__semirings.html#gab5c94ceaa28ab1b24b837de1ab63bb14',
     'sr_regex':                 '/doxygen-sql/html/group__compiled__semirings.html#ga7bd4ea289f9f5cf237fbcaf901ae28e9',
     'sr_viterbi':               '/doxygen-sql/html/group__compiled__semirings.html#ga67d375630a9674bfecd4f87d0d003d31',
     'sr_lukasiewicz':           '/doxygen-sql/html/group__compiled__semirings.html#ga27ff464e570641a7b195ed3578a66ab1',

@@ -8,8 +8,9 @@ Boolean provenance at scale for wheelchair accessibility reasoning, then
 journeys with changes as a ``WITH RECURSIVE`` query over the whole network,
 whose rows the same query evaluates in several semirings: shortest travel
 time, accessibility, the equations of the recursion and the journeys they
-describe, the fastest journey itself, and the probability of reaching a
-station when parts of the network are disrupted.
+describe, the fastest journey itself, step by step, which of the metro and
+the train is faster, and the probability of reaching a station when parts
+of the network are disrupted.
 
 .. note::
 
@@ -609,7 +610,126 @@ there to RER A:
     · A: Charles de Gaulle - Étoile → La Défense
 
 
-Step 13: A Day of Rail Disruptions
+Step 13: One Journey, Step by Step
+----------------------------------
+
+Two journeys may take the same time. To La Motte-Picquet - Grenelle, from
+Gare Montparnasse, metro 6 over four stops and metro 13 then 10 over three
+both take 11.8 minutes, and :sqlfunc:`sr_tropical_paths` lists both:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(station) AS (
+        SELECT 'IDFM:71161'::text
+      UNION
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station
+        WHERE h.route_type IN (1, 2))
+    SELECT (sr_tropical_paths(provenance(), 'hop_minutes', 'hop_name')).paths
+    FROM reach WHERE station = 'IDFM:71199';
+
+.. code-block:: text
+
+    B: Luxembourg → Port Royal · B: Port Royal → Denfert-Rochereau
+    · 6: Denfert-Rochereau → Raspail · 4: Raspail → Vavin
+    · 4: Vavin → Gare Montparnasse
+    · (6: Gare Montparnasse → Pasteur · 6: Pasteur → Sèvres-Lecourbe
+       · 6: Sèvres-Lecourbe → Cambronne
+       · 6: Cambronne → La Motte-Picquet - Grenelle
+     | 13: Gare Montparnasse → Duroc · 10: Duroc → Ségur
+       · 10: Ségur → La Motte-Picquet - Grenelle)
+
+:sqlfunc:`sr_best_path` takes the same two mappings and keeps one journey
+of least time, the one with the fewest hops (then the first in
+alphabetical order of its hops), here through Duroc. It returns its hops
+as an array, in the order they are made, which ``unnest`` turns into an
+itinerary. To visit Provins, a medieval town in the east of the region:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(station) AS (
+        SELECT 'IDFM:71161'::text
+      UNION
+        SELECT h.to_station FROM reach r JOIN hop h ON h.from_station = r.station
+        WHERE h.route_type IN (1, 2))
+    SELECT round(j.cost::numeric, 1) AS minutes, step, hop
+    FROM (SELECT (sr_best_path(provenance(), 'hop_minutes', 'hop_name')).*
+          FROM reach WHERE station = 'IDFM:62139') j,
+         unnest(j.path) WITH ORDINALITY AS u(hop, step)
+    ORDER BY step;
+
+.. code-block:: text
+
+     minutes | step |                         hop
+    ---------+------+------------------------------------------------------
+        79.3 |    1 | B: Luxembourg → Saint-Michel Notre-Dame
+        79.3 |    2 | B: Saint-Michel Notre-Dame → Châtelet - Les Halles
+        79.3 |    3 | B: Châtelet - Les Halles → Gare du Nord
+        79.3 |    4 | 4: Gare du Nord → Gare de l'Est
+        79.3 |    5 | TER: Gare de l'Est → Longueville
+        79.3 |    6 | P: Longueville → Sainte-Colombe Septveilles
+        79.3 |    7 | P: Sainte-Colombe Septveilles → Champbenoist Poigny
+        79.3 |    8 | P: Champbenoist Poigny → Provins
+
+Over the whole network, buses included, journeys of the same time
+are the rule rather than the exception, and the regular expression of
+:sqlfunc:`sr_tropical_paths` grows long, where :sqlfunc:`sr_best_path`
+still returns one journey.
+
+
+Step 14: Metro or Train?
+------------------------
+
+From Gare de Lyon, which of the other railway terminals of Paris are
+faster to reach by metro than by train (the RER and the suburban trains,
+``route_type`` 2)? Each kind of journey is a recursive query, and
+``EXCEPT`` takes the train journeys away from the metro ones:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE
+      metro(station) AS (
+          SELECT 'IDFM:73626'::text
+        UNION
+          SELECT h.to_station FROM metro m JOIN hop h ON h.from_station = m.station
+          WHERE h.route_type = 1),
+      train(station) AS (
+          SELECT 'IDFM:73626'::text
+        UNION
+          SELECT h.to_station FROM train t JOIN hop h ON h.from_station = t.station
+          WHERE h.route_type = 2)
+    SELECT d.name, round(j.cost::numeric, 1) AS minutes, cardinality(j.path) AS hops
+    FROM (SELECT station,
+                 (sr_best_path(provenance(), 'hop_minutes', 'hop_name')).*
+          FROM (SELECT station FROM metro EXCEPT SELECT station FROM train) t) j
+    JOIN (VALUES ('IDFM:71135', 'Gare d''Austerlitz'),
+                 ('IDFM:71359', 'Gare de l''Est'),
+                 ('IDFM:71410', 'Gare du Nord'),
+                 ('IDFM:71139', 'Gare Montparnasse'),
+                 ('IDFM:71370', 'Gare Saint-Lazare'))
+           AS d(station, name)
+      USING (station)
+    ORDER BY minutes;
+
+.. code-block:: text
+
+           name        | minutes  | hops
+    -------------------+----------+------
+     Gare d'Austerlitz |      5.9 |    3
+     Gare Saint-Lazare |      8.4 |    4
+     Gare de l'Est     |     10.3 |    7
+     Gare Montparnasse |     12.0 |    8
+     Gare du Nord      | Infinity |
+
+All five are reached both ways, so that plain SQL would return none of
+them. In :sqlfunc:`sr_best_path`, the difference of two journeys is the
+first one where it is strictly faster than the second, and nothing
+otherwise: the metro wins to four of the terminals, with the journey that
+does, while the train is faster to Gare du Nord (RER A then B, through
+Châtelet - Les Halles, in 6.9 minutes against 11.9 by metro), which has
+no journey left.
+
+
+Step 15: A Day of Rail Disruptions
 ----------------------------------
 
 Suppose each rail hop runs with probability 0.95, and each bus hop with

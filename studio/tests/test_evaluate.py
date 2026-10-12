@@ -297,6 +297,22 @@ def test_evaluate_tropical_paths(client, float_mapping, mapping):
     assert "labels" in resp.get_json()["error"]
 
 
+def test_evaluate_best_path(client, float_mapping, mapping):
+    """sr_best_path: the same two mappings; one cheapest derivation, its
+    labels joined in order."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "best-path",
+        "mapping": f"provsql_test.{float_mapping}",
+        "labels": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert data["result"] == "1: John"
+
+
 def _interval_mapping_fixture(client, table, literal, carrier_type):
     """Helper for the three interval-union fixtures below: build a
     (value::<multirange>, provenance) mapping where every personnel row

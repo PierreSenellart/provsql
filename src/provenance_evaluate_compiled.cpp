@@ -55,6 +55,7 @@ extern "C" {
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 PG_FUNCTION_INFO_V1(provenance_evaluate_tropical_paths);
+PG_FUNCTION_INFO_V1(provenance_evaluate_best_path);
 PG_FUNCTION_INFO_V1(plain_truth);
 PG_FUNCTION_INFO_V1(subset_labels);
 PG_FUNCTION_INFO_V1(subset_settling);
@@ -86,6 +87,7 @@ PG_FUNCTION_INFO_V1(subset_member);
 #include "semiring/Subset.h"
 #include "semiring/Regex.h"
 #include "semiring/TropicalPaths.h"
+#include "semiring/BestPath.h"
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
@@ -152,10 +154,14 @@ bool fixpoint_cache_typbyval;
 std::unordered_map<std::string, std::pair<double, std::string> >
 tropical_paths_cache;
 
+/* The same, for sr_best_path. */
+std::unordered_map<std::string, semiring::best_path_t> best_path_cache;
+
 void fixpoint_cache_clear()
 {
   fixpoint_cache.clear();
   tropical_paths_cache.clear();
+  best_path_cache.clear();
   if(fixpoint_cache_cxt)
     MemoryContextReset(fixpoint_cache_cxt);
 }
@@ -636,6 +642,126 @@ Datum provenance_evaluate_tropical_paths(PG_FUNCTION_ARGS)
   } catch(...) {
     provsql_cancel_if_interrupted();
     provsql_error("provenance_evaluate_tropical_paths: Unknown exception");
+  }
+
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief A least-cost derivation of @p token (@c semiring::BestPath), each
+ *        leaf with its cost from @p costs and its label from @p labels.
+ *
+ * An input missing from @p costs costs 0, one missing from @p labels is
+ * the empty word.
+ *
+ * @return The cost (@f$+\infty@f$ with no derivation) and the labels of
+ *         the derivation, in order.
+ */
+static semiring::best_path_t best_path_internal
+  (pg_uuid_t token, Oid costs, Oid labels)
+{
+  constants_t constants = get_constants(true);
+  fixpoint_cache_ctx.clear();
+
+  /* A component of an equation system solved earlier in this command,
+   * with the same mappings: no circuit to load. */
+  const std::string ctx = std::to_string(costs) + "|" +
+                          std::to_string(labels) + "|" +
+                          std::to_string(GetCurrentCommandId(false));
+  {
+    auto it = best_path_cache.find(ctx + "|" + uuid2string(token));
+    if(it != best_path_cache.end())
+      return it->second;
+  }
+
+  GenericCircuit c = getGenericCircuit(token);
+  auto g = c.getGate(uuid2string(token));
+  const std::vector<std::string> inputs_uuid = c.getMappableUUIDs();
+
+  std::unordered_map<gate_t, double> cost;
+  initialize_provenance_mapping<double>(constants, c, cost,
+    [](const char *v) { return atof(v); },
+    join_with_temp_uuids(costs, inputs_uuid));
+  std::unordered_map<gate_t, std::string> label;
+  initialize_provenance_mapping<std::string>(constants, c, label,
+    [](const char *v) { return std::string(v); },
+    join_with_temp_uuids(labels, inputs_uuid));
+
+  semiring::BestPath sr;
+  std::unordered_map<gate_t, semiring::best_path_t> mapping;
+  std::set<gate_t> leaves(c.getInputs());
+  for(const auto &kv : cost)
+    leaves.insert(kv.first);
+  for(const auto &kv : label)
+    leaves.insert(kv.first);
+  for(auto x : leaves) {
+    auto ic = cost.find(x);
+    auto il = label.find(x);
+    mapping[x] = semiring::BestPath::leaf(
+      ic == cost.end() ? 0. : ic->second,
+      il == label.end() ? nullptr : &il->second);
+  }
+
+  provsql_having(c, g, mapping, sr);
+  const auto out = c.evaluate<semiring::BestPath>(g, mapping, sr);
+
+  if(!c.solved_systems.empty() && !fixpoint_cache_callback) {
+    RegisterXactCallback(fixpoint_cache_xact_callback, nullptr);
+    fixpoint_cache_callback = true;
+  }
+  for(const auto &[sys, p] : c.solved_systems) {
+    const auto &vec =
+      *static_cast<const std::vector<semiring::best_path_t> *>(p.get());
+    if(best_path_cache.size() + vec.size() > fixpoint_cache_max)
+      best_path_cache.clear();
+    const std::string prefix = "fixpoint:" + c.getUUID(sys) + ":";
+    for(std::size_t i = 0; i < vec.size(); ++i)
+      best_path_cache.emplace(
+        ctx + "|" +
+        uuid2string(provsqlUuidV5(prefix + std::to_string(i + 1))),
+        vec[i]);
+  }
+
+  return out;
+}
+
+/** @brief PostgreSQL-callable wrapper for best_path_internal(). */
+Datum provenance_evaluate_best_path(PG_FUNCTION_ARGS)
+{
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  try {
+    provsql_interrupt_scope interrupt_scope;
+    const Oid costs = PG_ARGISNULL(1) ? InvalidOid : PG_GETARG_OID(1);
+    const Oid labels = PG_ARGISNULL(2) ? InvalidOid : PG_GETARG_OID(2);
+    const semiring::best_path_t out =
+      best_path_internal(*DatumGetUUIDP(PG_GETARG_DATUM(0)), costs, labels);
+
+    TupleDesc tupdesc;
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      throw CircuitException("best path must return a record");
+    tupdesc = BlessTupleDesc(tupdesc);
+    Datum values[2] = {Float8GetDatum(out.cost), (Datum)0};
+    bool nulls[2] = {false, out.is_zero()};
+    if(!out.is_zero()) {
+      std::vector<Datum> elems;
+      for(const auto &l : out.word)
+        elems.push_back(text_datum(l));
+      values[1] = PointerGetDatum(
+        construct_array(elems.data(), elems.size(), TEXTOID, -1, false,
+                        TYPALIGN_INT));
+    }
+    PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+  } catch(const CircuitRefusal &r) {
+    provsql_cancel_if_interrupted();
+    provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
+  } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("provenance_evaluate_best_path: %s", e.what());
+  } catch(...) {
+    provsql_cancel_if_interrupted();
+    provsql_error("provenance_evaluate_best_path: Unknown exception");
   }
 
   PG_RETURN_NULL();

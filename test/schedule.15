@@ -39,6 +39,10 @@ test: recursion_equations
 # recursions refused
 test: noncommutative_semirings
 
+# One least-cost path (sr_best_path): labels in query order, ties broken by
+# length then lexicographically, two-sided recursion, the monus, refusals
+test: best_path
+
 # Case Study 3, Part 2 (journeys over a miniature network): the recursion
 # evaluated in several semirings, and its sampled probabilities.
 test: casestudy3_network
