@@ -15184,7 +15184,9 @@ static bool freeze_relations_walker(Node *node, void *cx) {
     ListCell *lc;
     foreach (lc, q->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind == RTE_RELATION &&
+      /* A view entry left by the rewriting is the OLD/NEW placeholder of a
+       * rule (PostgreSQL < 16), never read (see get_provenance_attributes) */
+      if (r->rtekind == RTE_RELATION && r->relkind != RELKIND_VIEW &&
           oj_rte_has_provsql(ctx->constants, r)) {
         Oid anc[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
         uint16 n = 0, k;
