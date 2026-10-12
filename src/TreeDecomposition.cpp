@@ -55,11 +55,115 @@ extern "C" {
 }
 #endif
 
+/* Interrupt check for the C++ loops that must unwind by throwing (their
+ * vectors freed), not by the longjmp of CHECK_FOR_INTERRUPTS. */
+#ifdef TDKC
+static inline void poll_interrupt() { provsql_tdkc_poll(); }
+#else
+#include "provsql_interrupt.h"
+static inline void poll_interrupt() { provsql_poll_interrupt(); }
+#endif
+
 unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc,
                                                  unsigned &max_degree)
 {
-  Graph graph(bc);
-  return degeneracyLowerBound(graph, max_degree);
+  /* The graph of Graph(bc), in arrays: hash-based adjacency sets cost
+   * seconds and gigabytes on a circuit of millions of gates (that of a
+   * recursion on cyclic data, for one), which this proxy is meant to be
+   * cheap on.  Nodes are the gates other than UNDETERMINED / MULVAR, plus
+   * the targets of their wires; edges are the wires, undirected, without
+   * repetition. */
+  const std::size_t n = bc.getNbGates();
+  std::vector<char> is_node(n, 0);
+  std::vector<std::pair<unsigned, unsigned> > arcs;
+  for(gate_t g1{0}; g1 < n; ++g1) {
+    if((static_cast<std::size_t>(g1) & 65535) == 0)
+      poll_interrupt();
+    if(bc.getGateType(g1) == BooleanGate::UNDETERMINED
+       || bc.getGateType(g1) == BooleanGate::MULVAR)
+      continue;
+    const unsigned u = static_cast<unsigned>(g1);
+    is_node[u] = 1;
+    for(auto g2 : bc.getWires(g1)) {
+      const unsigned v = static_cast<unsigned>(g2);
+      is_node[v] = 1;
+      if(u != v) {
+        arcs.emplace_back(u, v);
+        arcs.emplace_back(v, u);
+      }
+    }
+  }
+  std::sort(arcs.begin(), arcs.end());
+  arcs.erase(std::unique(arcs.begin(), arcs.end()), arcs.end());
+  poll_interrupt();
+
+  // Compressed adjacency: the neighbours of u are adj[start[u] .. start[u+1]).
+  std::vector<std::size_t> start(n + 1, 0);
+  for(const auto &a : arcs)
+    ++start[a.first + 1];
+  for(std::size_t u = 0; u < n; ++u)
+    start[u + 1] += start[u];
+  std::vector<unsigned> adj(arcs.size());
+  for(std::size_t k = 0; k < arcs.size(); ++k)
+    adj[k] = arcs[k].second;
+  std::vector<std::pair<unsigned, unsigned> >().swap(arcs);
+
+  // Batagelj-Zaversnik peel, O(V+E): vertices sorted by degree in vert,
+  // bin[d] the position of the first of degree d; removing a minimum-degree
+  // vertex moves each remaining neighbour one bin down.  The degeneracy is
+  // the largest degree a vertex has at its removal.
+  std::vector<unsigned> deg(n, 0);
+  unsigned max_deg = 0;
+  for(std::size_t u = 0; u < n; ++u)
+    if(is_node[u]) {
+      deg[u] = static_cast<unsigned>(start[u + 1] - start[u]);
+      max_deg = std::max(max_deg, deg[u]);
+    }
+  max_degree = max_deg;
+  std::vector<std::size_t> bin(max_deg + 2, 0);
+  std::size_t nb_nodes = 0;
+  for(std::size_t u = 0; u < n; ++u)
+    if(is_node[u]) {
+      ++bin[deg[u] + 1];
+      ++nb_nodes;
+    }
+  if(nb_nodes == 0)
+    return 0;
+  for(unsigned d = 0; d <= max_deg; ++d)
+    bin[d + 1] += bin[d];
+  std::vector<unsigned> vert(nb_nodes);
+  std::vector<std::size_t> pos(n, 0);
+  {
+    std::vector<std::size_t> next(bin.begin(), bin.end() - 1);
+    for(std::size_t u = 0; u < n; ++u)
+      if(is_node[u]) {
+        pos[u] = next[deg[u]]++;
+        vert[pos[u]] = static_cast<unsigned>(u);
+      }
+  }
+  unsigned degeneracy = 0;
+  for(std::size_t i = 0; i < nb_nodes; ++i) {
+    if((i & 65535) == 0)
+      poll_interrupt();
+    const unsigned v = vert[i];
+    degeneracy = std::max(degeneracy, deg[v]);
+    for(std::size_t k = start[v]; k < start[v + 1]; ++k) {
+      const unsigned u = adj[k];
+      if(deg[u] > deg[v]) {
+        // Swap u with the first vertex of its bin, then shrink the bin.
+        const unsigned du = deg[u];
+        const std::size_t pu = pos[u], pw = bin[du];
+        const unsigned w = vert[pw];
+        if(u != w) {
+          vert[pu] = w; pos[w] = pu;
+          vert[pw] = u; pos[u] = pw;
+        }
+        ++bin[du];
+        --deg[u];
+      }
+    }
+  }
+  return degeneracy;
 }
 
 unsigned TreeDecomposition::degeneracyLowerBound(const Graph &graph,
@@ -378,15 +482,18 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td)
   return in;
 }
 
-TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
-  : TreeDecomposition(Graph(bc))
+TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc,
+                                     unsigned max_width)
+  : TreeDecomposition(Graph(bc), nullptr, max_width)
 {
 }
 
 // Taken and adapted from https://github.com/smaniu/treewidth
 TreeDecomposition::TreeDecomposition(
-  Graph graph, std::unordered_map<unsigned long, bag_t> *elimination_bag)
+  Graph graph, std::unordered_map<unsigned long, bag_t> *elimination_bag,
+  unsigned width_cap)
 {
+  width_cap = std::min<unsigned>(width_cap, MAX_TREEWIDTH);
   PermutationStrategy strategy;
 
   strategy.init_permutation(graph);
@@ -412,8 +519,8 @@ TreeDecomposition::TreeDecomposition(
     //removing the node from the graph and getting its neighbours
     std::unordered_set<unsigned long> neigh = graph.remove_node(node);
     max_width = std::max<unsigned>(neigh.size(), max_width);
-    //we stop as soon as we find bag that is 
-    if(max_width>MAX_TREEWIDTH)
+    //we stop as soon as we find bag that is too wide
+    if(max_width>width_cap)
       throw TreeDecompositionException();
 
     //filling missing edges between the neighbours and recomputing statistics
@@ -434,7 +541,7 @@ TreeDecomposition::TreeDecomposition(
     bags.push_back(bag);
   }
  
-  if(graph.get_nodes().size()>MAX_TREEWIDTH)
+  if(graph.get_nodes().size()>width_cap)
     throw TreeDecompositionException();
 
   if(graph.number_nodes()>0) {

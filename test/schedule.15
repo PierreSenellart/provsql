@@ -34,6 +34,10 @@ test: absorptive_recursion
 # equations), the refusals, PROV-XML labels and the per-statement cache
 test: recursion_equations
 
+# Case Study 3, Part 2 (journeys over a miniature network): the recursion
+# evaluated in several semirings, and its sampled probabilities.
+test: casestudy3_network
+
 # Cross-vertex reachability aggregations: GROUP BY over a join with a
 # reachability CTE gets certified any-member gates planted per group
 test: btw_anyreach

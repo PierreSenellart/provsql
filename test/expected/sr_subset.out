@@ -38,5 +38,16 @@ Alice|{analytics,marketing}|f|{}|{analytics,marketing}|f
 Bob|{billing,analytics,marketing}|t|{billing,analytics,marketing}|{}|t
 Carol|{billing}|t|{billing}|{analytics,marketing}|f
 (3 rows)
+remove_provenance
+
+(1 row)
+name|clearance|subset|settles_at|visible_at_top
+Alice|{public,confidential,secret,top_secret}|{public}|public|t
+Bob|{public,confidential,secret,top_secret}|{public}|public|t
+Carol|{public,confidential,secret,top_secret}|{public}|public|t
+(3 rows)
+subset_token|clearance_token|settling_token|consent_token|purposes_token|conflicts_token|subset_mapping
+t|t|t|t|t|t|t
+(1 row)
 ERROR:  invalid input value for enum sub_level: "marketing"
 CONTEXT:  SQL function "visible_at" statement 1

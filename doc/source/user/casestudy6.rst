@@ -74,7 +74,9 @@ Your tasks:
 * build a maintenance-triage headline with ``CASE`` over
   aggregates and read its exact expectation;
 * quantify the shared-plume coupling in nats with
-  :sqlfunc:`mutual_information`.
+  :sqlfunc:`mutual_information`;
+* read the calibration scores as graded confidence, combined with
+  :sqlfunc:`sr_lukasiewicz` and :sqlfunc:`sr_viterbi`.
 
 Setup
 -----
@@ -86,9 +88,8 @@ Setup
    below, run this Studio-driven case study in full in the ProvSQL Playground:
    open it `as a runnable notebook <https://provsql.org/playground/?nb=cs6>`_,
    or open the bare `cs6 database <https://provsql.org/playground/?db=cs6>`_ and
-   follow the Studio steps as you read; the continuous-distribution surface
-   (analytic moments and Monte Carlo) needs no external tools. See the
-   :ref:`Playground note <playground-note>`.
+   follow the Studio steps as you read. See the :ref:`Playground note
+   <playground-note>`.
 
 .. nb:omit-begin
 
@@ -232,7 +233,7 @@ full method catalogue (see :doc:`the chapter on probabilities
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
 probability with a Hoeffding confidence band. Pin
 ``provsql.monte_carlo_seed = 42`` in the Config panel and re-run:
-the result is now identical across runs. Toggle the seed back to
+the result is now identical across runs. Set the seed back to
 ``-1`` and re-run to see the band shift between runs.
 
 .. figure:: /_static/casestudy6/cmp-circuit-mc-eval.png
@@ -826,15 +827,13 @@ station registry certain:
 
 .. code-block:: postgresql
 
-    DO $$ BEGIN
-      PERFORM set_prob(provenance(), 1.0) FROM stations;
-      PERFORM set_prob(provenance(),
-                       CASE station_id WHEN 's1' THEN 1.0
-                                       WHEN 's2' THEN 0.8
-                                       WHEN 's3' THEN 0.7
-                                       ELSE 1.0 END)
-        FROM calibration_status;
-    END $$
+    SELECT set_prob(provenance(), 1.0) FROM stations;
+    SELECT set_prob(provenance(),
+                    CASE station_id WHEN 's1' THEN 1.0
+                                    WHEN 's2' THEN 0.8
+                                    WHEN 's3' THEN 0.7
+                                    ELSE 1.0 END)
+    FROM calibration_status;
 
 One record per district is kept certain, so each district's group
 exists in every world (an all-absent group would produce no
@@ -939,6 +938,42 @@ Delete the placeholder row to return to the running dataset:
 The general rules -- which predicates treat NULLs as unknown and what
 that means for the circuits -- are in :doc:`the NULL semantics chapter
 <nulls>`.
+
+Step 20: Calibration as Graded Confidence
+-----------------------------------------
+
+The calibration scores of ``calibration_status`` can also be read as
+*degrees of confidence*, not probabilities. A district's alert is
+corroborated when two of its stations agree; how confident is that
+corroboration? A fuzzy semiring combines the degrees, with ``max`` over
+alternatives and a t-norm for a conjunction:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS calibration_degree;
+    SELECT create_provenance_mapping('calibration_degree',
+                                     'calibration_status', 'p');
+
+    SELECT s1.district,
+           round(sr_lukasiewicz(provenance(), 'calibration_degree')::numeric, 4)
+             AS lukasiewicz,
+           round(sr_viterbi(provenance(), 'calibration_degree')::numeric, 4)
+             AS product
+    FROM calibration_status c1
+    JOIN stations s1 ON s1.id = c1.station_id
+    JOIN calibration_status c2 ON c2.station_id > c1.station_id
+    JOIN stations s2 ON s2.id = c2.station_id AND s2.district = s1.district
+    GROUP BY s1.district
+    ORDER BY s1.district;
+
+:sqlfunc:`sr_lukasiewicz` conjoins with the Łukasiewicz t-norm
+:math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre (0.95)
+and Riverside Park (0.70), gets 0.65. The two stations' shortfalls from
+full confidence, 0.05 and 0.30, add up. :sqlfunc:`sr_viterbi` multiplies
+instead, 0.665. With the fully trusted Suburban Reference (1.00), the east
+district keeps the Industrial Estate's 0.60 under both: a certain station
+costs nothing. The stations' own tokens are not in the mapping and count
+as fully true.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full reference and

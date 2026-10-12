@@ -143,9 +143,14 @@ public:
  * @c TreeDecompositionException if the computed treewidth exceeds
  * @c MAX_TREEWIDTH.
  *
- * @param bc  The Boolean circuit to decompose.
+ * @param bc         The Boolean circuit to decompose.
+ * @param max_width  Width past which the construction stops, throwing
+ *                   @c TreeDecompositionException; at most
+ *                   @c MAX_TREEWIDTH (a caller bounding its cost passes a
+ *                   smaller one, to stop as soon as it is exceeded).
  */
-TreeDecomposition(const BooleanCircuit &bc);
+TreeDecomposition(const BooleanCircuit &bc,
+                  unsigned max_width = MAX_TREEWIDTH);
 
 /**
  * @brief Compute a tree decomposition of an arbitrary undirected graph.
@@ -168,9 +173,11 @@ TreeDecomposition(const BooleanCircuit &bc);
  *                         graph the earlier-eliminated endpoint's bag
  *                         contains both @c u and @c v, which gives a
  *                         constant-time edge-to-bag assignment.
+ * @param max_width        As for the @c BooleanCircuit constructor.
  */
 TreeDecomposition(Graph graph,
-                  std::unordered_map<unsigned long, bag_t> *elimination_bag = nullptr);
+                  std::unordered_map<unsigned long, bag_t> *elimination_bag = nullptr,
+                  unsigned max_width = MAX_TREEWIDTH);
 
 /**
  * @brief Const access to bag @p b.

@@ -41,6 +41,12 @@ n|prob
 3|0.625000
 4|0.312500
 (4 rows)
+n|monte_carlo|stopping_rule|additive
+1|t|t|t
+2|t|t|t
+3|t|t|t
+4|t|t|t
+(4 rows)
 n|validity
 1|{[5,7)}
 2|{[1,10)}

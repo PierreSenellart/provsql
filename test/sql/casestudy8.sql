@@ -80,6 +80,14 @@ SELECT round(probability((r.x > 30) | (r.x > 25))::numeric,4) AS p_severe_given_
            - probability(r.x > 30) / probability(r.x > 25)) < 1e-9 AS matches_bayes
 FROM r;
 
+-- Problem 4 (cont.): a threshold varying between labs as logistic(25, 1.5),
+-- a comparison of two families, by quadrature (0.1886, against 0.1587 at
+-- the fixed threshold), still at rv_mc_samples = 0.
+WITH r AS (SELECT normal(20, 5) AS x, logistic(25, 1.5) AS threshold)
+SELECT round(probability(x > threshold)::numeric, 4) AS p_referred,
+       round(probability(x > 25)::numeric, 4)        AS p_referred_fixed
+FROM r;
+
 -- Problem 5: conditional expectation of a probabilistic aggregate.  The
 -- moments are materialised under the rewriter, then read back (the result
 -- table carries no content-addressed token, so the output is deterministic).
@@ -143,6 +151,15 @@ SELECT abs(expected(exp(normal(1.6, 0.42))) - expected(lognormal(1.6, 0.42)))
          < 1e-9 AS exp_normal_folds_to_lognormal;
 WITH s AS (SELECT lognormal(1.6, 0.42) AS wild, lognormal(1.9, 0.42) AS variant)
 SELECT round(probability(wild > variant)::numeric, 2) AS p_wild_longer FROM s;
+
+-- Problem 7 (cont.): an inverse Gaussian with the same mean and variance
+-- (mu^3 / lambda = 5.41^3 / 28), closed-form tail and quantile.
+WITH m AS (SELECT lognormal(1.6, 0.42)       AS lognormal_model,
+                  inverse_gaussian(5.41, 28) AS first_passage_model)
+SELECT round(probability(lognormal_model > 10)::numeric, 4)     AS p_lognormal,
+       round(probability(first_passage_model > 10)::numeric, 4) AS p_first_passage,
+       round(quantile(first_passage_model, 0.95)::numeric, 2)   AS p95_first_passage
+FROM m;
 
 -- Problem 8: discrete counts (Poisson / Binomial enumerate exact mass) and a
 -- Beta posterior for an unknown rate (mean closed-form, quantiles by
@@ -217,6 +234,14 @@ SELECT abs(expected(reading) - 20.0) < 0.2 AS latent_mean_20,
        abs(variance(reading) - 29.0) < 1.0 AS latent_var_total
 FROM m;
 
+-- Problem 12 (cont.): an uncertain noise variance, inverse_gamma(3, 8) of
+-- mean 4: the reading's variance is again about 4 (Monte Carlo).
+WITH m AS (SELECT normal(20, sqrt(inverse_gamma(3, 8))) AS reading)
+SELECT expected(inverse_gamma(3, 8))       AS mean_noise_variance,
+       abs(expected(reading) - 20.0) < 0.2 AS mean_reading_20,
+       abs(variance(reading) - 4.0) < 0.3  AS var_reading_4
+FROM m;
+
 -- Problem 13: learn the latent mu from data by likelihood weighting.  Three
 -- readings {23,24,22} of the same mu via observe(normal(mu,2), d), folded
 -- with and_agg; the moment readouts take that evidence as their conditioning
@@ -232,6 +257,37 @@ SELECT round(expected(g.mu)::numeric, 1)            AS prior_mean,
        abs(variance(g.mu, ev.e) - 1.266)  < 0.1     AS posterior_var_close,
        abs(evidence(ev.e) / 0.001173 - 1.0) < 0.05  AS marginal_likelihood_close
 FROM g, ev;
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;
+
+-- Problem 13 (cont.): Shapley values of the observations for the posterior
+-- mean, exact over the conjugate shape: 22 -> 0.2869, 23 -> 0.9494,
+-- 24 -> 1.6119, summing to the shift 22.848 - 20.
+WITH g  AS (SELECT normal(20, 5) AS mu),
+     ev AS (SELECT and_agg(| (normal(g.mu, 2) = d)) AS e
+            FROM g CROSS JOIN (VALUES (23.0), (24.0), (22.0)) AS t(d))
+SELECT get_extra(s.observation) AS reading,
+       round(s.value::numeric, 4) AS shift
+FROM g, ev, shapley_observe(g.mu::uuid, ev.e) s
+ORDER BY reading;
+
+-- Problem 13 (cont.): data far from the prior, behind arithmetic (a +1
+-- bias): likelihood weighting degenerates (its low effective sample size
+-- warning is silenced here, its count depending on the platform's
+-- sampler), close to the exact 36.1392 of the conjugate rewrite with the
+-- bias on the data side.
+SET provsql.monte_carlo_seed = 1;
+SET provsql.rv_mc_samples = 10000;
+SET provsql.ess_warn_fraction = 0;
+WITH g  AS (SELECT normal(20, 5) AS mu),
+     ev AS (SELECT and_agg(| (normal(g.mu + 1, 2) = d)) AS e
+            FROM g CROSS JOIN (VALUES (38.0), (39.0), (37.0)) AS t(d))
+SELECT abs(expected(g.mu, ev.e) - 36.14) < 1.0 AS weighted_close FROM g, ev;
+RESET provsql.ess_warn_fraction;
+WITH g  AS (SELECT normal(20, 5) AS mu),
+     ev AS (SELECT and_agg(| (normal(g.mu, 2) = d - 1)) AS e
+            FROM g CROSS JOIN (VALUES (38.0), (39.0), (37.0)) AS t(d))
+SELECT round(expected(g.mu, ev.e)::numeric, 4) AS posterior_mean FROM g, ev;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 

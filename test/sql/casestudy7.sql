@@ -566,7 +566,27 @@ BEGIN
   RAISE NOTICE 'not absorptive: why-provenance refused on %, counting on %, of % nodes',
     why_refused, count_refused, (SELECT count(*) FROM cs7_conn);
 END $$;
-DROP TABLE cs7_conn, cs7_count, cs7_why;
+-- Degrees of separation: each co-review counts one hop, and the nonnegative
+-- tropical semiring, absorptive, accepts these tokens and gives the fewest hops
+-- (r2, r3: 1; r4 through r3, r5 through r2: 2); plain sr_tropical, whose
+-- negative costs would make cycles matter, refuses them.
+SELECT create_provenance_mapping('cs7_hops', 'coreview', '1::float8');
+SELECT node, sr_tropical(tok, 'cs7_hops', nonnegative => true) AS hops
+FROM cs7_conn ORDER BY node;
+DO $$
+DECLARE refused int := 0; r record;
+BEGIN
+  FOR r IN SELECT tok FROM cs7_conn LOOP
+    BEGIN
+      PERFORM sr_tropical(r.tok, 'cs7_hops');
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE '%not absorptive%' THEN refused := refused + 1; END IF;
+    END;
+  END LOOP;
+  RAISE NOTICE 'not absorptive: plain tropical refused on % of % nodes',
+    refused, (SELECT count(*) FROM cs7_conn);
+END $$;
+DROP TABLE cs7_conn, cs7_count, cs7_why, cs7_hops;
 SET provsql.provenance = 'semiring';
 
 DROP TABLE bid, expertise, topic_of, extends, coreview, assignment,

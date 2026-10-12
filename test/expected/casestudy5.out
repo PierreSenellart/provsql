@@ -186,3 +186,14 @@ species_id|prob
 6|0.3410
 7|0.7826
 (5 rows)
+remove_provenance
+
+(1 row)
+photo_id|bbox_id|label|prob
+5|1|Red Deer|0.4000
+5|1|Roe Deer|0.3000
+5|2|Red Deer|0.4200
+5|3|Red Deer|0.3800
+5|4|Red Fox|0.4300
+5|5|Red Fox|0.4800
+(6 rows)

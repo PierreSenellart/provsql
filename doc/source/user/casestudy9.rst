@@ -8,11 +8,13 @@ This case study runs the queries of an ordinary sales dashboard over a
 pipeline of deals that may or may not close. Every figure the dashboard
 shows becomes a random quantity, and ProvSQL answers the same SQL with its
 distribution. It demonstrates aggregates and their expected values,
-``ROLLUP`` subtotals, shares of a total, ranking and top-k over aggregates,
-comparisons with a target, percentages with a ``NULLIF`` divisor,
-aggregates of aggregates, grouping by an aggregate's value, ``DISTINCT
-ON``, :sqlfunc:`plain` for a value meant without provenance, and the
-purposes an answer may serve under the customers' consent.
+``ROLLUP`` subtotals, aggregates over windows, shares of a total, ranking
+and top-k over aggregates, comparisons with a target, arithmetic between
+aggregates, Boolean aggregates and ``EXISTS`` as values, percentages with a
+``NULLIF`` divisor, aggregates of aggregates, grouping by an aggregate's
+value, ``DISTINCT ON``, :sqlfunc:`plain` for a value meant without
+provenance, and the purposes an answer may serve under the customers'
+consent.
 
 The Scenario
 ------------
@@ -27,10 +29,11 @@ Your tasks:
 
 * forecast revenue per region, with and without the regions that close
   nothing,
+* follow revenue through the quarters, and each deal's share of it,
 * find which region is likely to lead, and each region's likely rank,
-* check each region against its target,
-* describe the deals that close: their share of big deals, their spread,
-  the largest one per region,
+* check each region against its target, and its growth from Q1 to Q2,
+* describe the deals that close: whether a big one does, their share of
+  big deals, their spread, the largest one per region,
 * use each answer only for the purposes its customers consented to.
 
 Setup
@@ -76,11 +79,9 @@ Step 1: The Pipeline
 
 .. nb:omit-begin
 
-At the start of every session, set the search path:
-
-.. code-block:: postgresql
-
-    SET search_path TO public, provsql;
+The setup script has called :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -148,7 +149,41 @@ Q1 (94.50) and Q2 (60.00) make 154.50, and the three regions 405.00, the
 grand total.
 
 
-Step 4: Each Region's Share
+Step 4: Revenue to Date and Each Deal's Share
+---------------------------------------------
+
+An aggregate used as a window function reads the rows of its frame in
+every world. Each deal gets the revenue of its region up to its quarter,
+and its share of its region's revenue:
+
+.. code-block:: postgresql
+
+    SELECT customer, region, quarter, amount,
+           sum(amount) OVER (PARTITION BY region ORDER BY quarter) AS to_date,
+           round(expected(sum(amount) OVER (PARTITION BY region
+                                            ORDER BY quarter),
+                          provenance())::numeric, 2) AS expected_to_date,
+           round(expected(100.0 * amount
+                          / sum(amount) OVER (PARTITION BY region),
+                          provenance())::numeric, 2) AS pct_of_region
+    FROM deal
+    ORDER BY region, quarter, id;
+
+``to_date`` is the value when every deal closes, 275 for Fjordline: all
+of North's deals, Q1 and Q2. Each row has the provenance of its deal, and
+what is derived from a row's values holds in the worlds where the row is
+there: the second argument of :sqlfunc:`expected` conditions on the
+deal closing. Given that Fjordline closes, North's revenue to date is
+``120 + 80 × 0.9 + 45 × 0.5 + 30 × 0.8 = 238.50``, and Sierra makes
+63.39% of West's revenue on average.
+
+Without that argument, :sqlfunc:`expected` averages over every world
+where the frame has a deal, Sierra's or not: Sierra's share would come out
+as 166.87%, its 150 divided by the revenue of worlds where it did not
+close. Studio applies this conditioning on its own when it evaluates a value.
+
+
+Step 5: Each Region's Share
 ---------------------------
 
 .. code-block:: postgresql
@@ -168,7 +203,7 @@ value (0.3891 for North) is not the ratio of the forecasts (154.50 /
 world with a larger total.
 
 
-Step 5: Which Region Leads?
+Step 6: Which Region Leads?
 ---------------------------
 
 The top region is the first row of a sort by revenue:
@@ -201,7 +236,7 @@ A ``rank()`` over the revenue gives each region its rank in every world:
 North's expected rank, 1.7398, is the best of the three.
 
 
-Step 6: On Target?
+Step 7: On Target?
 ------------------
 
 .. code-block:: postgresql
@@ -220,7 +255,39 @@ row. A ``NULL`` target would make the comparison unknown, in a row of its
 own; the targets are declared ``NOT NULL``, so there is none.
 
 
-Step 7: The Share of Big Deals
+Step 8: Quarter-over-Quarter Growth
+-----------------------------------
+
+Aggregates combine with each other, within a group and in its ``HAVING``:
+
+.. code-block:: postgresql
+
+    SELECT region,
+           round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
+                          - coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
+                         )::numeric, 2) AS growth
+    FROM deal
+    GROUP BY region
+    ORDER BY region;
+
+    SELECT region,
+           round(probability_evaluate(provenance())::numeric, 4) AS p_growth
+    FROM deal
+    GROUP BY region
+    HAVING sum(amount) FILTER (WHERE quarter = 'Q2')
+         > sum(amount) FILTER (WHERE quarter = 'Q1')
+    ORDER BY region;
+
+The difference is taken in every world, so its expectation is the
+difference of the two forecasts: North shrinks by 34.50 on average
+(``(120 × 0.3 + 30 × 0.8) - (80 × 0.9 + 45 × 0.5)``), and West, 0.00, is
+flat. The ``HAVING`` keeps a region in the worlds where its Q2 revenue
+beats its Q1 revenue, both quarters closing something: West with
+probability 0.3720, although its expected growth is zero, and South, the
+likeliest to grow, with 0.4852.
+
+
+Step 9: The Share of Big Deals
 ------------------------------
 
 .. code-block:: postgresql
@@ -236,8 +303,39 @@ The percentage of closed deals of at least 60 is read in every world, the
 ``FILTER`` and the ``NULLIF`` divisor included: 49.35% expected for North.
 
 
-Step 8: The Best Region and the Average Region
-----------------------------------------------
+Step 10: Any Big Deal Closed?
+-----------------------------
+
+A Boolean aggregate holds in some worlds and not in others; cast to an
+integer, it is an indicator, whose expectation is a probability. An
+``EXISTS`` in the ``SELECT`` list is a Boolean value as well:
+
+.. code-block:: postgresql
+
+    SELECT region, bool_or(amount >= 100) AS big_deal,
+           round(expected(bool_or(amount >= 100)::int)::numeric, 4) AS p_big
+    FROM deal
+    GROUP BY region
+    ORDER BY region;
+
+    SELECT r.name,
+           EXISTS (SELECT * FROM deal d
+                   WHERE d.region = r.name AND d.amount >= 100) AS big_deal,
+           round(probability_evaluate(provenance())::numeric, 4) AS p
+    FROM region r
+    ORDER BY r.name, big_deal;
+
+The two read the same question differently. ``bool_or`` is a value of
+North's group, so it is read in the worlds where North closes a deal:
+``0.3 / 0.993 = 0.3021``, the probability that Fjordline closes over the
+probability that some North deal does. ``EXISTS`` is read from the
+``region`` table, which is not tracked: each region is there in every
+world, once per truth value, and North has a big deal with probability
+0.3000, Fjordline's own. South has none in any world.
+
+
+Step 11: The Best Region and the Average Region
+-----------------------------------------------
 
 An aggregate of the regional revenues reads them in every world:
 
@@ -252,8 +350,8 @@ The best region's revenue is 194.73 on average, well above any single
 region's forecast: whichever region is lucky in a world, that one counts.
 
 
-Step 9: How Many Deals Does a Region Close?
--------------------------------------------
+Step 12: How Many Deals Does a Region Close?
+--------------------------------------------
 
 Grouping by an aggregate's value groups the regions by the number of deals
 they close, in every world:
@@ -271,7 +369,7 @@ A row for ``n`` is there in the worlds where *some* region closes exactly
 hold at once, one per region, so the probabilities add up to more than 1.
 
 
-Step 10: The Largest Deal of Each Region
+Step 13: The Largest Deal of Each Region
 ----------------------------------------
 
 ``DISTINCT ON`` keeps the first row of each region in the given order:
@@ -290,7 +388,7 @@ no larger one does. Arctis (80) is North's largest with probability
 ``0.9 × (1 - 0.3) = 0.63``: it closes, and Fjordline (120) does not.
 
 
-Step 11: The Spread of Deal Sizes
+Step 14: The Spread of Deal Sizes
 ---------------------------------
 
 .. code-block:: postgresql
@@ -307,7 +405,7 @@ worlds where the region closes at least two, 33.31 for North, against
 40.1 when every deal closes.
 
 
-Step 12: A Value Meant Without Provenance
+Step 15: A Value Meant Without Provenance
 -----------------------------------------
 
 A dashboard label turns the revenue into text:
@@ -331,11 +429,30 @@ and the warning goes away:
     GROUP BY region
     ORDER BY region;
 
+Where an untracked value would be a mistake, setting
+``provsql.implicit_freeze`` to ``'error'`` refuses the first query instead
+of warning, and still accepts the one with :sqlfunc:`plain`:
+
+.. code-block:: postgresql
+
+    SET provsql.implicit_freeze = 'error';
+    SELECT region, sum(amount)::text || ' k€' AS label
+    FROM deal
+    GROUP BY region;
+
+The error carries the same ``DETAIL`` line as the warning. Restore the
+default:
+
+.. code-block:: postgresql
+
+    RESET provsql.implicit_freeze;
+
 See :doc:`aggregation` for the aggregates and their values in every world,
-and :ref:`plain-sql` for :sqlfunc:`plain`.
+and :ref:`plain-sql` for :sqlfunc:`plain` and
+:ref:`provsql.implicit_freeze <provsql-implicit-freeze>`.
 
 
-Step 13: Purposes a Result May Serve
+Step 16: Purposes a Result May Serve
 ------------------------------------
 
 Marketing plans a campaign in the regions with no big deal (100 k€ or
@@ -351,11 +468,11 @@ customer's purposes, and evaluate with :sqlfunc:`sr_consent`:
 
     SELECT r.name,
            (sr_consent(provenance(), 'deal_consent',
-                       'forecasting'::purpose)).*,
+                       NULL::purpose)).*,
            consented_for(provenance(), 'deal_consent', 'marketing')
              AS for_marketing,
            consent_conflicts(provenance(), 'deal_consent',
-                             'forecasting'::purpose) AS conflicts
+                             NULL::purpose) AS conflicts
     FROM region r
     WHERE NOT EXISTS (SELECT * FROM deal d
                       WHERE d.region = r.name AND d.amount >= 100)

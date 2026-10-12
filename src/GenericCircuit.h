@@ -46,6 +46,25 @@ extern "C" {
  * Gate types are the PostgreSQL @c gate_type values.  The circuit is
  * constructed from the persistent mmap store and then evaluated in-memory.
  */
+/**
+ * @brief The equations of a @c gate_fixsystem as linear Boolean forms.
+ *
+ * Equation @c i reads @f$x_i = b_i \vee \bigvee_j (a_{ij} \wedge x_j)@f$,
+ * where @f$b_i@f$ and every coefficient @f$a_{ij}@f$ are given by gates
+ * of the circuit that do not depend on the unknowns: @c b[i] lists the
+ * conjunctions whose disjunction is @f$b_i@f$, and @c in[i] the pairs
+ * @c (j, conjunction), an empty conjunction being true.  @c out holds the
+ * same terms indexed by @c j.  Built by @c linearizeFixSystem, for the
+ * evaluators that solve the system in one world at a time (the Monte Carlo
+ * sampler) or estimate the size of its Boolean expansion.
+ */
+struct FixSystemLinear {
+  std::size_t n = 0; ///< Number of unknowns
+  std::vector<std::vector<std::vector<gate_t> > > b; ///< Constant part of each equation
+  std::vector<std::vector<std::pair<std::size_t, std::vector<gate_t> > > > in; ///< Terms of each equation
+  std::vector<std::vector<std::pair<std::size_t, std::vector<gate_t> > > > out; ///< Terms, by unknown read
+};
+
 class GenericCircuit : public Circuit<gate_type>
 {
 private:
@@ -768,6 +787,20 @@ typename S::value_type evaluate(gate_t g, std::unordered_map<gate_t, typename S:
  * @return                    The solution, one value per unknown, in wire
  *                            order.
  */
+/**
+ * @brief The equations of the @c gate_fixsystem @p sys, as linear forms
+ *        over the gates that do not depend on its unknowns.
+ *
+ * The same reading as @c solveFixSystem's, kept symbolic: the coefficients
+ * are gates to evaluate, not semiring values, so that an evaluator can solve
+ * the system in each sampled world.  Throws the same refusals on a
+ * recursion that is not linear.
+ *
+ * @param sys  The @c gate_fixsystem gate.
+ * @return     Its linear forms.
+ */
+FixSystemLinear linearizeFixSystem(gate_t sys) const;
+
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
 std::vector<typename S::value_type> solveFixSystem(gate_t sys, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
 

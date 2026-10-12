@@ -152,7 +152,7 @@ Activate provenance tracking on the table ``s`` using
 
     SELECT add_provenance('s');
 
-A hidden ``provsql`` column is added that holds a UUID provenance token for
+A ``provsql`` column is added that holds a UUID provenance token for
 each tuple. Run a simple query to see this extra column in the output:
 
 .. code-block:: postgresql
@@ -271,7 +271,7 @@ with :sqlfunc:`present`:
 
     SELECT *, sr_formula(provenance(), 'witness_mapping')
     FROM consistent_s
-    WHERE provsql.present(provenance());
+    WHERE present(provenance());
 
 (:sqlfunc:`nonzero` is the general form, testing the annotation against
 a chosen semiring's zero; see :doc:`the chapter on NULL values and

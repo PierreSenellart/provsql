@@ -11905,20 +11905,24 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
  * Inputs are read as values of a user-defined enum carrier; addition
  * is enum-min, multiplication is enum-max. Bottom and top of the enum
  * are derived from @c pg_enum.enumsortorder. The third argument is a
- * sample value of the carrier enum, used only for type inference; its
- * value is ignored.
+ * value of the carrier enum, used only for type inference; its value is
+ * ignored, so @c NULL::type is enough.
  *
  * The security shape: alternative derivations combine to the least
  * sensitive label, joins combine to the most sensitive label.
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to enum values.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE FUNCTION sr_minmax(token UUID, token2value regclass, element_one ANYENUM)
   RETURNS ANYENUM AS
 $$
 BEGIN
+  IF token IS NULL OR token2value IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
@@ -11926,24 +11930,28 @@ BEGIN
     element_one
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the max-min m-semiring on a user enum
  *
  * Dual of :sqlfunc:`sr_minmax`: addition is enum-max, multiplication
  * is enum-min. The fuzzy / availability / trust shape: alternatives
  * combine to the most permissive label, joins combine to the strictest
- * label. The third argument is a sample value of the carrier enum,
- * used only for type inference; its value is ignored.
+ * label. The third argument is a value of the carrier enum, used only
+ * for type inference; its value is ignored, so @c NULL::type is enough.
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to enum values.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE FUNCTION sr_maxmin(token UUID, token2value regclass, element_one ANYENUM)
   RETURNS ANYENUM AS
 $$
 BEGIN
+  IF token IS NULL OR token2value IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
@@ -11951,7 +11959,7 @@ BEGIN
     element_one
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over a subset semiring, as a bitmask (internal)
  *
@@ -11967,12 +11975,12 @@ CREATE OR REPLACE FUNCTION subset_evaluate(
 /** @brief The labels of the enum type of @p element_one a bitmask holds (internal) */
 CREATE OR REPLACE FUNCTION subset_labels(mask bigint, element_one ANYENUM)
   RETURNS ANYARRAY AS
-  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  'provsql', 'subset_labels' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 /** @brief The settling level of a bitmask of clearance levels (internal) */
 CREATE OR REPLACE FUNCTION subset_settling(mask bigint, element_one ANYENUM)
   RETURNS ANYENUM AS
-  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  'provsql', 'subset_settling' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 /** @brief Membership of a label, given as text, in a subset annotation (internal)
  *
@@ -11989,12 +11997,13 @@ CREATE OR REPLACE FUNCTION subset_member(
  * intersection, negation (@c EXCEPT, @c NOT @c EXISTS) by difference.
  * A mapping value is a set of labels (an array of the enum), or a single
  * label standing for itself.  The result is the set of labels whose world
- * contains the tuple.  The third argument is a sample value of the enum,
- * used only for type inference.  At most 63 labels.
+ * contains the tuple.  The third argument is a value of the enum, used
+ * only for type inference (@c NULL::type is enough).  At most 63 labels.
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to labels or arrays of labels.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE OR REPLACE FUNCTION sr_subset(
   token UUID, token2value regclass, element_one ANYENUM)
@@ -12002,8 +12011,9 @@ CREATE OR REPLACE FUNCTION sr_subset(
 $$
   SELECT provsql.subset_labels(
     provsql.subset_evaluate(token, token2value, 'subset', element_one),
-    element_one);
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    element_one)
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance as the set of clearance levels a tuple is visible at
  *
@@ -12017,7 +12027,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to levels or arrays of levels.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE OR REPLACE FUNCTION sr_clearance(
   token UUID, token2value regclass, element_one ANYENUM)
@@ -12025,8 +12036,9 @@ CREATE OR REPLACE FUNCTION sr_clearance(
 $$
   SELECT provsql.subset_labels(
     provsql.subset_evaluate(token, token2value, 'clearance', element_one),
-    element_one);
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    element_one)
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Whether a tuple is visible at a clearance level
  *
@@ -12052,7 +12064,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to levels or arrays of levels.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  * @param settles_at The settling level.
  * @param visible_at_top Whether the tuple is visible at the top level.
  */
@@ -12062,8 +12075,9 @@ CREATE OR REPLACE FUNCTION clearance_settling(
 $$
   SELECT provsql.subset_settling(m, element_one),
          enum_last(element_one) = ANY(provsql.subset_labels(m, element_one))
-    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'clearance', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over consented purposes
  *
@@ -12075,7 +12089,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to purposes or arrays of purposes.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  * @param purposes The purposes for which the query returns the tuple.
  * @param unrestricted Whether the query over the whole database returns it.
  */
@@ -12084,8 +12099,9 @@ CREATE OR REPLACE FUNCTION sr_consent(
   OUT purposes ANYARRAY, OUT unrestricted boolean) AS
 $$
   SELECT provsql.subset_labels(m, element_one), m < 0
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Whether a tuple may be used for a purpose
  *
@@ -12111,7 +12127,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to purposes or arrays of purposes.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE OR REPLACE FUNCTION consent_purposes(
   token UUID, token2value regclass, element_one ANYENUM)
@@ -12119,8 +12136,9 @@ CREATE OR REPLACE FUNCTION consent_purposes(
 $$
   SELECT CASE WHEN m < 0 THEN provsql.subset_labels(m, element_one)
               ELSE provsql.subset_labels(0, element_one) END
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief The purposes for which consent changes the answer
  *
@@ -12132,7 +12150,8 @@ $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
  *
  * @param token Provenance token to evaluate.
  * @param token2value Mapping from input gates to purposes or arrays of purposes.
- * @param element_one Sample value of the carrier enum (any value works).
+ * @param element_one A value of the carrier enum, used only for its type
+ *        (@c NULL::type is enough).
  */
 CREATE OR REPLACE FUNCTION consent_conflicts(
   token UUID, token2value regclass, element_one ANYENUM)
@@ -12140,8 +12159,9 @@ CREATE OR REPLACE FUNCTION consent_conflicts(
 $$
   SELECT CASE WHEN m < 0 THEN provsql.subset_labels(~m, element_one)
               ELSE provsql.subset_labels(m, element_one) END
-    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m;
-$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+    FROM provsql.subset_evaluate(token, token2value, 'consent', element_one) m
+    WHERE token IS NOT NULL AND token2value IS NOT NULL;
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @} */
 

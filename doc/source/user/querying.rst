@@ -131,6 +131,14 @@ infinite. :sqlfunc:`sr_formula` prints the equations::
 
     x₂ where x₁ = a ⊗ x₂, x₂ = 𝟙 ⊕ (c ⊗ x₃), x₃ = b ⊗ x₁
 
+An exact probability of such a row expands the equations into a Boolean
+circuit, of about the size of a cycle's rows times its terms: on a large
+cyclic graph (a city's transport network), too large to build, and the
+exact evaluation is then refused. The sampling methods (``'monte-carlo'``,
+``'stopping-rule'``, and the ``'additive'`` and ``'relative'`` requests of
+:ref:`probability-guarantees`) solve the equations in each sampled world
+instead, at a cost of the order of the query's provenance.
+
 A ``UNION ALL`` recursion that does not end stops with an error.
 
 .. _subqueries:

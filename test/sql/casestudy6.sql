@@ -561,6 +561,30 @@ DROP TABLE result_cs6_null_avg2;
 DELETE FROM readings WHERE id = 9;
 
 -- ---------------------------------------------------------------------
+-- Step 20: calibration read as a graded confidence: a district's alert is
+-- corroborated by two of its stations both calibrated, conjoined with the
+-- Lukasiewicz t-norm (centre max(0.95 + 0.70 - 1, 0) = 0.65, east 0.60),
+-- against the product of sr_viterbi (0.665, 0.60).  The stations' own tokens
+-- are not in the mapping, and count as fully true.
+-- ---------------------------------------------------------------------
+SELECT create_provenance_mapping('calibration_degree', 'calibration_status', 'p');
+CREATE TABLE result_cs6_corroborated AS
+  SELECT s1.district,
+         sr_lukasiewicz(provenance(), 'calibration_degree') AS confidence,
+         sr_viterbi(provenance(), 'calibration_degree') AS product
+  FROM calibration_status c1
+  JOIN stations s1 ON s1.id = c1.station_id
+  JOIN calibration_status c2 ON c2.station_id > c1.station_id
+  JOIN stations s2 ON s2.id = c2.station_id AND s2.district = s1.district
+  GROUP BY s1.district;
+SELECT remove_provenance('result_cs6_corroborated');
+SELECT district, round(confidence::numeric, 4) AS confidence,
+       round(product::numeric, 4) AS product
+FROM result_cs6_corroborated ORDER BY district;
+DROP TABLE result_cs6_corroborated;
+DROP TABLE calibration_degree;
+
+-- ---------------------------------------------------------------------
 -- Cleanup.
 -- ---------------------------------------------------------------------
 DROP TABLE historical_readings;

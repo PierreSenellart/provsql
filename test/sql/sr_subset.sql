@@ -94,6 +94,26 @@ WHERE NOT EXISTS (SELECT * FROM sub_purchase p
 SELECT remove_provenance('result_consent');
 SELECT * FROM result_consent ORDER BY name;
 
+/* The enum argument is read for its type only: NULL::type gives the same
+   results as a value of the enum, and a NULL token or mapping gives NULL. */
+CREATE TABLE result_null_sample AS SELECT name,
+       sr_clearance(provenance(),'sub_clearance_map',NULL::sub_level) AS clearance,
+       sr_subset(provenance(),'sub_clearance_map',NULL::sub_level) AS subset,
+       (clearance_settling(provenance(),'sub_clearance_map',NULL::sub_level)).*
+FROM sub_employee;
+SELECT remove_provenance('result_null_sample');
+SELECT * FROM result_null_sample ORDER BY name;
+DROP TABLE result_null_sample;
+SELECT sr_subset(NULL,'sub_clearance_map',NULL::sub_level) IS NULL AS subset_token,
+       sr_clearance(NULL,'sub_clearance_map',NULL::sub_level) IS NULL AS clearance_token,
+       (clearance_settling(NULL,'sub_clearance_map',NULL::sub_level)).settles_at IS NULL
+         AS settling_token,
+       (sr_consent(NULL,'sub_consent_map',NULL::sub_purpose)).purposes IS NULL AS consent_token,
+       consent_purposes(NULL,'sub_consent_map',NULL::sub_purpose) IS NULL AS purposes_token,
+       consent_conflicts(NULL,'sub_consent_map',NULL::sub_purpose) IS NULL AS conflicts_token,
+       sr_subset((SELECT provsql FROM sub_employee LIMIT 1),NULL,NULL::sub_level) IS NULL
+         AS subset_mapping;
+
 /* A label of another enum type is refused. */
 SELECT visible_at(provenance(),'sub_clearance_map','marketing')
 FROM sub_employee WHERE name = 'Alice';

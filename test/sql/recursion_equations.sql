@@ -66,6 +66,23 @@ FROM eq_r ORDER BY n;
 SELECT n, round(probability_evaluate(tok)::numeric, 6) AS prob
 FROM eq_r ORDER BY n;
 
+-- Sampled on the equation systems themselves, without the Boolean expansion:
+-- Monte Carlo and the stopping rule solve the recursion in each sampled world,
+-- and agree with the exact values above within their tolerances, as does an
+-- 'additive' request.
+SET provsql.monte_carlo_seed = 1;
+SELECT n,
+       abs(probability_evaluate(tok, 'monte-carlo', '20000') - exact) < 0.02
+         AS monte_carlo,
+       abs(probability_evaluate(tok, 'stopping-rule', 'eps=0.05,delta=0.01')
+           / exact - 1) < 0.1 AS stopping_rule,
+       abs(probability_evaluate(tok, 'additive', 'eps=0.02,delta=0.01') - exact)
+         < 0.02 AS additive
+FROM eq_r JOIN (VALUES (1, 0.3125), (2, 0.5), (3, 0.625), (4, 0.3125))
+               AS v(n, exact) USING (n)
+ORDER BY n;
+RESET provsql.monte_carlo_seed;
+
 -- Absorptive, with an exact equality: validity intervals, by value
 -- iteration.  a = [1,10), b = [5,20), c = [0,7), d = [8,9), e = [12,15):
 --   2: a = [1,10);  3: (a ∩ b) ∪ e = [5,10) ∪ [12,15);

@@ -23,6 +23,9 @@ e_x|e_given_referral|var_given_referral|support_lower
 p_severe_given_referred|matches_bayes
 0.1434|t
 (1 row)
+p_referred|p_referred_fixed
+0.1886|0.1587
+(1 row)
 region|e_total|e_total_given_highday
 North|4.67|5.50
 (1 row)
@@ -53,6 +56,9 @@ t
 p_wild_longer
 0.31
 (1 row)
+p_lognormal|p_first_passage|p95_first_passage
+0.0472|0.0485|9.94
+(1 row)
 mean_cases|p_alert
 6.00|0.043
 (1 row)
@@ -80,8 +86,22 @@ mean_days|days_lo|days_hi
 latent_mean_20|latent_var_total
 t|t
 (1 row)
+mean_noise_variance|mean_reading_20|var_reading_4
+4|t|t
+(1 row)
 prior_mean|posterior_mean_close|posterior_var_close|marginal_likelihood_close
 20.0|t|t|t
+(1 row)
+reading|shift
+22|0.2869
+23|0.9494
+24|1.6119
+(3 rows)
+weighted_close
+t
+(1 row)
+posterior_mean
+36.1392
 (1 row)
 remove_provenance
 

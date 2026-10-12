@@ -45,7 +45,28 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region, quarter;
 DROP TABLE cs9_r;
 
--- Step 4: expected share of the total, per world (North 0.3891).
+-- Step 4: aggregates over windows, conditioned on the row's deal closing:
+-- revenue to date (Fjordline 120 + 80*.9 + 45*.5 + 30*.8 = 238.50) and each
+-- deal's share of its region (Sierra 63.39); unconditioned, Sierra's share
+-- averages over the worlds where it did not close too (166.87).
+CREATE TABLE cs9_r AS
+  SELECT customer, region, quarter, amount,
+         sum(amount) OVER (PARTITION BY region ORDER BY quarter) AS to_date,
+         round(expected(sum(amount) OVER (PARTITION BY region ORDER BY quarter),
+                        provenance())::numeric, 2) AS expected_to_date,
+         round(expected(100.0 * amount / sum(amount) OVER (PARTITION BY region),
+                        provenance())::numeric, 2) AS pct_of_region,
+         round(expected(100.0 * amount
+                        / sum(amount) OVER (PARTITION BY region))::numeric, 2)
+           AS pct_unconditioned
+  FROM cs9_deal;
+SELECT remove_provenance('cs9_r');
+SELECT customer, region, quarter, amount, to_date, expected_to_date,
+       pct_of_region, pct_unconditioned
+FROM cs9_r ORDER BY region, quarter, customer;
+DROP TABLE cs9_r;
+
+-- Step 5: expected share of the total, per world (North 0.3891).
 CREATE TABLE cs9_r AS
   SELECT region, round(expected(sum(amount)::numeric
                                 / (SELECT sum(amount) FROM cs9_deal))::numeric, 4)
@@ -55,7 +76,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 5: the top region (North 0.4516, South 0.2790, West 0.2960) and the
+-- Step 6: the top region (North 0.4516, South 0.2790, West 0.2960) and the
 -- expected rank (North 1.7398, South 2.0766, West 2.0925).
 CREATE TABLE cs9_r AS
   SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_top
@@ -72,7 +93,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 6: on target, compared with the region's target, a grouping column
+-- Step 7: on target, compared with the region's target, a grouping column
 -- (North true 0.5490, false 0.4440).  The target and the amounts are NOT
 -- NULL, so the comparison is never unknown, and there is no unknown row.
 CREATE TABLE cs9_r AS
@@ -85,8 +106,50 @@ SELECT region, coalesce(on_target::text, 'unknown') AS on_target, p
 FROM cs9_r ORDER BY region, on_target;
 DROP TABLE cs9_r;
 
--- Step 7: a percentage with FILTER and a NULLIF divisor (North 49.35).
--- Step 8: best and average region (194.73 and 137.14).
+-- Step 8: growth from Q1 to Q2, a difference of two aggregates (North
+-- (36 + 24) - (72 + 22.5) = -34.50, South -4.50, West 0.00), and the regions
+-- whose Q2 beats their Q1 in a HAVING (North 0.2580, South 0.4852, West
+-- 0.3720).
+CREATE TABLE cs9_r AS
+  SELECT region,
+         round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
+                        - coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
+                       )::numeric, 2) AS growth
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+CREATE TABLE cs9_r AS
+  SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_growth
+  FROM cs9_deal GROUP BY region
+  HAVING sum(amount) FILTER (WHERE quarter = 'Q2')
+       > sum(amount) FILTER (WHERE quarter = 'Q1');
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+
+-- Step 10: a big deal (>= 100) closes: bool_or, read in the worlds where the
+-- region closes a deal (North 0.3 / 0.993 = 0.3021, West 0.2066), and EXISTS
+-- over the untracked regions, in every world (North 0.3000, West 0.2000).
+CREATE TABLE cs9_r AS
+  SELECT region, bool_or(amount >= 100) AS big_deal,
+         round(expected(bool_or(amount >= 100)::int)::numeric, 4) AS p_big
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+CREATE TABLE cs9_r AS
+  SELECT r.name,
+         EXISTS (SELECT * FROM cs9_deal d
+                 WHERE d.region = r.name AND d.amount >= 100) AS big_deal,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM cs9_region r;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY name, big_deal;
+DROP TABLE cs9_r;
+
+-- Step 9: a percentage with FILTER and a NULLIF divisor (North 49.35).
+-- Step 11: best and average region (194.73 and 137.14).
 CREATE TABLE cs9_r AS
   SELECT region,
          round(expected(100.0 * count(*) FILTER (WHERE amount >= 60)
@@ -103,7 +166,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r;
 DROP TABLE cs9_r;
 
--- Step 9: regions grouped by the number of deals they close (2: 0.7629).
+-- Step 12: regions grouped by the number of deals they close (2: 0.7629).
 CREATE TABLE cs9_r AS
   SELECT n AS deals_closed, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM (SELECT region, count(*) AS n FROM cs9_deal GROUP BY region) t
@@ -112,7 +175,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY deals_closed;
 DROP TABLE cs9_r;
 
--- Step 10: the largest deal of each region (Arctis 0.9 * (1 - 0.3) = 0.63).
+-- Step 13: the largest deal of each region (Arctis 0.9 * (1 - 0.3) = 0.63).
 CREATE TABLE cs9_r AS
   SELECT region, customer, amount,
          round(probability_evaluate(provenance())::numeric, 4) AS p
@@ -122,7 +185,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region, amount DESC;
 DROP TABLE cs9_r;
 
--- Step 11: the standard deviation when every deal closes (North 40.1 (*)), and
+-- Step 14: the standard deviation when every deal closes (North 40.1 (*)), and
 -- its expectation over the worlds with two deals or more (North 33.31).
 CREATE TABLE cs9_r AS
   SELECT region, round(stddev(amount), 1) AS sd,
@@ -132,7 +195,7 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 12: a label reads the value on the data as it is, with a warning;
+-- Step 15: a label reads the value on the data as it is, with a warning;
 -- plain() says it is meant, and the warning goes away.
 CREATE TABLE cs9_r AS
   SELECT region, sum(amount)::text || ' k€' AS label
@@ -147,7 +210,19 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 13: the regions with no big deal (>= 100), for each purpose.  South:
+-- Step 15 (continued): with provsql.implicit_freeze = 'error', the label is
+-- refused, and the plain() one still runs.
+SET provsql.implicit_freeze = 'error';
+SELECT region, sum(amount)::text || ' k€' AS label FROM cs9_deal GROUP BY region;
+CREATE TABLE cs9_r AS
+  SELECT region, plain(sum(amount))::text || ' k€' AS label
+  FROM cs9_deal GROUP BY region;
+SELECT remove_provenance('cs9_r');
+SELECT * FROM cs9_r ORDER BY region;
+DROP TABLE cs9_r;
+RESET provsql.implicit_freeze;
+
+-- Step 16: the regions with no big deal (>= 100), for each purpose.  South:
 -- every purpose.  North: analytics and marketing only, because Fjordline's
 -- deal (120, forecasting only) is hidden from them; over all deals it is
 -- there, so North is not consented for marketing and both purposes conflict.
@@ -166,12 +241,12 @@ CREATE TABLE cs9_deal_consent AS
   FROM cs9_deal d JOIN cs9_consent c USING (customer);
 CREATE TABLE cs9_r AS
   SELECT r.name,
-         (sr_consent(provenance(), 'cs9_deal_consent', 'forecasting'::cs9_purpose)).*,
+         (sr_consent(provenance(), 'cs9_deal_consent', NULL::cs9_purpose)).*,
          consented_for(provenance(), 'cs9_deal_consent', 'marketing') AS for_marketing,
          consent_conflicts(provenance(), 'cs9_deal_consent',
-                           'forecasting'::cs9_purpose) AS conflicts,
+                           NULL::cs9_purpose) AS conflicts,
          consent_purposes(provenance(), 'cs9_deal_consent',
-                          'forecasting'::cs9_purpose) AS allowed
+                          NULL::cs9_purpose) AS allowed
   FROM cs9_region r
   WHERE NOT EXISTS (SELECT * FROM cs9_deal d
                     WHERE d.region = r.name AND d.amount >= 100);

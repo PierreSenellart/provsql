@@ -1,0 +1,39 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+station|minutes|minutes_elimination|accessible
+A|0|0|t
+B|2|2|t
+C|5|5|t
+D|9|9|f
+(4 rows)
+ERROR:  ProvSQL: This tuple has infinitely many derivations (it is derived through a cycle of its recursive query), which an integer count cannot represent.
+DETAIL:  provsql-reason: recursion-infinite-count; scope: deliberate
+CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
+sr_formula
+x₂ where x₁ = 𝟙 ⊕ (C->A ⊗ x₃) ⊕ (B->A ⊗ x₂), x₂ = (A->B ⊗ x₁) ⊕ (C->B ⊗ x₃), x₃ = (A->C ⊗ x₁) ⊕ (B->C ⊗ x₂) ⊕ (D->C ⊗ x₄), x₄ = C->D ⊗ x₃
+(1 row)
+station|exact|additive_ok|monte_carlo_ok
+B|0.992750|t|t
+C|0.990250|t|t
+D|0.891225|t|t
+(3 rows)
+remove_provenance
+
+(1 row)

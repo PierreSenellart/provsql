@@ -10,3 +10,12 @@ Berlin|secret
 New York|restricted
 Paris|confidential
 (3 rows)
+remove_provenance
+
+(1 row)
+null_sample_same
+t
+(1 row)
+null_token|null_token_maxmin|null_mapping
+t|t|t
+(1 row)
