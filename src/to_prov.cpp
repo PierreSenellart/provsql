@@ -76,12 +76,7 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
 
   std::unordered_map<gate_t, std::string> provenance_mapping;
   if(table) {
-    auto inputs = c.getInputs();
-    std::vector<std::string> inputs_uuid;
-    std::transform(inputs.begin(), inputs.end(), std::back_inserter(inputs_uuid), [&c](auto x) {
-      return c.getUUID(x);
-    });
-    bool drop_table = join_with_temp_uuids(table, inputs_uuid);
+    bool drop_table = join_with_temp_uuids(table, c.getMappableUUIDs());
     constants_t constants = get_constants(true);
     initialize_provenance_mapping<std::string>(constants, c, provenance_mapping, [](const char *v) {
       return std::string(v);
@@ -99,7 +94,8 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
 
     ss << "  <prov:entity prov:id='provsql:" + uuid + "'>\n";
     ss << "    <prov:type xsi:type='xsd:QName'>provsql:" + std::string(gate_type_name[type]) + "</prov:type>\n";
-    if (type == gate_input && table && provenance_mapping.find(g)!=provenance_mapping.end()) {
+    if ((type == gate_input || type == gate_mulinput) && table &&
+        provenance_mapping.find(g)!=provenance_mapping.end()) {
       ss << "    <prov:value>" + xmlEscape(provenance_mapping[g]) + "</prov:value>\n";
     }
     ss << "  </prov:entity>\n";

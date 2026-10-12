@@ -255,6 +255,48 @@ def test_evaluate_lukasiewicz_returns_float(client, lukasiewicz_mapping):
     assert float(data["result"]) == 0.5
 
 
+def test_evaluate_regex_keeps_query_order(client, mapping):
+    """sr_regex: a product concatenates its factors in FROM order, so
+    swapping the two sides of the join reverses the word."""
+    for frm, word in (("personnel a, personnel b", "John · Paul"),
+                      ("personnel b, personnel a", "Paul · John")):
+        root = _root_uuid(
+            client,
+            f"SELECT 1 AS k FROM {frm} WHERE a.id = 1 AND b.id = 2",
+        )
+        resp = client.post("/api/evaluate", json={
+            "token": root,
+            "semiring": "regex",
+            "mapping": f"provsql_test.{mapping}",
+        })
+        assert resp.status_code == 200, resp.data
+        data = resp.get_json()
+        assert data["kind"] == "text"
+        assert data["result"] == word
+
+
+def test_evaluate_tropical_paths(client, float_mapping, mapping):
+    """sr_tropical_paths: costs from one mapping, labels from the other;
+    over a + of the seven personnel rows, the cheapest is id 1, John."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    body = {
+        "token": root,
+        "semiring": "tropical-paths",
+        "mapping": f"provsql_test.{float_mapping}",
+        "labels": f"provsql_test.{mapping}",
+    }
+    resp = client.post("/api/evaluate", json=body)
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert data["result"] == "1: John"
+    # Without its second mapping, a clean 400.
+    del body["labels"]
+    resp = client.post("/api/evaluate", json=body)
+    assert resp.status_code == 400
+    assert "labels" in resp.get_json()["error"]
+
+
 def _interval_mapping_fixture(client, table, literal, carrier_type):
     """Helper for the three interval-union fixtures below: build a
     (value::<multirange>, provenance) mapping where every personnel row

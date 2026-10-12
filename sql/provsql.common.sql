@@ -11862,6 +11862,58 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as a regular expression over the input labels
+ *
+ * Inputs are read as labels (an empty label is the empty word); a
+ * derivation is the word of its labels, in the order of the query (that
+ * of the @c FROM clause for a join), and a tuple's value is the language
+ * of its derivations: @c | for union, @c · for concatenation, @c * for
+ * the Kleene star, @c ε and @c ∅ for the empty word and language.
+ *
+ * Concatenation does not commute.  A recursion on cyclic data has the
+ * regular expression of its derivations as exact value, provided every
+ * recursive @c FROM clause has the recursive relation at the same place
+ * (first, or last); otherwise it is refused.
+ */
+CREATE FUNCTION sr_regex(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'regex',
+    ''::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief C implementation of @c sr_tropical_paths */
+CREATE FUNCTION provenance_evaluate_tropical_paths(
+  token UUID, costs regclass, labels regclass,
+  OUT cost FLOAT, OUT paths TEXT)
+  AS 'provsql', 'provenance_evaluate_tropical_paths'
+  LANGUAGE C PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance as the least cost of a derivation, with the
+ *  derivations of that cost
+ *
+ * Inputs are read as %float8 costs from @p costs (0 if absent) and as
+ * labels from @p labels (the empty word if absent).  Returns the least
+ * cost, as @c sr_tropical over nonnegative costs, and the derivations of
+ * that cost as a regular expression over the labels, as @c sr_regex: on a
+ * path query, the shortest paths.  A cycle of cost zero can be followed any
+ * number of times on a shortest path, and appears under a star; one of
+ * negative cost is refused.
+ */
+CREATE FUNCTION sr_tropical_paths(token ANYELEMENT, costs regclass,
+                                  labels regclass,
+                                  OUT cost FLOAT, OUT paths TEXT)
+  AS
+$$
+  SELECT * FROM provsql.provenance_evaluate_tropical_paths(token, costs, labels);
+$$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance over the Viterbi (max-times) m-semiring
  *
  * Inputs are read as %float8 probability values in @f$[0,1]@f$.

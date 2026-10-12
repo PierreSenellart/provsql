@@ -36161,11 +36161,14 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
 static void warn_nested_limit(const constants_t *constants, bool ordered) {
   /* With an ORDER BY, the semantics reads the truncation in every world (a
    * rank, at any level): not lowered here, it is a gap.  Without one, SQL
-   * leaves open which rows are kept. */
+   * leaves open which rows are kept.  LIMIT plain(k) does not silence it, as
+   * it does at the top level: the rows kept feed further computation. */
   report_freeze(constants, NULL,
                 ordered ? PROVSQL_GAP : PROVSQL_DELIBERATE, "limit-in-subquery",
                 "LIMIT / OFFSET in a subquery",
-                "Write LIMIT plain(k) to say so.");
+                "The rows kept feed the rest of the query, whose provenance "
+                "does not record the cut; write the LIMIT in the outermost "
+                "query to avoid it.");
 }
 
 /** @brief The (type, typmod) of each non-junk output of @p q, in order. */

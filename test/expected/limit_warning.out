@@ -9,39 +9,39 @@ add_provenance
 -- warning: FROM subquery
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: OFFSET alone
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: LATERAL
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: CTE
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: arm of a set operation
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: two levels down, reported once
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: below the source of an INSERT
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_dst
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: without ORDER BY
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: deliberate
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- warning: over an aggregation
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-in-subquery; scope: gap
-HINT:  Write LIMIT plain(k) to say so.
+HINT:  The rows kept feed the rest of the query, whose provenance does not record the cut; write the LIMIT in the outermost query to avoid it.
 -- no warning: the filter of a rank, in a FROM subquery, alone as OFFSET, in LATERAL, a CTE, an arm, below an INSERT
 -- warning: top level, not read in each world (set operation, aggregation), unless plain()
 WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over an aggregation, a DISTINCT, a set operation or uncertain sort keys: provenance not tracked, although the statement tracks lw_t

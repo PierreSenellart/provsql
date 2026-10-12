@@ -30,12 +30,12 @@ CREATE TABLE cs3_stop_times (
 
 INSERT INTO cs3_routes VALUES ('R1', 'Line 1');
 
--- S0: parent station, GTFS wheelchair_boarding=0 (no info) → normalized to 1
+-- S0: parent station, accessible (wheelchair_boarding=1)
 -- S1: accessible child stop of S0
 -- S2: accessible destination (wheelchair_boarding=1 → stays 1)
 -- S3: inaccessible destination (wheelchair_boarding=2 → normalized to 0)
 INSERT INTO cs3_stops VALUES
-    ('S0', 'Depart',          1, NULL, 0),
+    ('S0', 'Depart',          1, NULL, 1),
     ('S1', 'Depart Platform', 0, 'S0', 1),
     ('S2', 'DestA',           0, NULL, 1),
     ('S3', 'DestB',           0, NULL, 2);
@@ -50,9 +50,9 @@ INSERT INTO cs3_stop_times VALUES
     ('T1', 'S1', 1), ('T1', 'S2', 2),
     ('T2', 'S1', 1), ('T2', 'S3', 2);
 
--- Normalize: GTFS 0=no info→1, 1=accessible→1, 2=not accessible→0
-UPDATE cs3_stops SET wheelchair_boarding    = CASE WHEN wheelchair_boarding    = 2 THEN 0 ELSE 1 END;
-UPDATE cs3_trips SET wheelchair_accessible  = CASE WHEN wheelchair_accessible  = 2 THEN 0 ELSE 1 END;
+-- Normalize: GTFS 1=accessible→1; 0=no info and 2=not accessible→0
+UPDATE cs3_stops SET wheelchair_boarding    = CASE WHEN wheelchair_boarding    = 1 THEN 1 ELSE 0 END;
+UPDATE cs3_trips SET wheelchair_accessible  = CASE WHEN wheelchair_accessible  = 1 THEN 1 ELSE 0 END;
 
 SELECT add_provenance('cs3_trips');
 SELECT add_provenance('cs3_stops');

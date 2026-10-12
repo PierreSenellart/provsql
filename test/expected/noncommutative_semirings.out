@@ -1,0 +1,69 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+src|dst|word
+a|a|ac · ca
+a|c|ab · bc
+b|a|bc · ca
+c|b|ca · ab
+c|c|ca · ac
+(5 rows)
+remove_provenance
+
+(1 row)
+n|equations|paths
+a|x₁ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)*
+b|x₃ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)* · ab
+c|x₂ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)* · (ac | ab · bc)
+(3 rows)
+remove_provenance
+
+(1 row)
+n|equations|paths
+a|x₁ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|(ca · (ac | bc · ab))*
+b|x₃ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|ab · (ca · (ac | bc · ab))*
+c|x₂ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|(ac | bc · ab) · (ca · (ac | bc · ab))*
+(3 rows)
+remove_provenance
+
+(1 row)
+n|cost|paths
+a|0|ε
+b|1|ab
+c|3|ac | ab · bc
+(3 rows)
+remove_provenance
+
+(1 row)
+n|cost|paths
+a|0|((ac | ab · bc) · ca)*
+b|0|((ac | ab · bc) · ca)* · ab
+c|0|((ac | ab · bc) · ca)* · (ac | ab · bc)
+(3 rows)
+ERROR:  ProvSQL: provenance_evaluate_tropical_paths: A cycle of negative cost makes the least cost unbounded, with no shortest derivation.
+CONTEXT:  SQL function "sr_tropical_paths" statement 1
+ERROR:  ProvSQL: This recursion's equations put the recursive relation between factors, or on both sides of them, and the requested semiring is not commutative: its least solution is not given by the star of a value.  Write the recursive relation at the same place of every recursive FROM clause (first, or last).
+DETAIL:  provsql-reason: recursion-two-sided; scope: gap
+CONTEXT:  PL/pgSQL function sr_regex(anyelement,regclass) line 3 at RETURN
+remove_provenance
+
+(1 row)
+n|equations
+b|x₁ where x₁ = ca ⊗ x₂ ⊗ ab, x₂ = 𝟙 ⊕ (ac ⊗ x₃ ⊗ ca) ⊕ (bc ⊗ x₃ ⊗ ca), x₃ = (ca ⊗ x₂ ⊗ ac) ⊕ (ab ⊗ x₁ ⊗ bc)
+(1 row)
+ERROR:  ProvSQL: A HAVING condition's provenance is a product over the worlds of its group, in no order of the query: it has no value in a semiring whose multiplication does not commute.
+DETAIL:  provsql-reason: having-noncommutative; scope: gap
+CONTEXT:  PL/pgSQL function sr_regex(anyelement,regclass) line 3 at RETURN
+remove_provenance
+
+(1 row)

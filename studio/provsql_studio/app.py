@@ -950,6 +950,8 @@ def create_app(
         method    = payload.get("method") or None
         arguments = payload.get("arguments") or None
         function  = payload.get("function") or None
+        # Second mapping (the labels) of the min-cost-paths semiring.
+        labels    = payload.get("labels") or None
         # Conditioning gate UUID for scalar evaluators (distribution-
         # profile, moment, sample).  When the user pins a "Condition on"
         # gate via the strip's UUID picker we forward it as the `prov`
@@ -987,6 +989,7 @@ def create_app(
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
                 extra_gucs=merged_gucs,
                 condition_uuid=condition_uuid,
+                labels=labels,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

@@ -129,7 +129,11 @@ The ``CREATE TABLE AS`` query inherits a ``provsql`` column from
 ``(value, provenance)`` pair remains. A mapping can be populated from
 any expression -- combine columns, filter rows, derive computed values --
 and any semiring-evaluation function (``sr_formula``, ``sr_why``…)
-accepts the result.
+accepts the result. Such a table is a snapshot, though: rows inserted
+into ``detection`` later are not added to it, and a row whose input token
+:sqlfunc:`replace_input` replaces keeps its value under the old token. A
+mapping built by :sqlfunc:`create_provenance_mapping` follows a replaced
+token, and, created with ``maintained => true``, new rows too.
 
 
 Step 3: Inline Lookup with ``VALUES``
@@ -181,14 +185,15 @@ Find photos that contain both Red Deer (``species_id`` 1) and Red Fox
     ORDER BY p.id;
 
 Look at photo 5: the classifier produced three Red Deer candidate rows
-(in three different bounding boxes) and two Red Fox candidate rows (in
-two more boxes). Its formula is the ⊕-sum of all six (deer, fox) pair
-products -- every candidate row is an independent input. This
-matches the structure of the underlying ``detection`` table but
-mis-models the data: each bounding box can correspond to *at most one
-real animal*, so candidate rows that share a ``(photo_id, bbox_id)``
-pair should be mutually exclusive rather than independent. Nothing in
-the schema enforces that, and the formula reflects the mismatch.
+(in bounding boxes 1, 2 and 3) and two Red Fox candidate rows (in boxes
+4 and 5). Its formula is the ⊕-sum of all six (deer, fox) pair products
+-- every candidate row is an independent input. For these five boxes,
+that is right; but in box 1, the classifier also proposed a Roe Deer.
+A bounding box shows *at most one real animal*, so its Red Deer and Roe
+Deer rows cannot both be right: candidate rows that share a
+``(photo_id, bbox_id)`` pair should be mutually exclusive rather than
+independent. Nothing in the schema says so, and the provenance treats
+them as independent.
 
 
 Step 5: Mutually Exclusive Candidates with ``repair_key``
@@ -201,9 +206,7 @@ i.e., *exactly one* of them is true. Applied with the key
 variable whose values are the candidate species the classifier
 considered for that box.
 
-For illustration, add a synthetic key combining photo and bounding-box
-index first (:sqlfunc:`repair_key` also accepts a comma-separated
-column list, so ``'photo_id,bbox_id'`` would work directly).
+The key is given as a comma-separated list of columns.
 ``repair_key`` reinstalls the ``provsql`` column itself, so also drop
 the old mapping (whose tokens are about to become stale):
 
@@ -212,10 +215,7 @@ the old mapping (whose tokens are about to become stale):
     DROP TABLE species_mapping;
     SELECT remove_provenance('detection');
 
-    ALTER TABLE detection ADD COLUMN IF NOT EXISTS photo_bbox text;
-    UPDATE detection SET photo_bbox = photo_id || '/' || bbox_id;
-
-    SELECT repair_key('detection', 'photo_bbox');
+    SELECT repair_key('detection', 'photo_id,bbox_id');
 
     DROP TABLE IF EXISTS species_mapping;
     CREATE TABLE species_mapping AS
@@ -224,16 +224,15 @@ the old mapping (whose tokens are about to become stale):
     SELECT remove_provenance('species_mapping');
     CREATE INDEX ON species_mapping(provenance);
 
-Re-running the conjunctive query from Step 4 with :sqlfunc:`sr_formula`
-would not be illuminating: mutually exclusive events have no meaningful
-representation in the symbolic-formula semiring (each ``mulinput`` just
-collapses to ``𝟙``). To visualise them we use :sqlfunc:`sr_boolexpr`
-instead, which renders the underlying Boolean formula with internal
-variable names and exposes each ``mulinput`` explicitly:
+Re-run the conjunctive query from Step 4, with :sqlfunc:`sr_formula` and
+with :sqlfunc:`sr_boolexpr`, which renders the underlying Boolean formula;
+the mapping labels each candidate by its species in both:
 
 .. code-block:: postgresql
 
-    SELECT p.id, sr_boolexpr(provenance()) AS bexpr
+    SELECT p.id,
+           sr_formula(provenance(), 'species_mapping') AS formula,
+           sr_boolexpr(provenance(), 'species_mapping') AS bexpr
     FROM detection d1
     JOIN detection d2 ON d1.photo_id = d2.photo_id
     JOIN photo p ON p.id = d1.photo_id
@@ -241,19 +240,18 @@ variable names and exposes each ``mulinput`` explicitly:
     GROUP BY p.id
     ORDER BY p.id;
 
-Each input now appears as a ``mulinput`` (the ``{i=v}[p]`` notation
-denotes "variable ``i`` takes value ``v`` with probability ``p``"). In
-this query every variable happens to have a single value, so the
-mutually-exclusive structure is not visible yet. We will see a genuine
-multi-valued ``mulinput`` in the next step, where the deer/roe-deer
+In the Boolean expression, each candidate is now the value of a
+multivalued variable: ``{i=v}[p]`` reads "variable ``i`` takes value
+``v``, with probability ``p``", and the candidates of one bounding box are
+values of the same variable, at most one of which holds. The formula
+shows the candidates by their labels only: mutual exclusion concerns the
+probabilities of the candidates, which a semiring does not see. In this
+query every variable happens to have a single value, so the mutually
+exclusive structure is not visible yet. We will see a genuine
+multi-valued variable in the next step, where the deer/roe-deer
 candidates of one bounding box compose under the mutex constraint.
-
-.. note::
-
-   :sqlfunc:`view_circuit` cannot render ``mulinput`` gates either and
-   refuses to evaluate. Use :sqlfunc:`sr_boolexpr` to inspect circuits
-   that contain ``mulinput`` gates, and :sqlfunc:`probability_evaluate`
-   to score them.
+:sqlfunc:`view_circuit` draws the same structure: each candidate a leaf
+with its label, wired to the variable it is a value of (``⋮``).
 
 
 Step 6: Assign Probabilities and Verify Mutual Exclusion
@@ -275,16 +273,16 @@ confidences 0.40 and 0.30:
 .. code-block:: postgresql
 
     SELECT photo_id, bbox_id,
-        sr_boolexpr(provenance()) AS bexpr,
+        sr_boolexpr(provenance(), 'species_mapping') AS bexpr,
         ROUND(probability_evaluate(provenance(), 'tree-decomposition')::numeric, 4) AS p
     FROM detection
     WHERE photo_id = 5 AND bbox_id = 1 AND species_id IN (1, 2)
     GROUP BY photo_id, bbox_id;
 
-The Boolean expression is now ``{0=1}[0.400000] ∨ {0=2}[0.300000]``:
-a single mulinput variable (variable 0) with two mutually exclusive
-values, value 1 (Red Deer) with probability 0.40 and value 2
-(Roe Deer) with probability 0.30. Probability evaluation gives
+The Boolean expression is now
+``{0=Red Deer}[0.400000] ∨ {0=Roe Deer}[0.300000]``: a single
+multivalued variable (variable 0) with two mutually exclusive values,
+Red Deer with probability 0.40 and Roe Deer with probability 0.30. Probability evaluation gives
 ``0.7000``, the sum of the two confidences, since combining mutually
 exclusive events with ⊕ is just addition. Had we kept the original
 :sqlfunc:`add_provenance` setup with each row as an independent input,
@@ -394,23 +392,35 @@ written with nested subqueries.
 Step 10: Expected Species Counts with :sqlfunc:`expected`
 -----------------------------------------------------------
 
-How many distinct detections do we *expect* to be true positives in each
-photo?
+How many distinct species do we *expect* to really be in each photo?
+``COUNT(DISTINCT species_id)`` answers it, next to ``COUNT(*)``, which
+counts detections:
 
 .. code-block:: postgresql
 
     SELECT p.id, p.station,
+           ROUND(expected(COUNT(DISTINCT d.species_id))::numeric, 4) AS exp_species,
            ROUND(expected(COUNT(*))::numeric, 4) AS exp_detections
     FROM detection d
     JOIN photo p ON p.id = d.photo_id
     GROUP BY p.id, p.station
-    ORDER BY exp_detections DESC, p.id;
+    ORDER BY exp_species DESC, p.id;
 
 A group's row is there only in the worlds where one of its detections is,
 and the expectation is over those: ``expected(COUNT(*))`` is
 :math:`\sum_i P(\text{detection}_i \text{ is true})` divided by the
-probability that the photo keeps a detection at all. The same holds of
-``SUM`` aggregates: the expected total confidence mass per photo:
+probability that the photo keeps a detection at all.
+``expected(COUNT(DISTINCT d.species_id))`` sums, over the species instead,
+the probability that *at least one* detection of that species is true,
+with the same division. The two differ as soon as a species is detected
+in several bounding boxes: photo 1 has three Red Deer boxes, so about
+2.19 expected detections but exactly one species, whichever boxes are
+real. As in SQL, ``COUNT(DISTINCT …)`` ignores ``NULL``: the
+unidentified animal of photo 9 (more on it in Step 12) counts as a
+detection, not as a species.
+
+The same holds of ``SUM`` aggregates: the expected total confidence mass
+per photo:
 
 .. code-block:: postgresql
 
@@ -421,10 +431,11 @@ probability that the photo keeps a detection at all. The same holds of
     GROUP BY p.id, p.station
     ORDER BY exp_total_conf DESC, p.id;
 
-Both queries use ProvSQL's :sqlfunc:`expected` operator, which computes
+These queries use ProvSQL's :sqlfunc:`expected` operator, which computes
 the expected value of a SQL aggregate over the probabilistic database
-defined by the per-row probabilities set in Step 6. Photos with many
-high-confidence detections rank highest on both metrics.
+defined by the per-row probabilities set in Step 6. Photo 22, with six
+bounding boxes and three species among them, ranks highest on every
+metric.
 
 
 Step 11: Materialising a Subset with ``INSERT … SELECT``

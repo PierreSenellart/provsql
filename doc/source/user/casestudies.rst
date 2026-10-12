@@ -322,6 +322,8 @@ Semiring evaluation
    "``sr_which``", "", "", "✓", "", "", "", "", "", "", ""
    "``sr_tropical``", "", "", "", "✓", "", "", "", "✓", "", ""
    "``sr_tropical(…, nonnegative => true)`` (absorptive min-plus)", "", "", "", "✓", "", "", "", "✓", "", ""
+   "``sr_regex`` (regular expressions, non-commutative)", "", "", "", "✓", "", "", "", "", "", ""
+   "``sr_tropical_paths`` (least cost with its paths)", "", "", "", "✓", "", "", "", "", "", ""
    "``sr_viterbi``", "", "", "", "", "", "", "✓", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "✓", "", "", ""
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", "", ""

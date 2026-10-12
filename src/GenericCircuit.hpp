@@ -521,6 +521,10 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                         if(semiring.equal(b, one)) return a;
                         return semiring.times(std::vector<V>{a, b});
                       };
+  /* l ⊗ x ⊗ r, in this order: ⊗ need not commute. */
+  const auto times3 = [&](const V &l, const V &x, const V &r) -> V {
+                        return times2(times2(l, x), r);
+                      };
 
   /* Which gates depend on an unknown: an iterative post-order, since the
    * sub-circuits that do not (the input tokens' own provenance) can be as
@@ -560,13 +564,19 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     }
   }
 
-  /* Linear form b ⊕ ⨁_j a_j ⊗ x_j of a gate that depends on the unknowns.
-   * Only the gates between an equation's root and its unknowns are visited
-   * here, a part of the circuit as shallow as the recursive term itself, so
-   * the recursion is bounded by the query, not the data. */
+  /* Linear form b ⊕ ⨁_j l_j ⊗ x_j ⊗ r_j of a gate that depends on the
+   * unknowns, the factors on either side of an unknown kept apart, as ⊗
+   * need not commute.  Only the gates between an equation's root and its
+   * unknowns are visited here, a part of the circuit as shallow as the
+   * recursive term itself, so the recursion is bounded by the query, not
+   * the data. */
+  struct Term {
+    std::size_t j;
+    V l, r;
+  };
   struct Lin {
     V c;
-    std::vector<std::pair<std::size_t, V> > terms;
+    std::vector<Term> terms;
   };
   std::unordered_map<gate_t, Lin> lin;
   std::function<const Lin &(gate_t)> linear = [&](gate_t u) -> const Lin & {
@@ -589,7 +599,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     const auto t = getGateType(u);
     switch(t) {
     case gate_fixvar:
-      r.terms.emplace_back(unknown.at(u), one);
+      r.terms.push_back(Term{unknown.at(u), one, one});
       break;
 
     case gate_plus:
@@ -604,7 +614,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       break;
 
     case gate_times: {
-      V k = one;
+      /* The factors before the unknown, and those after it. */
+      V kl = one, kr = one;
       gate_t var = u;
       for(const auto &c : getWires(u)) {
         if(dep.at(c)) {
@@ -614,14 +625,16 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                     "This recursion's equations are not linear: a product "
                     "has two factors depending on the recursive relation");
           var = c;
-        } else
-          k = times2(k, evaluate(c, provenance_mapping, semiring));
+        } else if(var == u)
+          kl = times2(kl, evaluate(c, provenance_mapping, semiring));
+        else
+          kr = times2(kr, evaluate(c, provenance_mapping, semiring));
       }
       const Lin &l = linear(var);
-      if(!semiring.equal(k, zero)) {
-        r.c = times2(l.c, k);
-        for(const auto &[j, a] : l.terms)
-          r.terms.emplace_back(j, times2(a, k));
+      if(!semiring.equal(kl, zero) && !semiring.equal(kr, zero)) {
+        r.c = times3(kl, l.c, kr);
+        for(const auto &t : l.terms)
+          r.terms.push_back(Term{t.j, times2(kl, t.l), times2(t.r, kr)});
       }
       break;
     }
@@ -660,18 +673,19 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     return lin.emplace(u, std::move(r)).first->second;
   };
 
-  /* x_i = b[i] ⊕ ⨁ a ⊗ x_j over in[i] = {(j, a)}. */
+  /* x_i = b[i] ⊕ ⨁ l ⊗ x_j ⊗ r over in[i] = {(j, l, r)}; out[j] holds
+   * the same terms, indexed by i. */
   std::vector<V> b(n, zero);
-  std::vector<std::vector<std::pair<std::size_t, V> > > in(n), out(n);
+  std::vector<std::vector<Term> > in(n), out(n);
   for(std::size_t i = 0; i < n; ++i) {
     const gate_t f = w[n + i];
     if(dep.at(f)) {
       const Lin &l = linear(f);
       b[i] = l.c;
-      for(const auto &[j, a] : l.terms)
-        if(!semiring.equal(a, zero)) {
-          in[i].emplace_back(j, a);
-          out[j].emplace_back(i, a);
+      for(const auto &t : l.terms)
+        if(!semiring.equal(t.l, zero) && !semiring.equal(t.r, zero)) {
+          in[i].push_back(t);
+          out[t.j].push_back(Term{i, t.l, t.r});
         }
     } else
       b[i] = evaluate(f, provenance_mapping, semiring);
@@ -684,7 +698,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     std::vector<std::vector<std::size_t> > adj(n);
     for(std::size_t j = 0; j < n; ++j)
       for(const auto &e : out[j])
-        adj[j].push_back(e.first);
+        adj[j].push_back(e.j);
     comps = fixSystemComponents(adj);
   }
 
@@ -711,9 +725,9 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
     bool cyclic = comp.size() > 1;
     for(const auto i : comp) {
       V v = b[i];
-      for(const auto &[j, a] : in[i]) {
-        if(comp_of[j] != ci)
-          v = plus2(v, times2(a, x[j]));
+      for(const auto &t : in[i]) {
+        if(comp_of[t.j] != ci)
+          v = plus2(v, times3(t.l, x[t.j], t.r));
         else
           cyclic = true;    // a self-loop makes a singleton cyclic too
       }
@@ -734,9 +748,9 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         x[i] = semiring.symbolic_unknown();
       for(std::size_t k = 0; k < comp.size(); ++k) {
         V v = entry[k];
-        for(const auto &[j, a] : in[comp[k]])
-          if(comp_of[j] == ci)
-            v = plus2(v, times2(a, x[j]));
+        for(const auto &t : in[comp[k]])
+          if(comp_of[t.j] == ci)
+            v = plus2(v, times3(t.l, x[t.j], t.r));
         semiring.define(x[comp[k]], v);
       }
       continue;
@@ -750,6 +764,38 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                 "through itself), and the requested semiring is neither "
                 "absorptive nor gives the sum of the powers of a value: the "
                 "least solution is an infinite sum it has no value for.");
+
+      /* Gaussian elimination with star needs every unknown on the same
+       * side of its coefficient: x_i = ⨁ a ⊗ x_j ⊕ e (left-linear), or
+       * x_i = ⨁ x_j ⊗ a ⊕ e (right-linear), which is left-linear in the
+       * semiring with ⊗ reversed, of the same star.  An unknown between two
+       * factors, or a mix of both sides, makes the derivations a
+       * context-free language, with no closed form by star.  In a
+       * commutative semiring, the side does not matter. */
+      bool right = false;
+      if(!semiring.commutative()) {
+        bool left_ok = true, right_ok = true;
+        for(const auto i : comp)
+          for(const auto &t : in[i])
+            if(comp_of[t.j] == ci) {
+              left_ok = left_ok && semiring.equal(t.r, one);
+              right_ok = right_ok && semiring.equal(t.l, one);
+            }
+        if(!left_ok && !right_ok)
+          throw CircuitRefusal(
+                  PROVSQL_GAP, "recursion-two-sided",
+                  "This recursion's equations put the recursive relation "
+                  "between factors, or on both sides of them, and the "
+                  "requested semiring is not commutative: its least "
+                  "solution is not given by the star of a value.  Write the "
+                  "recursive relation at the same place of every recursive "
+                  "FROM clause (first, or last).");
+        right = !left_ok;
+      }
+      /* a ⊗ b, or b ⊗ a in the reversed semiring. */
+      const auto mul = [&](const V &a, const V &b) -> V {
+                         return right ? times2(b, a) : times2(a, b);
+                       };
 
       /* Gaussian elimination with star (node elimination; Ramusat, Maniu &
        * Senellart, EDBT 2021, after Lehmann 1977): x_v = a_vv* ⊗ (⨁ a_vj
@@ -766,10 +812,12 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       std::vector<std::set<std::size_t> > col(k);
       std::vector<V> e(entry);
       for(std::size_t p = 0; p < k; ++p)
-        for(const auto &[j, a] : in[comp[p]]) {
-          if(comp_of[j] != ci)
+        for(const auto &t : in[comp[p]]) {
+          if(comp_of[t.j] != ci)
             continue;
-          const std::size_t q = at.at(j);
+          const V a = semiring.commutative() ? times2(t.l, t.r)
+                                              : right ? t.r : t.l;
+          const std::size_t q = at.at(t.j);
           auto it = row[p].find(q);
           row[p][q] = it == row[p].end() ? a : plus2(it->second, a);
           col[q].insert(p);
@@ -798,8 +846,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         }
         const V s = semiring.star(loop);
         for(auto &[j, b] : row[v])
-          b = times2(s, b);
-        e[v] = times2(s, e[v]);
+          b = mul(s, b);
+        e[v] = mul(s, e[v]);
         for(const auto p : std::vector<std::size_t>(col[v].begin(), col[v].end())) {
           if(gone[p] || p == v)
             continue;
@@ -807,11 +855,11 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
           row[p].erase(v);
           for(const auto &[j, b] : row[v]) {
             auto it = row[p].find(j);
-            const V t = times2(c, b);
+            const V t = mul(c, b);
             row[p][j] = it == row[p].end() ? t : plus2(it->second, t);
             col[j].insert(p);
           }
-          e[p] = plus2(e[p], times2(c, e[v]));
+          e[p] = plus2(e[p], mul(c, e[v]));
         }
         gone[v] = 1;
         order.push_back(v);
@@ -820,7 +868,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         const std::size_t v = order[r];
         V val = e[v];
         for(const auto &[j, b] : row[v])
-          val = plus2(val, times2(b, x[comp[j]]));
+          val = plus2(val, mul(b, x[comp[j]]));
         x[comp[v]] = val;
       }
       continue;
@@ -855,10 +903,11 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         if(settled[pj] || !semiring.equal(v, x[j]))
           continue;
         settled[pj] = 1;
-        for(const auto &[i, a] : out[j]) {
+        for(const auto &t : out[j]) {
+          const std::size_t i = t.j;
           if(comp_of[i] != ci || settled[pos.at(i)])
             continue;
-          const V w = plus2(x[i], times2(a, x[j]));
+          const V w = plus2(x[i], times3(t.l, x[j], t.r));
           if(!semiring.equal(w, x[i])) {
             x[i] = w;
             heap.emplace(w, i);
@@ -889,7 +938,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         const std::size_t j = queue.front();
         queue.pop_front();
         queued[pos.at(j)] = 0;
-        for(const auto &[i, a] : out[j]) {
+        for(const auto &t : out[j]) {
+          const std::size_t i = t.j;
           if(comp_of[i] != ci)
             continue;
           if(++steps > bound)
@@ -897,7 +947,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                     "Value iteration over this recursion's equations does "
                     "not converge; the semiring does not behave "
                     "absorptively");
-          const V w = plus2(x[i], times2(a, x[j]));
+          const V w = plus2(x[i], times3(t.l, x[j], t.r));
           if(!semiring.equal(w, x[i])) {
             x[i] = w;
             if(!queued[pos.at(i)]) {
@@ -918,9 +968,9 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
         provsql_poll_interrupt();
         std::vector<V> next(entry);
         for(std::size_t k = 0; k < comp.size(); ++k)
-          for(const auto &[j, a] : in[comp[k]])
-            if(comp_of[j] == ci)
-              next[k] = plus2(next[k], times2(a, x[j]));
+          for(const auto &t : in[comp[k]])
+            if(comp_of[t.j] == ci)
+              next[k] = plus2(next[k], times3(t.l, x[t.j], t.r));
         for(std::size_t k = 0; k < comp.size(); ++k)
           x[comp[k]] = next[k];
       }

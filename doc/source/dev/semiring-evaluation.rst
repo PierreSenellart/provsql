@@ -243,10 +243,16 @@ declared, and an operation the semiring does not provide throws.
    * - ``idempotent()`` (``absorptive()``)
      - :math:`a \oplus a = a`.
    * - ``selective()`` (false)
-     - :math:`a \oplus b \in \{a, b\}`; with ``absorptive()``, licenses
-       Dijkstra's algorithm on recursions.
+     - :math:`a \oplus b \in \{a, b\}`; with ``absorptive()``, Dijkstra's
+       algorithm solves recursions.
+   * - ``commutative()`` (true)
+     - :math:`a \otimes b = b \otimes a`.  A product gate keeps its factors
+       in query order (``FROM`` order for a join), which a non-commutative
+       semiring (``Regex``, ``TropicalPaths``) reads as it is; such a
+       semiring refuses ``HAVING`` (its world products have no order of
+       the query's), and solves a recursion by star only one-sided.
    * - ``mul_sub_left_distributive()`` (false)
-     - licenses the closed forms of conditions on aggregates (see
+     - the closed forms of conditions on aggregates are sound (see
        :doc:`aggregation`).
    * - ``exclusive()``, ``mul_idempotent()`` (false)
      - together, the product of two conditions on one group is their
@@ -342,9 +348,10 @@ Per-semiring decisions (see each override under
   ``Subset`` (covers ``sr_subset``, ``sr_clearance``, ``sr_consent``).
 - ``false`` : every other compiled semiring (``Counting``,
   ``How``, ``Why``, ``Which``, ``Tropical``, ``Viterbi``,
-  ``Lukasiewicz``, ``MinMax``) ; their algebras carry information
-  (multiplicities, monomials, witness sets, lineages, costs,
-  weights, graded truth values, extremal elements) that the
+  ``Lukasiewicz``, ``MinMax``, ``Regex``, ``TropicalPaths``) ; their
+  algebras carry information (multiplicities, monomials, witness sets,
+  lineages, costs, weights, graded truth values, extremal elements,
+  words) that the
   Boolean rewrite would silently collapse.
 
 ProvSQL Studio mirrors the C++ predicate via the
@@ -423,10 +430,13 @@ unknown of the least solution of the equations
 (see :doc:`query-rewriting` for how the lowering builds them).
 PostgreSQL forbids a recursive reference appearing twice in a recursive
 term, so the equations are *linear*:
-:math:`f_i = b_i \oplus \bigoplus_j a_{ij} \otimes x_j`, which
-``GenericCircuit::solveFixSystem`` (:cfile:`GenericCircuit.hpp`) reads
-off the right-hand sides, :math:`b_i` and the :math:`a_{ij}` being
-ordinary sub-circuits evaluated in the semiring.  The least solution is
+:math:`f_i = b_i \oplus \bigoplus_j l_{ij} \otimes x_j \otimes r_{ij}`,
+which ``GenericCircuit::solveFixSystem`` (:cfile:`GenericCircuit.hpp`)
+reads off the right-hand sides, :math:`b_i`, :math:`l_{ij}` and
+:math:`r_{ij}` being ordinary sub-circuits evaluated in the semiring: the
+factors before and after the unknown are kept apart for a semiring whose
+multiplication does not commute, and in a commutative one
+:math:`a_{ij} = l_{ij} \otimes r_{ij}`.  The least solution is
 then the path provenance, from a virtual source, of the graph with an
 edge :math:`j \to i` of weight :math:`a_{ij}`
 :cite:`DBLP:conf/edbt/RamusatMS21`.  Each strongly connected component
@@ -451,12 +461,19 @@ semiring's declared properties select:
        derivation repeating a row is absorbed by a shorter one
    * - not absorptive, ``has_star()``
      - Gaussian elimination with ``star()`` (node elimination),
-       eliminating first the unknown that adds the fewest coefficients
+       eliminating first the unknown that adds the fewest coefficients.
+       Not commutative, it needs every unknown of the component on the
+       same side of its coefficient (every :math:`r_{ij}` or every
+       :math:`l_{ij}` is :math:`\mathbbm{1}`), solved in the semiring with
+       :math:`\otimes` reversed in the second case; otherwise
+       (``recursion-two-sided``) the language of the derivations is
+       context-free, and the component is refused
    * - none of these
      - refused
 
 The properties (``selective()``, ``exact_equality()`` / ``equal()``,
-``has_star()`` / ``star()``, ``symbolic()``) are virtual methods of
+``has_star()`` / ``star()``, ``commutative()``, ``symbolic()``) are
+virtual methods of
 :cfunc:`Semiring`, documented there.
 
 Probabilities read the same systems through the Boolean circuit of the
@@ -624,7 +641,9 @@ function), the call chain is:
    :cfunc:`provenance_evaluate_compiled_internal`.
 
 3. The internal function reads the circuit from mmap (via
-   :cfunc:`getGenericCircuit`), creates a mapping from input gates to their
+   :cfunc:`getGenericCircuit`), creates a mapping from the gates the
+   mapping table can label (input gates, and the ``mulinput`` values of a
+   multivalued input, ``GenericCircuit::getMappableUUIDs``) to their
    annotations, and dispatches to the appropriate ``pec_*`` helper
    based on return type and semiring name.
 

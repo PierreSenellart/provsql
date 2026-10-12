@@ -160,6 +160,7 @@ test: makedd_auto
 
 # Viewing circuit
 test: view_circuit_multiple
+test: view_circuit_mulinput
 
 # External-tool PATH override (provsql.tool_search_path GUC)
 test: tool_search_path

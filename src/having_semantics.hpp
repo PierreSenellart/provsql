@@ -117,6 +117,17 @@ void provsql_having(
   if (cmp_gates.empty())
     return;
 
+  // The provenance of a selection on aggregates is a sum over the worlds of
+  // the group, each a product of the annotations of its present and missing
+  // contributors: a product in no order of the query's, which only a
+  // commutative semiring reads unambiguously.
+  if (!S.commutative())
+    throw CircuitRefusal(
+            PROVSQL_GAP, "having-noncommutative",
+            "A HAVING condition's provenance is a product over the worlds "
+            "of its group, in no order of the query: it has no value in a "
+            "semiring whose multiplication does not commute.");
+
   // Whether the world enumeration over these contributor annotations can
   // be built *certified*: the semiring persists d-DNNF certificates
   // (circuit-building BoolExpr), every contributor is an independent
