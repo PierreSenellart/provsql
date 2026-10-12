@@ -91,6 +91,21 @@ SELECT * FROM agg_result5 ORDER BY city;
 DROP TABLE agg_result5;
 SELECT string_agg(DISTINCT position, name) FROM personnel;
 
+-- Without ORDER BY, the distinct values come sorted, as PostgreSQL feeds
+-- them, and not in the order of the deduplicated rows: no order warning.
+CREATE TABLE agg_result5 AS
+  SELECT city, array_agg(DISTINCT name) AS a,
+         string_agg(DISTINCT position, ', ') AS s
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_result5');
+SELECT city, a::text, s::text FROM agg_result5 ORDER BY city;
+DROP TABLE agg_result5;
+SET provsql.active = off;
+SELECT city, array_agg(DISTINCT name)::text AS a,
+       string_agg(DISTINCT position, ', ') AS s
+FROM personnel GROUP BY city ORDER BY city;
+RESET provsql.active;
+
 -- AGG(DISTINCT) in a LATERAL subquery reading a column of a subquery whose
 -- provsql column, in the middle of its columns, is moved last.  The column
 -- names move with it: checked by provsql.verify_rewrite, the names being

@@ -10331,6 +10331,11 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
     /* The other arguments are constants (the separator of string_agg) */
     ar->args        = list_concat(list_make1(arg_te),
                                   list_copy_tail(ar->args, 1));
+    /* PostgreSQL feeds the distinct values sorted, which an order-dependent
+     * aggregate without ORDER BY (array_agg(DISTINCT x)) shows: the
+     * deduplicated rows of the subquery come in no order, so sort them */
+    if (ar->aggorder == NIL)
+      ar->aggorder = ar->aggdistinct;
     ar->aggdistinct = NIL;
     agg_te->resno   = resno++;
     new_tl = list_make1(agg_te);
