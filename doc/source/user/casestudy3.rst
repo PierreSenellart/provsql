@@ -614,9 +614,10 @@ Step 13: One Journey, Step by Step
 ----------------------------------
 
 Two journeys may take the same time. From Luxembourg to La Motte-Picquet -
-Grenelle, the fastest journeys part at Gare Montparnasse: metro 6 over
-four stops, or metro 13 then 10 over three, take the same time, and
-:sqlfunc:`sr_tropical_paths` lists both:
+Grenelle, the fastest journeys part at Gare Montparnasse, for metro 6 over
+four stops or metro 13 then 10 over three. Depending on the version of the
+dataset loaded, both may take the same time, and
+:sqlfunc:`sr_tropical_paths` then lists both:
 
 .. code-block:: postgresql
 
