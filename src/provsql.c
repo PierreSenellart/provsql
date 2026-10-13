@@ -326,6 +326,9 @@ typedef struct { const char *name; } CteRefCtx;
 static bool cte_reference_walker(Node *node, void *context);
 static bool rte_column_is_aggregate(const constants_t *constants,
                                     RangeTblEntry *rte, AttrNumber attno);
+static Query *cte_body_of_rte(Query *q, RangeTblEntry *rte);
+static bool query_column_is_aggregate(const constants_t *constants,
+                                      Query *sub, AttrNumber attno);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
@@ -12182,6 +12185,26 @@ static WindowClause *window_clause_of(Query *q, Index winref) {
  * on the partition attributes.  The frame must be determined by values
  * (@c window_frame_by_values).
  */
+/** @brief Whether the window aggregate @p wf of @p q is rewritten into an
+ *  @c agg_token (@c make_window_aggregation_expression). */
+static bool window_aggregate_tracked(const constants_t *constants, Query *q,
+                                     WindowFunc *wf) {
+  WindowClause *wc = window_clause_of(q, wf->winref);
+
+  if (!wf->winagg || wc == NULL || !window_frame_by_values(wc))
+    return false;
+  if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+      wf->wintype == constants->OID_TYPE_RANDOM_VARIABLE)
+    return false;
+  if (wf->winfnoid != F_COUNT_ && list_length(wf->args) != 1)
+    return false;
+  /* An aggregate over aggregate values: what it reads is no fixed value. */
+  if (expr_contains_agg((Node *)wf->args, constants) ||
+      expr_contains_agg((Node *)wf->aggfilter, constants))
+    return false;
+  return true;
+}
+
 static Expr *make_window_aggregation_expression(const constants_t *constants,
                                                 Query *q, WindowFunc *wf,
                                                 List *prov_atts) {
@@ -12191,16 +12214,7 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
   Expr *filter;
   bool is_scalar;
 
-  if (!wf->winagg || wc == NULL || !window_frame_by_values(wc))
-    return NULL;
-  if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
-      wf->wintype == constants->OID_TYPE_RANDOM_VARIABLE)
-    return NULL;
-  if (wf->winfnoid != F_COUNT_ && list_length(wf->args) != 1)
-    return NULL;
-  /* An aggregate over aggregate values: what it reads is no fixed value. */
-  if (expr_contains_agg((Node *)wf->args, constants) ||
-      expr_contains_agg((Node *)wf->aggfilter, constants))
+  if (!window_aggregate_tracked(constants, q, wf))
     return NULL;
 
   filter = (Expr *)copyObject(wf->aggfilter);
@@ -29290,6 +29304,13 @@ static bool uncertain_value_walker(Node *node, void *cx) {
       uncertain_value_ctx sub = {ctx->constants, rte->subquery};
       return te != NULL && uncertain_value_walker((Node *)te->expr, &sub);
     }
+    if (rte->rtekind == RTE_CTE) {
+      Query *body = cte_body_of_rte(ctx->q, rte);
+      TargetEntry *te = body == NULL ? NULL
+        : get_tle_by_resno(body->targetList, v->varattno);
+      uncertain_value_ctx sub = {ctx->constants, body};
+      return te != NULL && uncertain_value_walker((Node *)te->expr, &sub);
+    }
     if (rte->rtekind == RTE_JOIN &&
         v->varattno <= list_length(rte->joinaliasvars))
       return uncertain_value_walker(
@@ -31854,15 +31875,49 @@ static Query *split_distinct_over_aggregates(const constants_t *constants,
  *  subquery is rewritten. */
 static bool rte_column_is_aggregate(const constants_t *constants,
                                     RangeTblEntry *rte, AttrNumber attno) {
-  TargetEntry *te;
-  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || attno < 1 ||
-      attno > list_length(rte->subquery->targetList))
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
     return false;
-  te = get_tle_by_resno(rte->subquery->targetList, attno);
+  return query_column_is_aggregate(constants, rte->subquery, attno);
+}
+
+/** @brief The body of the non-recursive WITH entry of @p q that @p rte, an
+ *  entry of the range table of @p q, reads, or @c NULL.
+ *
+ * The rewriting inlines such an entry as a subquery before it looks at the
+ * query; what is decided on the statement as written (the warnings on its
+ * LIMIT) has to read the entry the same way. */
+static Query *cte_body_of_rte(Query *q, RangeTblEntry *rte) {
+  ListCell *lc;
+  if (rte->rtekind != RTE_CTE || rte->ctelevelsup != 0 || rte->self_reference)
+    return NULL;
+  foreach (lc, q->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    if (cte->ctename != NULL && strcmp(cte->ctename, rte->ctename) == 0)
+      return !cte->cterecursive && IsA(cte->ctequery, Query)
+        ? (Query *)cte->ctequery : NULL;
+  }
+  return NULL;
+}
+
+/** @brief Whether column @p attno of @p sub is an aggregate result
+ *  (@c rte_column_is_aggregate). */
+static bool query_column_is_aggregate(const constants_t *constants,
+                                      Query *sub, AttrNumber attno) {
+  TargetEntry *te;
+  if (attno < 1 || attno > list_length(sub->targetList))
+    return false;
+  te = get_tle_by_resno(sub->targetList, attno);
   if (te == NULL)
     return false;
   if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN ||
       contain_aggs_of_level((Node *)te->expr, 0))
+    return true;
+  /* A window aggregate over tracked rows, an agg_token once the subquery is
+   * rewritten: the running sum of "sum(x) OVER (... ORDER BY ...)" read as a
+   * sort key is a value per world, as the sum of a GROUP BY is. */
+  if (IsA(te->expr, WindowFunc) &&
+      window_aggregate_tracked(constants, sub, (WindowFunc *)te->expr) &&
+      has_provenance(constants, sub))
     return true;
   /* A column that only passes another subquery's column through -- the
    * wrapper the LIMIT lowering builds around the query it ranks, and the
@@ -31872,10 +31927,10 @@ static bool rte_column_is_aggregate(const constants_t *constants,
   if (IsA(te->expr, Var)) {
     Var *v = (Var *)te->expr;
     if (v->varlevelsup == 0 && v->varno >= 1 && v->varattno >= 1 &&
-        v->varno <= list_length(rte->subquery->rtable)) {
+        v->varno <= list_length(sub->rtable)) {
       RangeTblEntry *inner =
-        (RangeTblEntry *)list_nth(rte->subquery->rtable, v->varno - 1);
-      if (inner != rte)
+        (RangeTblEntry *)list_nth(sub->rtable, v->varno - 1);
+      if (inner->rtekind == RTE_SUBQUERY && inner->subquery != sub)
         return rte_column_is_aggregate(constants, inner, v->varattno);
     }
   }
@@ -36146,6 +36201,12 @@ static bool reads_agg_value_walker(Node *node, void *cx) {
     if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
         rte_column_is_aggregate(c->constants, r, v->varattno))
       c->found = true;
+    else if (r->rtekind == RTE_CTE) {
+      Query *body = cte_body_of_rte(c->q, r);
+      if (body != NULL &&
+          query_column_is_aggregate(c->constants, body, v->varattno))
+        c->found = true;
+    }
     return c->found;
   }
   return expression_tree_walker(node, reads_agg_value_walker, cx);

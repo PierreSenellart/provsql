@@ -174,3 +174,23 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+DETAIL:  provsql-reason: row-number-over-aggregate-as-rank; scope: deliberate
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
+remove_provenance
+
+(1 row)
+deposit_id|p
+1|0.000000
+2|0.250000
+3|0.250000
+4|0.125000
+5|0.125000
+(5 rows)
+remove_provenance
+
+(1 row)

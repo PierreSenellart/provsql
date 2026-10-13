@@ -53,6 +53,12 @@ HINT:  Write LIMIT plain(k) to say so.
 WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over an aggregation, a DISTINCT, a set operation or uncertain sort keys: provenance not tracked, although the statement tracks lw_dst
 DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
 HINT:  Write LIMIT plain(k) to say so.
+-- the same through a WITH entry, read as through a derived table
+WARNING:  ProvSQL: ORDER BY ... LIMIT / OFFSET over an aggregation, a DISTINCT, a set operation or uncertain sort keys: provenance not tracked, although the statement tracks lw_t
+DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
+HINT:  Write LIMIT plain(k) to say so.
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on the value shown, not per world
+DETAIL:  provsql-reason: order-by-aggregate-value; scope: deliberate
 -- warning: top level with no ORDER BY at all (LIMIT, OFFSET), unless plain()
 WARNING:  ProvSQL: LIMIT / OFFSET without ORDER BY: provenance not tracked, although the statement tracks lw_t
 DETAIL:  provsql-reason: limit-without-order-by; scope: deliberate

@@ -268,3 +268,28 @@ DROP TABLE ro_drr;
 SELECT remove_provenance('ro_dr');
 SELECT remove_provenance('ro_ds');
 DROP TABLE ro_dr, ro_ds;
+
+-- ORDER BY ... LIMIT over a running sum, a window aggregate: the rank is read
+-- in each world, as over the sum of a GROUP BY.  Per user the running totals
+-- in deposit order, the WHERE keeping the nonpositive ones, the first user's
+-- highest of them.  In the actual world 5, -5, -3 | -3, -2 give deposit 3;
+-- deposit 1 (5) is never kept.  Each deposit at one half, the 32 worlds
+-- counted by hand in plain SQL: deposits 2 and 3 a quarter each, 4 and 5 an
+-- eighth.
+CREATE TABLE ro_cs(deposit_id int, user_id int, amount int);
+INSERT INTO ro_cs VALUES (1, 1, 5), (2, 1, -10), (3, 1, 2), (4, 2, -3), (5, 2, 1);
+SELECT add_provenance('ro_cs');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM ro_cs;
+END $$;
+CREATE TABLE ro_csr AS
+  WITH c AS (SELECT deposit_id, user_id,
+                    sum(amount) OVER (PARTITION BY user_id ORDER BY deposit_id) AS total
+             FROM ro_cs)
+  SELECT deposit_id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM c WHERE total <= 0 ORDER BY user_id, total DESC LIMIT 1;
+SELECT remove_provenance('ro_csr');
+SELECT * FROM ro_csr ORDER BY deposit_id;
+DROP TABLE ro_csr;
+SELECT remove_provenance('ro_cs');
+DROP TABLE ro_cs;

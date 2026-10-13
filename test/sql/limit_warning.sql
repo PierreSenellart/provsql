@@ -69,7 +69,10 @@ CREATE TABLE lw_20 AS SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIM
 CREATE TABLE lw_21 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT 2;
 INSERT INTO lw_dst SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 1;
 CREATE TABLE lw_22 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT plain(2);
-DROP TABLE lw_20, lw_21, lw_22;
+\echo -- the same through a WITH entry, read as through a derived table
+CREATE TABLE lw_28 AS WITH c AS (SELECT a, row_number() OVER (ORDER BY a) AS r FROM lw_t)
+  SELECT a FROM c ORDER BY r LIMIT 1;
+DROP TABLE lw_20, lw_21, lw_22, lw_28;
 
 \echo -- warning: top level with no ORDER BY at all (LIMIT, OFFSET), unless plain()
 CREATE TABLE lw_23 AS SELECT a FROM lw_t LIMIT 2;
