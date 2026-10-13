@@ -10331,6 +10331,11 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
     /* The other arguments are constants (the separator of string_agg) */
     ar->args        = list_concat(list_make1(arg_te),
                                   list_copy_tail(ar->args, 1));
+    /* PostgreSQL feeds the distinct values sorted, which an order-dependent
+     * aggregate without ORDER BY (array_agg(DISTINCT x)) shows: the
+     * deduplicated rows of the subquery come in no order, so sort them */
+    if (ar->aggorder == NIL)
+      ar->aggorder = ar->aggdistinct;
     ar->aggdistinct = NIL;
     agg_te->resno   = resno++;
     new_tl = list_make1(agg_te);
@@ -15678,6 +15683,13 @@ static bool agg_token_null_test_walker(Node *node, void *cx) {
  * counted.  The body itself is another
  * level, not walked here.
  */
+/** @brief The @c WITH list in scope for @c tracked_value_sublink_walker: a
+ *  body reading a tracked CTE of it reads tracked data. */
+static List *tracked_value_ctes = NIL;
+/** @brief Whether @c tracked_value_sublink_walker counts only the bodies
+ *  reading a tracked CTE of @c tracked_value_ctes. */
+static bool tracked_value_cte_only = false;
+
 static bool tracked_value_sublink_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -15693,7 +15705,9 @@ static bool tracked_value_sublink_walker(Node *node, void *data) {
         if (!te->resjunk && !reads_token_walker((Node *)te->expr, data))
           token_fetch = false;
       }
-      if (has_provenance(constants, sub) && !token_fetch) {
+      if (((!tracked_value_cte_only && has_provenance(constants, sub)) ||
+           body_reads_tracked_cte(constants, tracked_value_ctes, sub)) &&
+          !token_fetch) {
         last_tracked_sublink = sl;
         return true;
       }
@@ -15720,10 +15734,27 @@ static bool untracked_level_with_tracked_sublink_walker(Node *node,
     return false;
   if (IsA(node, Query)) {
     Query *q = (Query *)node;
-    if (q->hasSubLinks && !has_provenance((const constants_t *)data, q) &&
-        query_tree_walker(q, tracked_value_sublink_walker, data,
-                          QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES))
-      return true;
+    bool untracked = !has_provenance((const constants_t *)data, q);
+    /* A level with no source of its own has nothing to hang provenance on
+     * either: a tracked WITH it reads only in its sublinks makes
+     * has_provenance true, and the rewriting then answers with no
+     * provenance column, silently (the bodies over relations are the
+     * rewriting's, which reports them where it freezes them) */
+    bool fromless = q->jointree == NULL || q->jointree->fromlist == NIL;
+    if (q->hasSubLinks && (untracked || fromless)) {
+      List *saved_ctes = tracked_value_ctes;
+      bool saved_cte_only = tracked_value_cte_only;
+      bool found;
+      tracked_value_ctes = q->cteList;
+      tracked_value_cte_only = !untracked;
+      found = query_tree_walker(q, tracked_value_sublink_walker, data,
+                                QTW_IGNORE_RT_SUBQUERIES |
+                                QTW_IGNORE_CTE_SUBQUERIES);
+      tracked_value_ctes = saved_ctes;
+      tracked_value_cte_only = saved_cte_only;
+      if (found)
+        return true;
+    }
     return query_tree_walker(q, untracked_level_with_tracked_sublink_walker,
                              data, 0);
   }
@@ -21682,6 +21713,12 @@ static bool oj_uncorrelated_body_over_tracked(const constants_t *constants,
     return false; /* correlated */
   foreach (lc, sub->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    /* A tracked derived table (a WITH entry is one by now) is read by the
+     * gated aggregation like a relation, as long as it does not itself read
+     * the query around the body */
+    if (r->rtekind == RTE_SUBQUERY && has_provenance(constants, r->subquery) &&
+        !contain_vars_of_level((Node *)r->subquery, 2))
+      continue;
     if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
       return false;
   }
@@ -36258,6 +36295,47 @@ static void finish_matview_fill(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief Walker: complete the column names of every relation entry with the
+ *        columns its relation gained since the query was parsed.
+ *
+ * The body of a view keeps the column names its relations had when it was
+ * defined: a table tracked since then has a @c provsql column there that
+ * the names do not show, so that everything finding the column by name
+ * would read the view as untracked, without a word.  The columns added
+ * since come after those named, as @c ALTER @c TABLE @c ADD @c COLUMN puts
+ * them; a dropped one is named @c "", as @c expandRTE does.
+ */
+static bool refresh_relation_colnames_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      int natts, attno;
+      HeapTuple tup;
+      if (r->rtekind != RTE_RELATION || r->relkind == RELKIND_VIEW ||
+          r->eref == NULL)
+        continue;
+      tup = SearchSysCache1(RELOID, ObjectIdGetDatum(r->relid));
+      if (!HeapTupleIsValid(tup))
+        continue;
+      natts = ((Form_pg_class)GETSTRUCT(tup))->relnatts;
+      ReleaseSysCache(tup);
+      for (attno = list_length(r->eref->colnames) + 1; attno <= natts;
+           ++attno)
+        r->eref->colnames = lappend(
+          r->eref->colnames,
+          makeString(OidIsValid(get_atttype(r->relid, attno))
+                     ? get_attname(r->relid, attno, false) : pstrdup("")));
+    }
+    return query_tree_walker(q, refresh_relation_colnames_walker, data, 0);
+  }
+  return expression_tree_walker(node, refresh_relation_colnames_walker, data);
+}
+
+/**
  * @brief PostgreSQL planner hook – entry point for provenance rewriting.
  *
  * Replaces (or chains after) the standard planner.  For every CMD_SELECT
@@ -36322,6 +36400,7 @@ static PlannedStmt *provsql_planner(Query *q,
     }
   }
 #endif
+  refresh_relation_colnames_walker((Node *)q, NULL);
   {
     const constants_t mconstants = get_constants(false);
     if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {

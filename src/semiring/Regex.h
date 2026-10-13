@@ -26,6 +26,14 @@
  *
  * Equality is syntactic: two expressions of the same language may compare
  * unequal, which only leaves an alternative unmerged.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/Regex.html
+ *      Lean 4 verified instance: @c Language.instSemiringWithMonus, whose
+ *      monus, the difference of languages, this implementation does not
+ *      compute; with proofs of @c Language.not_commutative,
+ *      @c Language.not_absorptive, @c Language.not_exclusive,
+ *      @c Language.complemented_of and of the star identities
+ *      (@c Language.kstar_one_add, @c Language.kstar_kstar).
  */
 #ifndef REGEX_H
 #define REGEX_H

@@ -54,22 +54,31 @@ CREATE TABLE untracked (x int);
 SELECT remove_provenance('untracked');
 DROP TABLE untracked;
 
--- A view defined before add_provenance keeps the columns the table had then,
--- so it carries no provsql column and a query over it is answered as plain
--- SQL, silently: add_provenance names such views, since recreating them is the
--- remedy and this is where it is actionable.  A view of another table, and one
--- created after the call, are not named.
+-- A view defined before add_provenance keeps the column names the table had
+-- then, without its provsql column: a query over it reads the table as it is
+-- now, and is tracked all the same, its rows, a count over them and a join
+-- with the table itself.
 CREATE TABLE stale_src (x int);
-CREATE VIEW stale_v AS SELECT x FROM stale_src;
+INSERT INTO stale_src VALUES (1), (2);
+CREATE VIEW stale_v AS SELECT * FROM stale_src;
 CREATE VIEW stale_v2 AS SELECT count(*) AS n FROM stale_src;
-CREATE TABLE other_src (y int);
-CREATE VIEW other_v AS SELECT y FROM other_src;
 SELECT add_provenance('stale_src');
-CREATE VIEW fresh_v AS SELECT x FROM stale_src;
--- Said once: a second call is the idempotent no-op and reports nothing more.
-SELECT add_provenance('stale_src');
--- A table no view reads at all says nothing.
-CREATE TABLE unread_src (z int);
-SELECT add_provenance('unread_src');
-DROP VIEW fresh_v, stale_v2, stale_v, other_v;
-DROP TABLE stale_src, other_src, unread_src;
+SELECT create_provenance_mapping('stale_map', 'stale_src', 'x');
+CREATE TABLE stale_r AS
+  SELECT x, sr_formula(provenance(), 'stale_map') AS f FROM stale_v;
+SELECT remove_provenance('stale_r');
+SELECT * FROM stale_r ORDER BY x;
+DROP TABLE stale_r;
+CREATE TABLE stale_r AS SELECT n, sr_formula(provenance(), 'stale_map') AS f
+  FROM stale_v2;
+SELECT remove_provenance('stale_r');
+SELECT * FROM stale_r;
+DROP TABLE stale_r;
+CREATE TABLE stale_r AS
+  SELECT x, sr_formula(provenance(), 'stale_map') AS f
+  FROM stale_v JOIN stale_src USING (x);
+SELECT remove_provenance('stale_r');
+SELECT * FROM stale_r ORDER BY x;
+DROP TABLE stale_r;
+DROP VIEW stale_v2, stale_v;
+DROP TABLE stale_src, stale_map;

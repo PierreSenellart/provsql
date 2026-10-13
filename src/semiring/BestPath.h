@@ -28,6 +28,14 @@
  *
  * Unlike @c TropicalPaths, which keeps every derivation of the least cost,
  * this semiring keeps one, so that it needs no regular expression.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/BestPath.html
+ *      Lean 4 verified m-semiring, for costs of any sign, with proofs of
+ *      @c BestPath.not_commutative,
+ *      @c BestPath.selective_of, @c BestPath.complemented_of,
+ *      @c BestPath.mul_sub_left_distributive_of,
+ *      @c BestPath.mul_sub_right_distributive_of and, for nonnegative
+ *      costs only, @c BestPath.absorptive_of.
  */
 #ifndef BEST_PATH_H
 #define BEST_PATH_H
@@ -137,6 +145,17 @@ virtual bool selective() const override {
 /** @brief Concatenation does not commute. */
 virtual bool commutative() const override {
   return false;
+}
+/**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, on both sides.
+ *
+ * Read only by the HAVING evaluation, which refuses a non-commutative
+ * semiring for now.
+ *
+ * Lean: @c Provenance.Semirings.BestPath.mul_sub_left_distributive_of.
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
 }
 /** @brief Every star is @f$\mathbb{1}@f$, by absorption. */
 virtual value_type star(const value_type &) const override {

@@ -20,6 +20,16 @@
  * number of times at no cost (@f$(0, L)^* = (0, L^*)@f$), which a regular
  * expression still writes finitely; one of negative cost makes the cost
  * unbounded, and is refused.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/TropicalPaths.html
+ *      Lean 4 verified m-semiring, whose monus (@c TropicalPaths.monus, a
+ *      difference of languages on a tie of costs) this implementation does
+ *      not compute; with proofs of
+ *      @c TropicalPaths.not_commutative, @c TropicalPaths.not_exclusive,
+ *      of the stars (@c TropicalPaths.one_add_mul_one_of_pos,
+ *      @c TropicalPaths.one_add_mul_kstar) and of the absence of any
+ *      solution on a cycle of negative cost
+ *      (@c TropicalPaths.no_fixpoint_of_neg).
  */
 #ifndef TROPICAL_PATHS_H
 #define TROPICAL_PATHS_H
