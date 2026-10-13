@@ -95,8 +95,15 @@ namespace {
 
 /**
  * @brief Wrap a @c std::string in a Postgres @c text Datum.
+ *
+ * Within @c provsql.max_memory, the copy counted, and within what a text
+ * value holds (1 GB): a 54000 error otherwise, not palloc's internal one.
  */
 Datum text_datum(const std::string &s) {
+  provsql_check_result_size(
+    s.size(), "the result is too large to return (over 1 GB): a sub-circuit "
+    "shared by several gates is written out at each of them");
+  provsql_check_memory_for(s.size());
   text *result = (text *) palloc(VARHDRSZ + s.size());
   SET_VARSIZE(result, VARHDRSZ + s.size());
   memcpy(VARDATA(result), s.c_str(), s.size());
@@ -117,7 +124,7 @@ Datum to_datum(const semiring::Counting &, unsigned v) {
 Datum to_datum(const semiring::Tropical &, double v)      { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Viterbi &, double v)       { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Lukasiewicz &, double v)   { return Float8GetDatum(v); }
-Datum to_datum(const semiring::Formula &sr, const std::string &v) { return text_datum(sr.to_text(v)); }
+Datum to_datum(const semiring::Formula &sr, std::string v) { return text_datum(sr.to_text(std::move(v))); }
 Datum to_datum(const semiring::Why &sr, const semiring::why_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::How &sr, const semiring::how_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::Which &sr, const semiring::which_provenance_t &v) { return text_datum(sr.to_text(v)); }
@@ -206,6 +213,9 @@ void fixpoint_cache_store(const GenericCircuit &c, const Sem &sr)
       try {
         d = to_datum(sr, vec[i]);
       } catch(const CircuitException &) {
+        /* A resource limit stops the evaluation, not just this entry */
+        if(provsql_limit_pending())
+          throw;
         continue;
       }
       MemoryContext old = MemoryContextSwitchTo(fixpoint_cache_cxt);
@@ -250,7 +260,12 @@ Datum pec(
 
   provsql_having(c, g, mapping, sr);
   V out = c.evaluate<Sem>(g, mapping, sr);
+  /* The copy of the result returned, after the last poll */
+  provsql_check_memory();
   fixpoint_cache_store(c, sr);
+  /* The value of every gate, freed before the result is copied: a
+   * formula's would otherwise hold several times its size. */
+  std::unordered_map<gate_t, V>().swap(mapping);
   return to_datum(sr, std::move(out));
 }
 

@@ -23,9 +23,10 @@
  * the scope restoring the handler as the @c try is left.
  *
  * The same polls enforce @c provsql.max_memory: every few thousand of them,
- * the backend's resident memory is compared with what it was at the first
- * evaluation of the statement, and past the budget the evaluation stops with
- * an error, as it does on a cancel.
+ * and at least every few tens of milliseconds (a loop may take few, costly
+ * steps), the backend's resident memory is compared with what it was at the
+ * first evaluation of the statement, and past the budget the evaluation
+ * stops with an error, as it does on a cancel.
  * The handler is defined in @c provsql_interrupt.cpp.
  */
 #ifndef PROVSQL_INTERRUPT_H
@@ -69,6 +70,35 @@ extern unsigned provsql_poll_count;
 void provsql_check_memory(void);
 
 /**
+ * @brief Throw if @p extra more bytes would take the evaluations of the
+ *        statement past @c provsql.max_memory: before a large copy, such
+ *        as that of a result into a PostgreSQL value.
+ */
+void provsql_check_memory_for(size_t extra);
+
+/**
+ * @brief Whether the last check of the memory budget is old enough for
+ *        another, whatever the number of polls since.
+ */
+bool provsql_memory_check_due(void);
+
+/**
+ * @brief Throw if a text value of @p bytes is past what PostgreSQL can
+ *        hold in a value (1 GB), with @p message as error: a rendering of
+ *        a circuit, which writes out a sub-circuit shared by several gates
+ *        at each of them, can grow exponentially with the circuit.
+ */
+void provsql_check_result_size(size_t bytes, const char *message);
+
+/** @brief Whether the evaluation stopped at a resource limit
+ *  (@c provsql_limit_exceeded), not yet raised: a @c catch that would
+ *  otherwise carry on must let it through. */
+bool provsql_limit_pending(void);
+
+/** @brief The size of the largest text value PostgreSQL holds, in bytes. */
+size_t provsql_max_result_size(void);
+
+/**
  * @brief How much the backend's resident memory has grown since the first
  *        evaluation of the statement, in bytes (0 before it).  An external
  *        tool's memory is counted against the same budget, added to this.
@@ -108,7 +138,8 @@ inline void provsql_poll_interrupt()
 {
   if (provsql_interrupted)
     throw CircuitException("Interrupted");
-  if (provsql_max_memory > 0 && (++provsql_poll_count & 4095) == 0)
+  if (provsql_max_memory > 0 &&
+      ((++provsql_poll_count & 4095) == 0 || provsql_memory_check_due()))
     provsql_check_memory();
 }
 

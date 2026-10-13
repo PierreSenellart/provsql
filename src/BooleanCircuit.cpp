@@ -52,10 +52,19 @@ extern "C" {
 #ifndef TDKC
 #include "ToolRegistry.h"
 #include "kcmcp_client.h"
+#include "provsql_interrupt.h"
 #endif
 
-/** Size past which @c toStringHelper stops: PG's limit for a text value. */
+#ifdef TDKC
+/** Size past which @c toStringHelper stops: PG's limit for a text value
+ *  (@c provsql_max_result_size in the extension). */
 static constexpr std::size_t max_rendering_size = std::size_t(1) << 30;
+#endif
+
+/** The error of @c toStringHelper past PG's limit for a text value. */
+static constexpr const char *too_large_to_print =
+  "the Boolean expression is too large to print (over 1 GB): a sub-circuit "
+  "shared by several gates is written out at each of them";
 
 // "provsql_utils.h"
 #ifdef TDKC
@@ -256,10 +265,13 @@ std::string BooleanCircuit::toStringHelper(
     else if(!result.empty())
       result+=" "+op+" ";
     result+=toStringHelper(s, gtype, labels);
+#ifdef TDKC
     if(result.size() > max_rendering_size)
-      throw CircuitException(
-        "the Boolean expression is too large to print (over 1 GB): a "
-        "sub-circuit shared by several gates is written out at each of them");
+      throw CircuitException(too_large_to_print);
+#else
+    /* A program_limit_exceeded error (54000), as provsql.max_memory */
+    provsql_check_result_size(result.size(), too_large_to_print);
+#endif
   }
 
   // Parenthesis elision:

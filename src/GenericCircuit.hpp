@@ -493,6 +493,21 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       throw CircuitException("Invalid gate type for semiring evaluation");
     }
 
+    /* A rendering (formula) writes out a sub-circuit shared by several
+     * gates at each of them, and may grow exponentially with the circuit:
+     * stop as it passes what PostgreSQL can return, not after; and check
+     * the memory budget after a large value, whose gate may be the last
+     * (the root), with no poll to follow. */
+    if constexpr(std::is_same_v<typename S::value_type, std::string>) {
+      const std::size_t size = provenance_mapping.at(u).size();
+      provsql_check_result_size(
+        size,
+        "the formula is too large to return (over 1 GB): a sub-circuit "
+        "shared by several gates is written out at each of them");
+      if(provsql_max_memory > 0 && size >= (std::size_t(1) << 20))
+        provsql_check_memory();
+    }
+
     stack.pop_back();
   }
 
