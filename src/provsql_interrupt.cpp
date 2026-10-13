@@ -10,12 +10,14 @@ extern "C" {
 #include "miscadmin.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "utils/memutils.h"
 #include "provsql_utils.h"
 }
 
 #include "provsql_interrupt.h"
 
 #include <csignal>
+#include <ctime>
 #include <string>
 
 #include <unistd.h>
@@ -33,6 +35,24 @@ static std::string limit_tag, limit_message, limit_hint;
  *  statement started (the budget is per statement) */
 static size_t baseline_rss = 0;
 static TimestampTz baseline_statement = 0;
+
+/** When the memory budget was last checked, in milliseconds of a coarse
+ *  monotonic clock, and how long to wait before the next check */
+static long long last_memory_check = 0;
+static constexpr long long memory_check_interval = 50;
+
+/** @brief A coarse monotonic clock, in milliseconds: cheap enough to read at
+ *  every poll. */
+static long long coarse_now_ms()
+{
+  struct timespec ts;
+#ifdef CLOCK_MONOTONIC_COARSE
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+#else
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
+  return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 /** @brief The resident memory of this backend, in bytes, or 0 where the
  *  platform does not say. */
@@ -123,17 +143,47 @@ size_t provsql_memory_used(void)
   return rss > baseline_rss ? rss - baseline_rss : 0;
 }
 
+bool provsql_memory_check_due(void)
+{
+  return coarse_now_ms() - last_memory_check >= memory_check_interval;
+}
+
 void provsql_check_memory(void)
+{
+  provsql_check_memory_for(0);
+}
+
+void provsql_check_memory_for(size_t extra)
 {
   if (provsql_max_memory <= 0)
     return;
-  if (provsql_memory_used() > (size_t)provsql_max_memory * 1024 * 1024)
+  last_memory_check = coarse_now_ms();
+  if (provsql_memory_used() + extra > (size_t)provsql_max_memory * 1024 * 1024)
     provsql_limit_exceeded(
       "memory-limit",
       ("the evaluation used more memory than provsql.max_memory (" +
        std::to_string(provsql_max_memory) + " MB)").c_str(),
       "Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or "
       "set it to 0 for no limit.");
+}
+
+bool provsql_limit_pending(void)
+{
+  return limit_hit;
+}
+
+size_t provsql_max_result_size(void)
+{
+  return MaxAllocSize - VARHDRSZ;
+}
+
+void provsql_check_result_size(size_t bytes, const char *message)
+{
+  if (bytes > provsql_max_result_size())
+    provsql_limit_exceeded(
+      "result-too-large", message,
+      "Evaluate a smaller part of the circuit, or a semiring whose values do "
+      "not grow with it (e.g., sr_boolean or sr_counting).");
 }
 
 void provsql_limit_exceeded(const char *tag, const char *message,

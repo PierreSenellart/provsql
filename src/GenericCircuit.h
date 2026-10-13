@@ -776,10 +776,13 @@ friend class boost::serialization::access;
  *                            also serves as the memoisation table.
  * @param semiring            Semiring instance providing @c zero(), @c one(),
  *                            @c plus(), @c times(), etc.
- * @return                    The semiring value of the circuit at gate @p g.
+ * @return                    The semiring value of the circuit at gate @p g,
+ *                            as stored in @p provenance_mapping: a copy is
+ *                            the caller's to make, or not (a formula may
+ *                            be large).
  */
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
-typename S::value_type evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
+const typename S::value_type &evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
 
 /**
  * @brief The equations of the @c gate_fixsystem @p sys, as linear forms

@@ -71,6 +71,15 @@ does not sensibly implement one of them can throw
 fail *only* for queries that actually use the corresponding gate,
 and all other queries remain evaluable.
 
+``GenericCircuit::evaluate`` calls ``plus_of`` and ``times_of``, which
+take pointers to the children's values (``vector<const V *>``) rather
+than copies; their default copies the values and calls ``plus`` or
+``times``. A semiring whose values may be large overrides them to read
+the values in place: ``Formula``, whose renderings can grow
+exponentially with the circuit.  For the same reason ``evaluate``
+returns a reference into its memoisation table, which the caller copies
+or moves from.
+
 .. note::
 
    The algebraic axioms a new semiring should satisfy are

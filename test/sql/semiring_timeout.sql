@@ -40,6 +40,31 @@ EXCEPTION WHEN program_limit_exceeded THEN
 END $$;
 RESET provsql.max_memory;
 
+-- A formula built by few gates, each writing out the sub-circuits it shares
+-- with others, grows exponentially with the rows, between too few polls for
+-- the periodic check: that of the last row of an ORDER BY ... LIMIT over 17
+-- rows is about 30 MB, from about 60 gates.  The budget is checked after
+-- each large value too, and the evaluation stops.
+CREATE TABLE st_ol(ref text, v float8);
+INSERT INTO st_ol SELECT md5(i::text), i FROM generate_series(1,17) i;
+SELECT add_provenance('st_ol');
+SELECT create_provenance_mapping('st_ol_map', 'st_ol', 'ref');
+SET provsql.max_memory = '50MB';
+DO $$
+DECLARE d text; h text;
+BEGIN
+  PERFORM length(sr_formula(provenance(), 'st_ol_map'))
+  FROM (SELECT v FROM st_ol ORDER BY v LIMIT 10) x;
+  RAISE NOTICE 'sr_formula finished';
+EXCEPTION WHEN program_limit_exceeded THEN
+  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL, h = PG_EXCEPTION_HINT;
+  RAISE NOTICE '% / % / %', SQLERRM, d, h;
+END $$;
+RESET provsql.max_memory;
+DROP TABLE st_ol_map;
+SELECT remove_provenance('st_ol');
+DROP TABLE st_ol;
+
 -- A condition on an aggregate whose possible worlds have to be enumerated
 -- stops past provsql.max_worlds of them, with the same kind of error.
 CREATE TABLE st_mw(g int, v int);

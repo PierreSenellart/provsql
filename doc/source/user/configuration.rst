@@ -183,6 +183,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     check is periodic, so the limit is approximate. Linux, macOS and
     FreeBSD only. Example: ``SET provsql.max_memory = '1GB'``.
 
+    Whatever this setting, a text result over 1 GB, the most PostgreSQL
+    holds in a value, stops the evaluation with the same kind of error
+    (``provsql-reason: result-too-large``): a formula or a Boolean
+    expression writes out a sub-circuit shared by several gates at each
+    of them, and may grow exponentially with the circuit.
+
 .. _provsql-max-worlds:
 
 ``provsql.max_worlds`` (default: ``1048576``, that is 2\ :sup:`20`)

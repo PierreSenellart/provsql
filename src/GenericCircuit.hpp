@@ -52,7 +52,7 @@ extern "C" {
 }
 
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
-typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
+const typename S::value_type &GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
 {
   /* Iterative post-order evaluation with @p provenance_mapping doubling as
    * the memoisation table.  Provenance circuits can be as deep as the data
@@ -295,33 +295,34 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     case gate_plus:
     case gate_times:
     case gate_monus: {
-      std::vector<typename S::value_type> childrenResult;
+      /* The children's values read in place: a formula's may be large */
+      using V = typename S::value_type;
+      std::vector<const V *> children;
       for(const auto &c : getWires(u))
-        childrenResult.push_back(provenance_mapping.at(c));
+        children.push_back(&provenance_mapping.at(c));
+      /* Drop the children equal to @p e */
+      const auto drop = [&children](const V &e) {
+        children.erase(std::remove_if(children.begin(), children.end(),
+                                      [&e](const V *x) { return *x == e; }),
+                       children.end());
+      };
       if(t==gate_plus) {
-        childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.zero()),
-                             childrenResult.end());
-        provenance_mapping.emplace(u, semiring.plus(childrenResult));
+        drop(semiring.zero());
+        provenance_mapping.emplace(u, semiring.plus_of(children));
       } else if(t==gate_times) {
-        bool zero = false;
-        for(const auto &c: childrenResult) {
-          if(c==semiring.zero()) {
-            zero = true;
-            break;
-          }
-        }
-        if(zero)
-          provenance_mapping.emplace(u, semiring.zero());
+        const V zero = semiring.zero();
+        if(std::any_of(children.begin(), children.end(),
+                       [&zero](const V *x) { return *x == zero; }))
+          provenance_mapping.emplace(u, zero);
         else {
-          childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.one()),
-                               childrenResult.end());
-          provenance_mapping.emplace(u, semiring.times(childrenResult));
+          drop(semiring.one());
+          provenance_mapping.emplace(u, semiring.times_of(children));
         }
       } else {
-        if(childrenResult[0]==semiring.zero() || childrenResult[0]==childrenResult[1])
+        if(*children[0]==semiring.zero() || *children[0]==*children[1])
           provenance_mapping.emplace(u, semiring.zero());
         else
-          provenance_mapping.emplace(u, semiring.monus(childrenResult[0], childrenResult[1]));
+          provenance_mapping.emplace(u, semiring.monus(*children[0], *children[1]));
       }
       break;
     }
@@ -491,6 +492,21 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
     default:
       throw CircuitException("Invalid gate type for semiring evaluation");
+    }
+
+    /* A rendering (formula) writes out a sub-circuit shared by several
+     * gates at each of them, and may grow exponentially with the circuit:
+     * stop as it passes what PostgreSQL can return, not after; and check
+     * the memory budget after a large value, whose gate may be the last
+     * (the root), with no poll to follow. */
+    if constexpr(std::is_same_v<typename S::value_type, std::string>) {
+      const std::size_t size = provenance_mapping.at(u).size();
+      provsql_check_result_size(
+        size,
+        "the formula is too large to return (over 1 GB): a sub-circuit "
+        "shared by several gates is written out at each of them");
+      if(provsql_max_memory > 0 && size >= (std::size_t(1) << 20))
+        provsql_check_memory();
     }
 
     stack.pop_back();

@@ -49,47 +49,56 @@
 #include "Semiring.h"
 
 /**
- * @brief Concatenate elements of a range with a delimiter.
+ * @brief Concatenate the strings of a range with a delimiter.
  *
- * Used internally by @c Formula::plus(), @c Formula::times(), and
- * @c Formula::agg() to build operator-separated strings.
+ * Used internally by @c Formula::agg() and the other n-ary renderings.
+ * Built in place, the size reserved first: a formula may be most of the
+ * memory in use, and a stream would hold it twice more.
  *
- * @tparam Range   Any range type with a @c value_type typedef.
- * @tparam Value   Element type (defaults to @c Range::value_type).
+ * @tparam Range    Any range of @c std::string.
  * @param elements  The range to join.
  * @param delimiter String to insert between adjacent elements.
  * @return          All elements concatenated with @p delimiter between them.
  */
-template <typename Range, typename Value = typename Range::value_type>
+template <typename Range>
 static std::string join(Range const& elements, const char *const delimiter) {
-  std::ostringstream os;
-  auto b = begin(elements), e = end(elements);
-
-  if (b != e) {
-    std::copy(b, prev(e), std::ostream_iterator<Value>(os, delimiter));
-    b = prev(e);
+  const std::size_t dl = std::char_traits<char>::length(delimiter);
+  std::size_t n = 0, total = 0;
+  for(const auto &x : elements) {
+    total += x.size();
+    ++n;
   }
-  if (b != e) {
-    os << *b;
+  std::string out;
+  out.reserve(total + (n ? (n - 1) * dl : 0));
+  bool first = true;
+  for(const auto &x : elements) {
+    if(!first)
+      out.append(delimiter, dl);
+    first = false;
+    out += x;
   }
-
-  return os.str();
+  return out;
 }
 
 /**
- * @brief If @p s is wrapped in a single matched outer paren pair AND its
- *        top-level operator (depth 1, inside that pair) is @p op, return
- *        the inner content; otherwise return @p s unchanged.
+ * @brief The part of @p s to write as an operand of @p op: its inner
+ *        content if it is wrapped in a single matched outer paren pair
+ *        whose top-level operator (depth 1, inside that pair) is @p op,
+ *        all of it otherwise.
  *
  * Used by @c Formula::plus() and @c Formula::times() to flatten same-op
  * nested gates by associativity: a child @c "(a ⊕ b)" feeding into a
  * parent @c plus is unwrapped to @c "a ⊕ b" so the join produces
  * @c "a ⊕ b ⊕ c" instead of @c "(a ⊕ b) ⊕ c". A different top-level op
  * (e.g., a @c times child) keeps its parens.
+ *
+ * @return The offset and length of that part in @p s: no copy is made.
  */
-static std::string strip_wrap_if_op(const std::string &s, const std::string &op) {
+static std::pair<std::size_t, std::size_t>
+operand_range(const std::string &s, const std::string &op) {
+  const std::pair<std::size_t, std::size_t> whole{0, s.size()};
   if(s.size() < 2 || s.front() != '(' || s.back() != ')')
-    return s;
+    return whole;
   // Verify the leading '(' closes only at the very end : if any earlier
   // ')' brings depth back to 0, the outer pair isn't a single matched
   // wrap (e.g., @c "(a) ⊕ (b)" must not be stripped).
@@ -98,23 +107,61 @@ static std::string strip_wrap_if_op(const std::string &s, const std::string &op)
     if(s[i] == '(') ++depth;
     else if(s[i] == ')') {
       if(--depth == 0)
-        return s;
+        return whole;
     }
   }
   // Scan inner for a depth-0 occurrence of @p op. UTF-8 operators are
   // multi-byte but @c compare on raw bytes is correct since we never
   // straddle a UTF-8 char boundary at depth-0 positions outside parens.
-  const std::string inner = s.substr(1, s.size() - 2);
+  const std::size_t b = 1, e = s.size() - 1;
   depth = 0;
-  for(size_t i = 0; i + op.size() <= inner.size(); ) {
-    if(inner[i] == '(') { ++depth; ++i; }
-    else if(inner[i] == ')') { --depth; ++i; }
-    else if(depth == 0 && inner.compare(i, op.size(), op) == 0)
-      return inner;
+  for(size_t i = b; i + op.size() <= e; ) {
+    if(s[i] == '(') { ++depth; ++i; }
+    else if(s[i] == ')') { --depth; ++i; }
+    else if(depth == 0 && s.compare(i, op.size(), op) == 0)
+      return {b, e - b};
     else
       ++i;
   }
-  return s;
+  return whole;
+}
+
+/**
+ * @brief @c "(a op b op …)" over the operands @p v points to, flattened
+ *        by @c operand_range, built in place.
+ */
+static std::string join_operands(const std::vector<const std::string *> &v,
+                                 const std::string &op) {
+  const std::string sep = " " + op + " ";
+  std::vector<std::pair<std::size_t, std::size_t> > r;
+  r.reserve(v.size());
+  std::size_t total = 2;
+  for(const auto *x : v) {
+    r.push_back(operand_range(*x, op));
+    total += r.back().second;
+  }
+  if(!v.empty())
+    total += (v.size() - 1) * sep.size();
+  std::string out;
+  out.reserve(total);
+  out += '(';
+  for(std::size_t k = 0; k < v.size(); ++k) {
+    if(k)
+      out += sep;
+    out.append(*v[k], r[k].first, r[k].second);
+  }
+  out += ')';
+  return out;
+}
+
+/** @brief Pointers to the strings of @p v. */
+static std::vector<const std::string *>
+pointers_to(const std::vector<std::string> &v) {
+  std::vector<const std::string *> r;
+  r.reserve(v.size());
+  for(const auto &x : v)
+    r.push_back(&x);
+  return r;
 }
 
 /**
@@ -206,30 +253,28 @@ virtual value_type one() const override {
   return "𝟙";
 }
 virtual value_type plus(const std::vector<value_type> &v) const override {
+  return plus_of(pointers_to(v));
+}
+virtual value_type times(const std::vector<value_type> &v) const override {
+  return times_of(pointers_to(v));
+}
+virtual value_type plus_of(const std::vector<const value_type *> &v) const override {
   if(v.size()==0)
     return zero();
   else if(v.size()==1)
-    return v[0];
+    return *v[0];
   // Flatten same-op nesting by associativity: a child "(a ⊕ b)" is
   // inlined as "a ⊕ b" so the join produces "a ⊕ b ⊕ c", not
   // "(a ⊕ b) ⊕ c". Mixed-op children (e.g., a times subexpression)
   // keep their parens.
-  std::vector<value_type> flat;
-  flat.reserve(v.size());
-  for(const auto &x : v)
-    flat.push_back(strip_wrap_if_op(x, "⊕"));
-  return "("+join(flat, " ⊕ ")+")";
+  return join_operands(v, "⊕");
 }
-virtual value_type times(const std::vector<value_type> &v) const override {
+virtual value_type times_of(const std::vector<const value_type *> &v) const override {
   if(v.size()==0)
     return one();
   else if(v.size()==1)
-    return v[0];
-  std::vector<value_type> flat;
-  flat.reserve(v.size());
-  for(const auto &x : v)
-    flat.push_back(strip_wrap_if_op(x, "⊗"));
-  return "("+join(flat, " ⊗ ")+")";
+    return *v[0];
+  return join_operands(v, "⊗");
 }
 virtual value_type monus(value_type x, value_type y) const override
 {
@@ -548,8 +593,10 @@ virtual bool compatibleWithBooleanRewrite() const override {
  * always produce: at the root there is no enclosing context, so the
  * outer parens carry no disambiguation value.
  */
-std::string to_text(const value_type &s) const {
-  std::string r = strip_outer(s);
+std::string to_text(value_type s) const {
+  /* In place, as the formula may be most of the memory in use: a copy
+   * would double it. */
+  strip_outer_in_place(s);
   /* The equations of the unknowns @p s reads, directly or through other
    * equations, in the order they were named. */
   std::vector<bool> needed(equations->names.size(), false);
@@ -568,23 +615,36 @@ std::string to_text(const value_type &s) const {
     if(needed[k])
       eqs += (eqs.empty() ? " where " : ", ") + equations->names[k] + " = " +
              strip_outer(equations->rhs[k]);
-  return r + eqs;
+  s += eqs;
+  return s;
 }
 
 private:
-/** @brief @p s without the cosmetic outer paren pair. */
-static std::string strip_outer(const std::string &s) {
+/** @brief Whether the first character of @p s opens a paren pair closed by
+ *  its last one, which is then cosmetic. */
+static bool wrapped(const std::string &s) {
   if(s.size() < 2 || s.front() != '(' || s.back() != ')')
-    return s;
+    return false;
   int depth = 0;
   for(size_t i = 0; i < s.size() - 1; ++i) {
     if(s[i] == '(') ++depth;
     else if(s[i] == ')') {
       if(--depth == 0)
-        return s;
+        return false;
     }
   }
-  return s.substr(1, s.size() - 2);
+  return true;
+}
+/** @brief Drop the cosmetic outer paren pair of @p s, without a copy. */
+static void strip_outer_in_place(std::string &s) {
+  if(wrapped(s)) {
+    s.pop_back();
+    s.erase(0, 1);
+  }
+}
+/** @brief @p s without the cosmetic outer paren pair. */
+static std::string strip_outer(const std::string &s) {
+  return wrapped(s) ? s.substr(1, s.size() - 2) : s;
 }
 public:
 };

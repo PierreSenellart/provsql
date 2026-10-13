@@ -150,6 +150,39 @@ virtual value_type plus(const std::vector<value_type> &v) const = 0;
 virtual value_type times(const std::vector<value_type> &v) const = 0;
 
 /**
+ * @brief @c plus over the values @p v points to, read in place.
+ *
+ * @c GenericCircuit::evaluate passes the values of a gate's children this
+ * way rather than copied into a vector.  The default copies them and calls
+ * @c plus; a semiring whose values may be large (@c Formula) overrides it.
+ *
+ * @param v  Ordered list of pointers to the operands.
+ * @return   @f$v_0 \oplus v_1 \oplus \cdots@f$.
+ */
+virtual value_type plus_of(const std::vector<const value_type *> &v) const {
+  std::vector<value_type> c;
+  c.reserve(v.size());
+  for(const auto *x : v)
+    c.push_back(*x);
+  return plus(c);
+}
+
+/**
+ * @brief @c times over the values @p v points to, read in place (see
+ *        @c plus_of).
+ *
+ * @param v  Ordered list of pointers to the operands.
+ * @return   @f$v_0 \otimes v_1 \otimes \cdots@f$.
+ */
+virtual value_type times_of(const std::vector<const value_type *> &v) const {
+  std::vector<value_type> c;
+  c.reserve(v.size());
+  for(const auto *x : v)
+    c.push_back(*x);
+  return times(c);
+}
+
+/**
  * @brief Apply the monus (m-semiring difference) operation.
  *
  * @param x  Minuend.
