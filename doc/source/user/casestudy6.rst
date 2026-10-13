@@ -4,79 +4,37 @@
 Case Study: City Air-Quality Sensor Network
 ===========================================
 
-This case study demonstrates ProvSQL's continuous distributions
-(see :doc:`the chapter on continuous distributions
-<continuous-distributions>`) end-to-end through
-ProvSQL Studio (see :doc:`the Studio chapter <studio>`). It is
-driven primarily by Studio: random variables benefit far more from
-interactive visualisation -- PDFs, CDFs, mixture DAG layouts,
-conditional histograms, simplifier before-vs-after -- than from
-text-mode output.
+This case study applies ProvSQL's continuous distributions (see
+:doc:`the chapter on continuous distributions <continuous-distributions>`)
+to an air-quality sensor network, through ProvSQL Studio (see :doc:`the
+Studio chapter <studio>`), whose plots of densities, histograms and
+circuits suit random variables better than text output.
 
 The Scenario
 ------------
 
-A municipal observatory operates a small air-quality sensor
-network. Sensors of three different vendors report a
-:math:`\mathit{PM}_{2.5}` concentration (*fine particulate matter*, i.e.,
-airborne particles with aerodynamic diameter at most 2.5 μm,
-expressed in micrograms per cubic metre) on a fixed schedule. The
-sensors differ in calibration and noise characteristics:
-
-* high-end units report ``normal(μ, σ)`` with small σ;
-* low-cost units report ``uniform[μ−δ, μ+δ]`` over a small window;
-* a drift-prone unit reports ``exponential(λ)`` while its
-  internal hardware self-tests cycle;
-* a multi-pass aggregating unit reports ``erlang(k, λ)`` over the
-  pass count.
-
-A reference station with a calibrated lab-grade instrument
-contributes deterministic readings.
-
-Regulatory categories partition the value axis: *Good* below 12,
-*Moderate* between 12.1 and 35, *Unhealthy* above 35.1 (loosely
-following the US EPA AQI breakpoints for PM2.5 in their pre-2024
-form, simplified to three tiers). Each station has a Bernoulli
-probability of being in calibration on a given day. A separate
-batch table of *historical* readings has the same shape, so
-cross-batch queries via ``UNION ALL`` are meaningful.
+A municipal observatory runs a small network of sensors reporting a
+:math:`\mathit{PM}_{2.5}` concentration (fine particulate matter, in
+micrograms per cubic metre). Each kind of sensor has its own noise model:
+a normal distribution for high-end units, uniform for low-cost ones,
+exponential for a drift-prone unit, Erlang for a multi-pass one; a
+reference station reports exact values. Readings fall into three
+categories, *Good*, *Moderate* and *Unhealthy* (a simplified form of the
+US EPA breakpoints), each station is in calibration with some probability,
+and yesterday's readings are kept in a table of the same shape.
 
 Your tasks:
 
-* inspect the per-row distributions and what threshold queries
-  produce;
-* compute the probability that each station's reading exceeds an
-  *Unhealthy* threshold (``WHERE reading > 35``);
-* model calibration uncertainty as a Bernoulli mixture and inspect
-  the resulting ``gate_mixture`` shape;
-* aggregate per-district readings and watch the simplifier fold
-  the mixture cascade;
-* run conditional inference (``E[reading | reading > 35]``) and
-  see the closed-form truncated-distribution mean against the
-  unconditional one;
-* filter on the expected value of an aggregated random variable,
-  combine today's and yesterday's batches with ``UNION ALL``, and
-  compare probability methods (``'independent'`` vs
-  ``'monte-carlo'`` vs ``'tree-decomposition'``) side by side;
-* find the *worst* reading per district with order statistics
-  (``greatest`` and the ``max`` aggregate);
-* read percentiles and conditional medians off :sqlfunc:`quantile`;
-* clamp the exceedance over a threshold with ``CASE`` and take its
-  expectation;
-* couple two sensors through a shared plume and measure it with
-  :sqlfunc:`covariance` / :sqlfunc:`correlation`;
-* model drift, lifetime, and episodic spikes with the Gamma,
-  Weibull, and Pareto families, including a mixed-family
-  probability computed by quadrature;
-* compute fleet statistics under sensor dropout with the
-  SQL-standard statistic aggregates (:sqlfunc:`stddev_pop`,
-  :sqlfunc:`corr`, :sqlfunc:`percentile_cont`);
-* build a maintenance-triage headline with ``CASE`` over
-  aggregates and read its exact expectation;
-* quantify the shared-plume coupling in nats with
-  :sqlfunc:`mutual_information`;
-* read the calibration scores as graded confidence, combined with
-  :sqlfunc:`sr_lukasiewicz` and :sqlfunc:`sr_viterbi`.
+* compute the probability that a reading exceeds a threshold, and its
+  expectation beyond it;
+* model calibration as a mixture, aggregate readings per district, and
+  watch the simplifier fold the result;
+* combine batches with ``UNION ALL``, and compare probability methods;
+* find the worst reading per district, percentiles, and expected
+  exceedances;
+* couple two sensors through a shared plume, and measure the coupling;
+* compute fleet statistics when sensors drop out;
+* read calibration scores as graded confidence.
 
 Setup
 -----
@@ -322,6 +280,7 @@ then show up distinctly on the histogram even at the 95%/5%
 weighting.
 
 .. figure:: /_static/casestudy6/mixture-node.png
+   :width: 696px
    :alt: Mix node with three labelled outgoing edges (p, x, y);
          the p child is a 95% Bernoulli, the x child is the
          N(28,2) reading, and the y child is the back-scaled
@@ -360,6 +319,7 @@ shows the per-district average as a tight distribution centred at
 the inclusion-weighted mean.
 
 .. figure:: /_static/casestudy6/sum-of-mixtures.png
+   :width: 596px
    :alt: DAG with a single root division node, two PLUS subtrees
          under it, eight Mix nodes at the next level, and the
          gate_rv leaves (N(28,2), N(40,4), U(12,24), U(10,22))
@@ -410,6 +370,7 @@ moment is estimated by rejection sampling at budget
 ``provsql.rv_mc_samples``.
 
 .. figure:: /_static/casestudy6/condition-on-active.png
+   :width: 696px
    :alt: The Distribution profile panel showing supp [35, +infinity],
          mu approximately 40.82, sigma approximately 3.35; the
          Condition on input is populated with the row's provenance
@@ -946,7 +907,9 @@ The calibration scores of ``calibration_status`` can also be read as
 *degrees of confidence*, not probabilities. A district's alert is
 corroborated when two of its stations agree; how confident is that
 corroboration? A fuzzy semiring combines the degrees, with ``max`` over
-alternatives and a t-norm for a conjunction:
+alternatives and a t-norm for a conjunction. Turn the scores into a
+provenance mapping, and list the districts with a corroborating pair of
+stations:
 
 .. code-block:: postgresql
 
@@ -954,26 +917,25 @@ alternatives and a t-norm for a conjunction:
     SELECT create_provenance_mapping('calibration_degree',
                                      'calibration_status', 'p');
 
-    SELECT s1.district,
-           round(sr_lukasiewicz(provenance(), 'calibration_degree')::numeric, 4)
-             AS lukasiewicz,
-           round(sr_viterbi(provenance(), 'calibration_degree')::numeric, 4)
-             AS product
+    SELECT DISTINCT s1.district
     FROM calibration_status c1
     JOIN stations s1 ON s1.id = c1.station_id
     JOIN calibration_status c2 ON c2.station_id > c1.station_id
     JOIN stations s2 ON s2.id = c2.station_id AND s2.district = s1.district
-    GROUP BY s1.district
     ORDER BY s1.district;
 
-:sqlfunc:`sr_lukasiewicz` conjoins with the Łukasiewicz t-norm
+Click the ``provsql`` cell of the centre's row, pick *Łukasiewicz (numeric
+fuzzy)* from the *Numeric* group of the eval strip, select the
+``calibration_degree`` mapping, and run; then do the same with *Viterbi
+(max-times)*. The Łukasiewicz semiring conjoins with the t-norm
 :math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre (0.95)
 and Riverside Park (0.70), gets 0.65. The two stations' shortfalls from
-full confidence, 0.05 and 0.30, add up. :sqlfunc:`sr_viterbi` multiplies
-instead, 0.665. With the fully trusted Suburban Reference (1.00), the east
-district keeps the Industrial Estate's 0.60 under both: a certain station
-costs nothing. The stations' own tokens are not in the mapping and count
-as fully true.
+full confidence, 0.05 and 0.30, add up. Viterbi multiplies instead, 0.665.
+With the fully trusted Suburban Reference (1.00), the east district keeps
+the Industrial Estate's 0.60 under both: a certain station costs nothing.
+The stations' own tokens are not in the mapping and count as fully true.
+In SQL, the same values are those of :sqlfunc:`sr_lukasiewicz` and
+:sqlfunc:`sr_viterbi`, with the mapping's name as second argument.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full reference and
