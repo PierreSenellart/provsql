@@ -252,7 +252,9 @@ declared, and an operation the semiring does not provide throws.
        semiring (``Regex``, ``TropicalPaths``, ``BestPath``) reads as it
        is; such a
        semiring refuses ``HAVING`` (its world products have no order of
-       the query's), and solves a recursion by star only one-sided.
+       the query's), and, unless absorptive (``BestPath``, solved by
+       Dijkstra's algorithm on both sides), solves a recursion by star
+       only one-sided.
    * - ``mul_sub_left_distributive()`` (false)
      - the closed forms of conditions on aggregates are sound (see
        :doc:`aggregation`).
