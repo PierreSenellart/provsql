@@ -649,29 +649,52 @@ the Red Deer, 0.9909 + 0.0091 = 1, and for the unidentified row,
 Step 14: The Label of Each Bounding Box
 ---------------------------------------
 
-Since Step 5, the candidate species of a bounding box are mutually
-exclusive: in each world, at most one of them is the true species. The
-:sqlfunc:`choose` aggregate picks a value of its group, so over a box's
-candidates it is *the* label of the box in each world. Grouping by that
-value turns it into a distribution over labels:
+Since Step 5, the candidates of a bounding box are mutually exclusive: in
+each world, the label of the box is the candidate present, if any, with
+the probabilities of Step 6. Suppose instead that each candidate came
+from a detector of its own, one per species, so that both deer could be
+detected on box 1 of photo 5 at once. Copy the detections, each row an
+independent input:
+
+.. code-block:: postgresql
+
+    CREATE TABLE detection_indep AS
+      SELECT photo_id, bbox_id, species_id, confidence FROM detection;
+    SELECT remove_provenance('detection_indep');
+    SELECT add_provenance('detection_indep');
+    SELECT set_prob(provenance(), confidence) FROM detection_indep;
+
+The copy inherits the ``provsql`` column of ``detection``, with its
+mutually exclusive tokens: :sqlfunc:`remove_provenance` drops it, and
+:sqlfunc:`add_provenance` gives every row a token of its own.
+
+To report one label per box, take the most confident candidate detected.
+The :sqlfunc:`choose` aggregate picks one value of its group, in each
+world the first in its ``ORDER BY`` among the rows present. Grouping by
+that value turns it into a distribution over labels:
 
 .. code-block:: postgresql
 
     SELECT photo_id, bbox_id, label,
            ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
     FROM (
-      SELECT d.photo_id, d.bbox_id, choose(s.name ORDER BY s.name) AS label
-      FROM detection d JOIN species s ON s.id = d.species_id
+      SELECT d.photo_id, d.bbox_id,
+             choose(s.name ORDER BY d.confidence DESC) AS label
+      FROM detection_indep d JOIN species s ON s.id = d.species_id
       WHERE d.photo_id = 5
       GROUP BY d.photo_id, d.bbox_id
     ) t
     GROUP BY photo_id, bbox_id, label
     ORDER BY photo_id, bbox_id, label;
 
-Box 1 of photo 5 is a Red Deer with probability 0.40 and a Roe Deer with
-0.30, its two candidates' confidences; in the remaining worlds, neither
-candidate is right and the box has no label. Mutual exclusion leaves at
-most one candidate present, so ``ORDER BY s.name`` changes nothing here;
-in general, it decides which value :sqlfunc:`choose` returns when several
-are present. Box 6, whose only candidate is unidentified, has no species
-to join and no row.
+Red Deer, the more confident candidate of box 1, is its label whenever it
+is detected, with probability 0.40. Roe Deer is the label only when
+detected without Red Deer, with probability 0.60 × 0.30 = 0.18, and in the
+remaining worlds no candidate is detected and the box has no label.
+``ORDER BY d.confidence`` would instead give Roe Deer 0.30 and Red Deer
+0.70 × 0.40 = 0.28: when several candidates are present, the
+``ORDER BY`` of :sqlfunc:`choose` decides the label. On ``detection``,
+whose candidates are mutually exclusive, the same query returns the
+confidences of Step 6 whatever the order, as at most one candidate is
+ever present. Boxes 2 to 5 have a single candidate, and box 6, whose only
+candidate is unidentified, has no species to join and no row.

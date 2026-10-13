@@ -451,14 +451,15 @@ SELECT remove_provenance('result_cs5_both_any');
 SELECT species_id, prob FROM result_cs5_both_any ORDER BY species_id NULLS LAST;
 DROP TABLE result_cs5_both_any;
 
--- Step 14: the label of each bounding box, choose() over its mutually
--- exclusive candidates, as a distribution: photo 5, box 1 is Red Deer with
--- probability 0.40 and Roe Deer with 0.30 (the candidates' confidences).
+-- Step 14: the label of each bounding box, choose() as a distribution.
+-- Over mutually exclusive candidates, it is the candidate present: photo 5,
+-- box 1 is Red Deer with probability 0.40 and Roe Deer with 0.30 (the
+-- candidates' confidences), whatever the order.
 CREATE TABLE result_cs5_label AS
 SELECT photo_id, bbox_id, label,
        ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
 FROM (
-  SELECT d.photo_id, d.bbox_id, choose(s.name ORDER BY s.name) AS label
+  SELECT d.photo_id, d.bbox_id, choose(s.name ORDER BY d.confidence) AS label
   FROM detection d JOIN species s ON s.id = d.species_id
   WHERE d.photo_id = 5
   GROUP BY d.photo_id, d.bbox_id
@@ -468,7 +469,46 @@ SELECT remove_provenance('result_cs5_label');
 SELECT * FROM result_cs5_label ORDER BY photo_id, bbox_id, label;
 DROP TABLE result_cs5_label;
 
+-- Over independent candidates, the first present in the order: the most
+-- confident, Red Deer 0.40 and Roe Deer 0.60 x 0.30 = 0.18; the least
+-- confident, Roe Deer 0.30 and Red Deer 0.70 x 0.40 = 0.28.
+CREATE TABLE detection_indep AS
+  SELECT photo_id, bbox_id, species_id, confidence FROM detection;
+SELECT remove_provenance('detection_indep');
+SELECT add_provenance('detection_indep');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, confidence) FROM detection_indep;
+END $$;
+CREATE TABLE result_cs5_label AS
+SELECT photo_id, bbox_id, label,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT d.photo_id, d.bbox_id,
+         choose(s.name ORDER BY d.confidence DESC) AS label
+  FROM detection_indep d JOIN species s ON s.id = d.species_id
+  WHERE d.photo_id = 5
+  GROUP BY d.photo_id, d.bbox_id
+) t
+GROUP BY photo_id, bbox_id, label;
+SELECT remove_provenance('result_cs5_label');
+SELECT * FROM result_cs5_label ORDER BY photo_id, bbox_id, label;
+DROP TABLE result_cs5_label;
+CREATE TABLE result_cs5_label AS
+SELECT photo_id, bbox_id, label,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT d.photo_id, d.bbox_id, choose(s.name ORDER BY d.confidence) AS label
+  FROM detection_indep d JOIN species s ON s.id = d.species_id
+  WHERE d.photo_id = 5 AND d.bbox_id = 1
+  GROUP BY d.photo_id, d.bbox_id
+) t
+GROUP BY photo_id, bbox_id, label;
+SELECT remove_provenance('result_cs5_label');
+SELECT * FROM result_cs5_label ORDER BY photo_id, bbox_id, label;
+DROP TABLE result_cs5_label;
+
 -- Clean up
+DROP TABLE detection_indep;
 DROP TABLE species_mapping;
 DROP TABLE detection;
 DROP TABLE species;
