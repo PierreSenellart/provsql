@@ -532,7 +532,7 @@ _C_FUNC_MAP = {
     'BooleanCircuit::rewriteMultivaluedGates': '/doxygen-c/html/classBooleanCircuit.html#a90ff865c9963480f00000d62c6c37c2f',
     'BooleanCircuit::rewriteMultivaluedGatesRec': '/doxygen-c/html/classBooleanCircuit.html#a3f6c1d03227119c7f4886cbf34090022',
     'BooleanCircuit::TseytinCNF':   '/doxygen-c/html/classBooleanCircuit.html#a5fb5536b66742bb6d68aa1820ee8cba2',
-    'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a3ff1b0c90156515393986082def83900',
+    'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a381ed1600016af2d4740834c739fbce2',
     'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',
     # DotCircuit

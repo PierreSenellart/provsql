@@ -127,17 +127,17 @@ operand_range(const std::string &s, const std::string &op) {
 }
 
 /**
- * @brief @c "(a op b op …)" over the operands @p v, flattened by
- *        @c operand_range, built in place.
+ * @brief @c "(a op b op …)" over the operands @p v points to, flattened
+ *        by @c operand_range, built in place.
  */
-static std::string join_operands(const std::vector<std::string> &v,
+static std::string join_operands(const std::vector<const std::string *> &v,
                                  const std::string &op) {
   const std::string sep = " " + op + " ";
   std::vector<std::pair<std::size_t, std::size_t> > r;
   r.reserve(v.size());
   std::size_t total = 2;
-  for(const auto &x : v) {
-    r.push_back(operand_range(x, op));
+  for(const auto *x : v) {
+    r.push_back(operand_range(*x, op));
     total += r.back().second;
   }
   if(!v.empty())
@@ -148,10 +148,20 @@ static std::string join_operands(const std::vector<std::string> &v,
   for(std::size_t k = 0; k < v.size(); ++k) {
     if(k)
       out += sep;
-    out.append(v[k], r[k].first, r[k].second);
+    out.append(*v[k], r[k].first, r[k].second);
   }
   out += ')';
   return out;
+}
+
+/** @brief Pointers to the strings of @p v. */
+static std::vector<const std::string *>
+pointers_to(const std::vector<std::string> &v) {
+  std::vector<const std::string *> r;
+  r.reserve(v.size());
+  for(const auto &x : v)
+    r.push_back(&x);
+  return r;
 }
 
 /**
@@ -243,21 +253,27 @@ virtual value_type one() const override {
   return "𝟙";
 }
 virtual value_type plus(const std::vector<value_type> &v) const override {
+  return plus_of(pointers_to(v));
+}
+virtual value_type times(const std::vector<value_type> &v) const override {
+  return times_of(pointers_to(v));
+}
+virtual value_type plus_of(const std::vector<const value_type *> &v) const override {
   if(v.size()==0)
     return zero();
   else if(v.size()==1)
-    return v[0];
+    return *v[0];
   // Flatten same-op nesting by associativity: a child "(a ⊕ b)" is
   // inlined as "a ⊕ b" so the join produces "a ⊕ b ⊕ c", not
   // "(a ⊕ b) ⊕ c". Mixed-op children (e.g., a times subexpression)
   // keep their parens.
   return join_operands(v, "⊕");
 }
-virtual value_type times(const std::vector<value_type> &v) const override {
+virtual value_type times_of(const std::vector<const value_type *> &v) const override {
   if(v.size()==0)
     return one();
   else if(v.size()==1)
-    return v[0];
+    return *v[0];
   return join_operands(v, "⊗");
 }
 virtual value_type monus(value_type x, value_type y) const override

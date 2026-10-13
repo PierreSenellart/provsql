@@ -259,9 +259,9 @@ Datum pec(
     [&sr](const char *v) { return sr.parse_leaf(v); }, drop_table);
 
   provsql_having(c, g, mapping, sr);
-  V out = c.evaluate<Sem>(g, mapping, sr);
-  /* The copy of the result returned, after the last poll */
-  provsql_check_memory();
+  c.evaluate<Sem>(g, mapping, sr);
+  /* The result moved out of the values of the gates, not copied */
+  V out = std::move(mapping.at(g));
   fixpoint_cache_store(c, sr);
   /* The value of every gate, freed before the result is copied: a
    * formula's would otherwise hold several times its size. */
