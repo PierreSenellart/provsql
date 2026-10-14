@@ -207,6 +207,11 @@ cp ./app.css    static/app.css
 rm -rf pkg
 mkdir pkg
 cp "$PKGSRC"/*.py pkg/
+# No git in the browser: record here the commit Studio is built from, which
+# build_id.py would otherwise ask git for ("" outside a git checkout).
+printf 'BUILD_ID = "%s"\n' \
+  "$(git -C "$PKGSRC" describe --tags --match 'studio-v*' --always --dirty 2>/dev/null)" \
+  > pkg/_build_id.py
 # The bundled example notebooks (/api/nb/examples reads the package's
 # notebooks/ directory); shell-boot.js mirrors them into the Pyodide FS,
 # driven by the manifest written here.

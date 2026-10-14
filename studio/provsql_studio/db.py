@@ -13,6 +13,8 @@ import psycopg.conninfo
 from psycopg import sql
 from psycopg_pool import ConnectionPool
 
+from . import build_id as build_id_mod
+
 
 def _config_dir() -> Path:
     """Where Studio persists user-level state across restarts. Honours
@@ -806,10 +808,24 @@ def conn_info(pool: ConnectionPool) -> dict:
             "       coalesce(inet_server_port()::text, ''), "
             "       array_to_string(current_schemas(false), ', '), "
             "       (SELECT extversion FROM pg_extension WHERE extname = 'provsql'), "
-            "       current_setting('is_superuser')::bool"
+            "       current_setting('is_superuser')::bool, "
+            "       to_regprocedure('provsql.build_id()') IS NOT NULL"
         )
         (user, database, host, port, search_path, ext_version,
-         is_superuser) = cur.fetchone()
+         is_superuser, has_build_id) = cur.fetchone()
+        # The commit the loaded library is built from (extension 1.13.0+).
+        # Guarded: the SQL function can exist while the library loaded is
+        # an older one that lacks the C symbol.
+        ext_build = None
+        if has_build_id:
+            cur.execute("SAVEPOINT _build_id")
+            try:
+                cur.execute("SELECT provsql.build_id()")
+                ext_build = cur.fetchone()[0]
+                cur.execute("RELEASE SAVEPOINT _build_id")
+            except psycopg.Error:
+                cur.execute("ROLLBACK TO SAVEPOINT _build_id")
+                cur.execute("RELEASE SAVEPOINT _build_id")
         # Numeric server version, e.g. 130000 for PG 13, 140000 for PG 14.
         # Surfaced so the UI can gate features that depend on PG-version-
         # specific objects (currently `tstzmultirange` for sr_temporal).
@@ -840,6 +856,7 @@ def conn_info(pool: ConnectionPool) -> dict:
         "search_path": search_path,
         "server_version": server_version,
         "extension_version": ext_version or None,
+        "extension_build": build_id_mod.untagged(ext_build, ext_version, "v"),
         "tool_search_path_settable": tool_search_path_settable,
     }
 

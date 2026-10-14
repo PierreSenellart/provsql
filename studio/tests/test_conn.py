@@ -35,6 +35,9 @@ def test_conn_surfaces_extension_and_studio_versions(client):
     # rather than hard-coding so a release bump doesn't break the test.
     from provsql_studio import __version__ as studio_version
     assert info.get("studio_version") == studio_version
+    # Commits, present only off a release tag: a string or None.
+    assert info.get("extension_build") is None or info["extension_build"]
+    assert info.get("studio_build") is None or info["studio_build"]
 
 
 def test_databases_lists_postgres_and_test_db(client, test_dsn):

@@ -16,7 +16,7 @@ import { uuid_ossp } from './pglite/contrib/uuid_ossp.js'
 import { loadPyodide } from './pyodide/pyodide.mjs'
 import { Graphviz } from './vendor/graphviz/index.js'
 
-const PKG = ['__init__.py', 'db.py', 'app.py', 'circuit.py', 'kc.py']
+const PKG = ['__init__.py', '_build_id.py', 'build_id.py', 'db.py', 'app.py', 'circuit.py', 'kc.py']
 // Resolve sibling assets against this module's URL, not the document's, so the
 // page can be served from any path (sub-path deploy, file://).
 const asset = (p) => new URL(p, import.meta.url)

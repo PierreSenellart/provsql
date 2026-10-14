@@ -7,6 +7,7 @@ import re
 import sys
 
 from . import __version__
+from .build_id import studio_build
 
 
 # Endpoints the front-end polls on a timer and that would otherwise drown
@@ -36,7 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--version",
         action="version",
-        version=f"provsql-studio {__version__}",
+        version=f"provsql-studio {__version__}"
+                + (f" ({studio_build()})" if studio_build() else ""),
     )
     p.add_argument(
         "--dsn",

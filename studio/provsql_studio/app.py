@@ -37,6 +37,7 @@ from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from . import __version__ as STUDIO_VERSION
 from . import circuit as circuit_mod
+from . import build_id as build_id_mod
 from . import db
 from . import kc as kc_mod
 
@@ -237,6 +238,7 @@ def create_app(
         )
         info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
         info["studio_version"] = STUDIO_VERSION
+        info["studio_build"] = build_id_mod.studio_build()
         # Send back a password-stripped DSN so the connection editor
         # can prefill its input without leaking secrets to the page.
         # The user re-types the password if they need to switch host
@@ -320,6 +322,7 @@ def create_app(
             pass
         info = db.conn_info(new_pool)
         info["studio_version"] = STUDIO_VERSION
+        info["studio_build"] = build_id_mod.studio_build()
         return jsonify(info)
 
     @app.post("/api/database/empty")

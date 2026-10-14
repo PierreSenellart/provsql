@@ -1131,8 +1131,21 @@
       // and is a no-op if the spans aren't present (e.g. tests).
       const extEl = document.getElementById('version-ext');
       const studioEl = document.getElementById('version-studio');
-      if (extEl) extEl.textContent = c.extension_version ? `ProvSQL ${c.extension_version}` : '';
-      if (studioEl) studioEl.textContent = c.studio_version ? `Studio ${c.studio_version}` : '';
+      // Off a release tag, the commit follows the version: its hash out of
+      // the `git describe` string (`v1.12.0-487-g45320ea7-dirty` gives
+      // `45320ea7-dirty`), the whole string in the tooltip.
+      const showVersion = (vEl, name, version, build) => {
+        if (!vEl) return;
+        let text = version ? `${name} ${version}` : '';
+        if (version && build) {
+          const m = build.match(/-g([0-9a-f]+)(-dirty)?$/);
+          text += ` (${m ? m[1] + (m[2] || '') : build})`;
+        }
+        vEl.textContent = text;
+        if (version && build) vEl.title = build; else vEl.removeAttribute('title');
+      };
+      showVersion(extEl, 'ProvSQL', c.extension_version, c.extension_build);
+      showVersion(studioEl, 'Studio', c.studio_version, c.studio_build);
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
       if (dot) dot.classList.remove('is-offline');
