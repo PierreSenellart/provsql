@@ -128,6 +128,22 @@ t|t|t
 mc_mean_is_null|mc_var_is_null|mc_moment_is_null
 t|t|t
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+grp|join_avg_mean|join_avg_var
+g1|34|5
+g2||
+(2 rows)
+shown_keeps_mixtures|shown_keeps_tokens
+t|t
+(1 row)
 den_kind|den_child_kind
 arith|value
 (1 row)

@@ -1074,27 +1074,47 @@ Immediately before ``runConstantFold`` in the same load-time
 sequence, ``foldDegenerateMixtures`` collapses a classic Bernoulli
 ``mixture(p, X, Y)`` whose selector ``p`` is *certainly* true or
 false to the surviving arm: ``X`` when :math:`\Pr(p) = 1`, ``Y``
-when :math:`\Pr(p) = 0`. The weight is read only where it is known
-without a probability computation – a resolved ``gate_one`` /
-``gate_zero`` selector, or a bare ``gate_input`` whose pinned
-probability is exactly ``1`` or ``0`` (the default ``1`` of a
-non-probabilistic tuple included). The collapse rewrites the
-mixture as a single-wire ``gate_arith`` ``PLUS`` passthrough to
-the survivor (``liftConditionedToTarget``), which *references*
-rather than copies it, so a shared survivor keeps its single gate
-identity and single Monte-Carlo draw; ``foldSemiringIdentities``
-then unwraps the passthrough. Ordering it before the constant fold
-is what lets a provenance-weighted count of certain tuples (the
-denominator of the ``avg`` rewrite, see *Aggregate Dispatch*)
-reduce to a ``gate_value``. The fold is exact and
-correlation-safe precisely at :math:`\pi \in \{0, 1\}`: a
-deterministic selector shared across several mixtures couples
-none of them, whereas a fractional selector genuinely does, so
-the pass admits only the two endpoints and leaves every
-fractional Bernoulli for the Monte-Carlo sampler. A compound
-Boolean selector – whose :math:`\Pr(p)` would need a (possibly
-#P-hard) evaluation and depends on mutable input probabilities –
-is left intact for the probability-aware evaluators.
+when :math:`\Pr(p) = 0`. At load time, for every consumer, the
+selector must be a constant ``gate_one`` / ``gate_zero`` (a
+comparison :cfunc:`runRangeCheck` decided, say): that rewrite
+depends on no tuple's provenance, so the displayed circuit
+(:sqlfunc:`simplified_circuit_subgraph`, Studio, PROV export) and
+semiring evaluation keep every tuple token. A literal probability
+of exactly ``1`` or ``0`` never reaches the circuit at all:
+``mixture(p_value double precision, x, y)`` then returns ``x`` or
+``y`` itself instead of minting a Bernoulli.
+
+The probability and distribution readouts go one step further,
+through :cfunc:`applyProbabilisticSimplification`, which
+:cfunc:`getJointCircuit` (whose callers are all readouts), the
+``expectation`` dispatch and :sqlfunc:`probability_evaluate` call
+right after loading. There a selector is also certain when its
+Boolean subcircuit (``plus`` / ``times`` / ``monus`` and identity
+wrappers) has every input at probability exactly ``1`` or ``0``,
+the default ``1`` of a tuple no probability has been written on
+included; one Boolean pass, following the rules of the
+Monte-Carlo sampler's ``evalBool``, decides it without any
+probability computation. This covers a row of a join, whose
+provenance is the product of its tuples' inputs. A probability is
+written at most once, replacing the default, and the pass reruns
+at every load, so a readout always sees the probabilities current
+when it runs.
+
+The collapse rewires every parent of the mixture straight to the
+survivor (``GenericCircuit::redirectGates``, which also moves the
+mixture's UUID, should it be a root), *referencing* rather than
+copying it, so a shared survivor keeps its single gate identity and
+single Monte-Carlo draw, and the closed forms that look for a bare
+``gate_rv`` or ``gate_value`` child find one. Ordering
+the fold before the constant fold is what lets a
+provenance-weighted count of certain tuples (the denominator of
+the ``avg`` rewrite, see *Aggregate Dispatch*) reduce to a
+``gate_value``. The fold is exact and correlation-safe precisely
+at :math:`\pi \in \{0, 1\}`: a deterministic selector shared
+across several mixtures couples none of them, whereas a
+fractional selector genuinely does, so the pass admits only the
+two endpoints and leaves every selector that varies across worlds
+for the probability-aware evaluators.
 
 Information Theory
 ------------------
@@ -1171,7 +1191,7 @@ is *uncertainly* present. When every contributing tuple is
 certain – the default for a provenance-tracked but
 non-probabilistic table, where each input gate carries the
 default probability 1 – the count is deterministic, and
-``expected(avg(x))`` is simply ``E[SUM] / n``. The load-time
+``expected(avg(x))`` is simply ``E[SUM] / n``. The readouts'
 ``foldDegenerateMixtures`` pass (see *HybridEvaluator*) turns
 this into an analytic result: a Bernoulli
 ``mixture`` whose selector is certainly true (:math:`\pi = 1`) or

@@ -161,10 +161,19 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-simplify-on-load:
 
 ``provsql.simplify_on_load`` (default: ``on``)
-    Simplify provenance circuits when they are loaded for evaluation
-    (e.g., comparisons decidable from the supports of their operands
-    become constants), for every consumer, :sqlfunc:`view_circuit` and
-    Studio included. Set to ``off`` to inspect the raw circuit. See
+    Simplify provenance circuits when they are loaded, without changing
+    the stored circuit. For every consumer, :sqlfunc:`view_circuit` and
+    Studio included, only rewrites that depend on no tuple's provenance
+    apply: a comparison decidable from the supports of its operands
+    becomes a constant, a mixture whose choice is then constant keeps
+    its surviving branch, and constant arithmetic is computed. The
+    probability and distribution readouts (:sqlfunc:`expected`,
+    :sqlfunc:`variance`, :sqlfunc:`quantile`,
+    :sqlfunc:`probability_evaluate`…) further treat a mixture over
+    tuples that are certainly present or absent (probability 1 or 0,
+    including the default 1 of a tuple with no probability) as its
+    surviving branch; the displayed circuit keeps those tuples' tokens.
+    Set to ``off`` to inspect the raw circuit. See
     :doc:`continuous-distributions`.
 
 .. _provsql-gate-cache-size:

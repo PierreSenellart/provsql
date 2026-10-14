@@ -192,6 +192,26 @@ bool GenericCircuit::foldSemiringIdentities()
   return ever;
 }
 
+void GenericCircuit::redirectGates(std::unordered_map<gate_t, gate_t> subst)
+{
+  if (subst.empty()) return;
+  for (auto &kv : subst) {
+    gate_t cur = kv.second;
+    while (subst.count(cur)) cur = subst[cur];
+    kv.second = cur;
+  }
+  const std::size_t n = getNbGates();
+  for (std::size_t i = 0; i < n; ++i)
+    for (gate_t &w : getWires(static_cast<gate_t>(i))) {
+      auto it = subst.find(w);
+      if (it != subst.end()) w = it->second;
+    }
+  for (const auto &kv : subst) {
+    auto uit = id2uuid.find(kv.first);
+    if (uit != id2uuid.end()) uuid2id[uit->second] = kv.second;
+  }
+}
+
 bool GenericCircuit::applyFoldRuleSweep(bool boolean_level)
 {
   GenericCircuit &gc = *this;

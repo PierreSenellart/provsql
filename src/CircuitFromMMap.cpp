@@ -158,14 +158,15 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
      * @c arith(NEG, value:c) where @c value:-c would round-trip
      * identically -- into the canonical form so downstream
      * @c collectRvConstraints / @c asRvVsConstCmp recognise them. */
-    /* Collapse Bernoulli mixtures whose selector is certainly true or
-     * false to the surviving arm, before constant folding: this turns a
-     * provenance-weighted count over prob-1 tuples (avg's denominator)
-     * into a plain sum of the constant 1, which runConstantFold then
-     * reduces to a gate_value the analytic DIV evaluator can divide by,
-     * and unwraps each numerator arm to its bare RV.  Only exact
-     * pi in {0,1} folds, so no fractional-Bernoulli coupling is lost. */
-    provsql::foldDegenerateMixtures(gc);
+    /* Collapse Bernoulli mixtures whose selector is the constant
+     * gate_one / gate_zero (a comparison decided above, say) to the
+     * surviving arm, before constant folding.  Nothing here reads a
+     * probability: a mixture over a tuple's token is left in place
+     * whatever that token's probability, so the circuit every consumer
+     * sees -- the displayed one included -- keeps its provenance.  The
+     * probability readouts fold those too, separately
+     * (applyProbabilisticSimplification). */
+    provsql::foldDegenerateMixtures(gc, false);
     provsql::runConstantFold(gc);
     gc.foldSemiringIdentities();
   }
@@ -182,6 +183,22 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
     gc.foldBooleanIdentities();
   } else if (provsql_absorptive_provenance) {
     gc.foldAbsorptiveIdentities();
+  }
+}
+
+void applyProbabilisticSimplification(GenericCircuit &gc)
+{
+  if (!provsql_simplify_on_load)
+    return;
+  /* A mixture whose selector is certain by the probabilities of its
+   * inputs (every one 1 or 0, the default 1 of a tuple no probability
+   * has been written on included) reads as its surviving arm in every
+   * world, so the readouts, which already depend on probabilities, may
+   * fold it; the same constant folding as at load time then reduces,
+   * e.g., avg's count over certain tuples to a gate_value. */
+  if (provsql::foldDegenerateMixtures(gc, true) > 0) {
+    provsql::runConstantFold(gc);
+    gc.foldSemiringIdentities();
   }
 }
 
@@ -268,6 +285,10 @@ GenericCircuit getJointCircuit(
   GenericCircuit gc = getJointCircuitFromMMap(tokens);
 
   applyLoadTimeSimplification(gc);
+  /* Every caller of the joint loader reads a distribution or a
+   * probability (moments, quantiles, support, samples, histograms,
+   * covariance, information measures), never the displayed circuit. */
+  applyProbabilisticSimplification(gc);
 
   /* Resolve the gate_t for the roots AFTER simplification.  The
    * passes mutate gate types in place but never delete gates, so the

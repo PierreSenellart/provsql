@@ -442,6 +442,7 @@ static Datum provenance_evaluate_compiled_internal
       throw CircuitException(
               "Unknown element type for expectation: must be float8");
     GenericCircuit gc = getGenericCircuit(token);
+    applyProbabilisticSimplification(gc);
     auto root = gc.getGate(uuid2string(token));
     return Float8GetDatum(provsql::compute_expectation(gc, root));
   }

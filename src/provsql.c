@@ -38103,18 +38103,23 @@ void _PG_init(void) {
                              NULL,
                              NULL);
   DefineCustomBoolVariable("provsql.simplify_on_load",
-                           "Apply universal cmp-resolution passes when "
-                           "loading a provenance circuit.",
-                           "When on (default), every GenericCircuit returned "
-                           "by getGenericCircuit goes through RangeCheck "
-                           "(and any future universal pass): comparators "
-                           "decidable to certain Boolean values become "
-                           "Bernoulli gate_input gates with probability 0 "
-                           "or 1, transparent to every downstream consumer "
-                           "(semiring evaluators, MC, view_circuit, PROV "
-                           "export). Set off to inspect raw circuit "
-                           "structure (e.g. when debugging gate-creation "
-                           "paths).",
+                           "Simplify provenance circuits as they are "
+                           "loaded.",
+                           "When on (default), a circuit loaded for any "
+                           "consumer (semiring evaluation, view_circuit, "
+                           "PROV export, Studio) is simplified by rewrites "
+                           "that depend on no tuple's provenance: "
+                           "comparisons decidable from the supports of their "
+                           "operands become constant gates, mixtures whose "
+                           "choice is then constant keep their surviving "
+                           "branch, and constant arithmetic is computed. The "
+                           "probability and distribution readouts "
+                           "(expected, variance, quantile, "
+                           "probability_evaluate...) further treat a mixture "
+                           "over tuples whose probabilities are all 1 or 0 "
+                           "(the default 1 included) as its surviving "
+                           "branch. The stored circuit is never changed. Set "
+                           "off to inspect raw circuit structure.",
                            &provsql_simplify_on_load,
                            true,
                            PGC_USERSET,

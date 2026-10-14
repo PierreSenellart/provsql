@@ -2300,6 +2300,7 @@ static Datum probability_evaluate_internal
   // on (the default), so the circuit we receive here is already
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
+  applyProbabilisticSimplification(gc);
   gate_t gc_root = gc.getGate(uuid2string(token));
 
   // Conditioning gate (the | / cond operator, uuid carrier): a terminal

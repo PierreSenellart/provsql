@@ -363,6 +363,24 @@ void liftConditionedToTarget(gate_t g, gate_t target) {
 }
 
 /**
+ * @brief Make every reference to a gate of @p subst point to its target
+ *        instead.
+ *
+ * Rewires each wire whose child is a key of @p subst to the
+ * corresponding target (followed transitively, so a target that is
+ * itself redirected leads to the end of the chain), and moves the UUID
+ * of each redirected gate to its target, so that @c getGate on that
+ * UUID -- a root resolved after the rewrite -- also lands on the target.
+ * The redirected gates are left in place, orphaned.  Unlike a content
+ * copy, the target keeps its single identity: a shared @c gate_rv still
+ * gets one draw per Monte Carlo iteration, a shared input still counts
+ * once.  Operates on the in-memory circuit only.
+ *
+ * @param subst  Map from each redirected gate to its target.
+ */
+void redirectGates(std::unordered_map<gate_t, gate_t> subst);
+
+/**
  * @brief Drop semiring identity wires and collapse single-wire
  *        @c gate_times / @c gate_plus to their lone non-identity
  *        child; collapse a @c gate_times containing a @c gate_zero

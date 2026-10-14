@@ -136,25 +136,37 @@ unsigned runConstantFold(GenericCircuit &gc);
  * deterministic selector carries no coupling, so folding it does not
  * decouple a selector shared across mixtures -- which is why only the
  * exact 0/1 cases are admitted (a fractional pi genuinely couples the
- * arms and must reach the sampler intact).  pi is taken only where it
- * is known without a probability computation: a resolved
- * @c gate_one / @c gate_zero selector, or a bare @c gate_input whose
- * pinned probability is 1 or 0 (the latter includes the default 1 of a
- * provenance-tracked but non-probabilistic tuple).  A compound Boolean
- * selector is left for the probability-aware evaluators.
+ * arms and must reach the sampler intact).
  *
- * The mixture is rewritten as a single-wire @c gate_arith @c PLUS
- * passthrough to the surviving arm (@c liftConditionedToTarget), so it
- * references rather than copies the survivor -- a shared survivor keeps
- * its single gate identity.  Runs at load time before
- * @c runConstantFold and @c foldSemiringIdentities, which then reduce
- * the resulting passthroughs and any now-constant enclosing arithmetic
- * (e.g. the provenance-weighted count in @c avg's denominator collapses
- * to a @c gate_value, letting the analytic evaluator divide by it).
+ * Which selectors count as certain depends on @p read_probabilities.
+ * Without it, only a @c gate_one / @c gate_zero selector: the rewrite
+ * then depends on no provenance and is sound for every consumer, which
+ * is why the universal load-time pass uses this form, so that the
+ * displayed circuit keeps every tuple token.  With it, also a selector
+ * whose Boolean subcircuit (@c plus / @c times / @c monus and identity
+ * wrappers over inputs) has every input at probability 1 or 0, the
+ * former including the default 1 of a tuple no probability has been
+ * written on; one Boolean pass decides it, without a probability
+ * computation.  This covers a row's provenance in a join, a product of
+ * its tuples' inputs.  Only the probability readouts, which depend on
+ * probabilities anyway, use this form (@c applyProbabilisticSimplification).
  *
+ * Every parent of the mixture is rewired straight to the surviving arm
+ * (@c GenericCircuit::redirectGates), which references rather than
+ * copies it -- a shared survivor keeps its single gate identity -- and
+ * leaves no wrapper in the way of the closed forms that look for a
+ * bare @c gate_rv / @c gate_value child.  Runs before @c runConstantFold and
+ * @c foldSemiringIdentities, which then reduce any now-constant
+ * enclosing arithmetic (e.g. the provenance-weighted count in @c avg's
+ * denominator collapses to a @c gate_value, letting the analytic
+ * evaluator divide by it).
+ *
+ * @param gc                  Circuit, rewritten in place.
+ * @param read_probabilities  Also fold selectors certain by the
+ *                            probabilities of their inputs.
  * @return Number of mixtures collapsed.
  */
-unsigned foldDegenerateMixtures(GenericCircuit &gc);
+unsigned foldDegenerateMixtures(GenericCircuit &gc, bool read_probabilities);
 
 /**
  * @brief Marginalise unresolved continuous-island @c gate_cmp gates

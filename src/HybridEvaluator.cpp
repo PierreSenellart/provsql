@@ -1273,10 +1273,102 @@ unsigned runConstantFold(GenericCircuit &gc)
   return counter;
 }
 
-unsigned foldDegenerateMixtures(GenericCircuit &gc)
+namespace {
+
+/* Truth value of a Boolean selector when it is the same in every world:
+ * 1 (certainly true), 0 (certainly false), or -1 (it varies, or the gate
+ * is not one we read).  The rules are those of the Monte Carlo sampler's
+ * Sampler::evalBool, which draws an input true with probability
+ * getProb(): an input (or update) gate is fixed exactly when its
+ * probability is 1 or 0, plus is OR, times is AND, monus is AND NOT, and
+ * the identity wrappers pass their child through.  Short-circuiting is
+ * sound because it holds in every world: a certainly-true child decides
+ * a plus, a certainly-false one a times, however random its siblings.
+ * Anything else (a comparison over random variables, a categorical
+ * outcome, a recursion unknown...) is left as -1.
+ *
+ * Iterative post-order walk with a per-gate memo (-2 = not computed),
+ * shared across the selectors of one load: selector subcircuits can be
+ * deep (recursive queries) and shared between mixtures (a row's
+ * provenance under both sum and count). */
+signed char selector_truth(const GenericCircuit &gc, gate_t root,
+                           std::vector<signed char> &memo)
+{
+  const auto idx = [](gate_t g) { return static_cast<std::size_t>(g); };
+  if (memo[idx(root)] != -2) return memo[idx(root)];
+
+  std::vector<std::pair<gate_t, bool>> stack{{root, false}};
+  while (!stack.empty()) {
+    auto [g, expanded] = stack.back();
+    stack.pop_back();
+    if (memo[idx(g)] != -2) continue;
+    const auto type = gc.getGateType(g);
+    const auto &wires = gc.getWires(g);
+
+    signed char r = -1;
+    switch (type) {
+      case gate_one:  r = 1; break;
+      case gate_zero: r = 0; break;
+      case gate_input:
+      case gate_update: {
+        const double p = gc.getProb(g);
+        r = p == 1.0 ? 1 : p == 0.0 ? 0 : -1;
+        break;
+      }
+      case gate_plus:
+      case gate_times:
+      case gate_monus:
+      case gate_delta:
+      case gate_assumed:
+      case gate_annotation:
+      case gate_project:
+      case gate_eq: {
+        if (!expanded) {
+          stack.emplace_back(g, true);
+          for (gate_t c : wires)
+            if (memo[idx(c)] == -2) stack.emplace_back(c, false);
+          continue;
+        }
+        if (type == gate_plus) {
+          r = 0;
+          for (gate_t c : wires) {
+            if (memo[idx(c)] == 1) { r = 1; break; }
+            if (memo[idx(c)] == -1) r = -1;
+          }
+        } else if (type == gate_times) {
+          r = 1;
+          for (gate_t c : wires) {
+            if (memo[idx(c)] == 0) { r = 0; break; }
+            if (memo[idx(c)] == -1) r = -1;
+          }
+        } else if (type == gate_monus) {
+          if (wires.size() != 2) break;
+          const auto a = memo[idx(wires[0])], b = memo[idx(wires[1])];
+          r = (a == 0 || b == 1) ? 0 : (a == 1 && b == 0) ? 1 : -1;
+        } else {
+          /* delta / assumed / annotation are single-wire identities;
+           * project / eq read their first wire, as evalBool does. */
+          if (wires.empty()) break;
+          r = memo[idx(wires[0])];
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    memo[idx(g)] = r;
+  }
+  return memo[idx(root)];
+}
+
+} // namespace
+
+unsigned foldDegenerateMixtures(GenericCircuit &gc, bool read_probabilities)
 {
   unsigned counter = 0;
   const auto nb = gc.getNbGates();
+  std::vector<signed char> memo(nb, -2);
+  std::unordered_map<gate_t, gate_t> subst;
   for (std::size_t i = 0; i < nb; ++i) {
     auto g = static_cast<gate_t>(i);
     if (gc.getGateType(g) != gate_mixture) continue;
@@ -1287,44 +1379,49 @@ unsigned foldDegenerateMixtures(GenericCircuit &gc)
     const auto &wires = gc.getWires(g);
     if (wires.size() != 3) continue;
 
-    /* The mixing weight pi = P(selector = true).  We fold only when pi
-     * is known to be exactly 1 or 0 without a probability computation:
-     * a resolved identity selector (gate_one / gate_zero) or a bare
-     * Bernoulli gate_input whose pinned probability is 1 or 0.  In the
-     * loaded circuit an un-set_prob'd input carries the default
-     * probability 1 (GenericCircuit::setGate), which is exactly the
-     * "provenance-tracked but not probabilistic" tuple: certainly
-     * present.  A compound Boolean selector is left intact -- its pi
-     * would require a (possibly #P-hard) probability evaluation and
-     * depends on mutable input probabilities, so it belongs to the
-     * probability-aware evaluators, not this universal load-time pass. */
-    const gate_t sel = wires[0];
-    double pi;
-    switch (gc.getGateType(sel)) {
-      case gate_one:   pi = 1.0; break;
-      case gate_zero:  pi = 0.0; break;
-      case gate_input: pi = gc.getProb(sel); break;
-      default: continue;
+    /* Fold only when the selector has the same truth value in every
+     * world.  Without read_probabilities that is a gate_one / gate_zero
+     * selector alone (a comparison RangeCheck decided, say): nothing
+     * that depends on provenance, so the rewrite is sound for every
+     * consumer, the displayed circuit and semiring evaluation included,
+     * and keeps every tuple token in place.
+     *
+     * With read_probabilities -- the probability readouts only, which
+     * already depend on probabilities -- it is also a selector whose
+     * Boolean subcircuit has every input at probability 1 or 0, decided
+     * by one Boolean pass (selector_truth): a tuple no probability has
+     * been written on reads as the default 1, certainly present.  A
+     * probability is written at most once, replacing that default, and
+     * this pass reruns at every load, so an evaluation always sees the
+     * probabilities current at that time.  A selector that varies across
+     * worlds is left alone: its probability may need a #P-hard
+     * computation, and it couples the mixtures sharing it. */
+    signed char truth;
+    if (read_probabilities) {
+      truth = selector_truth(gc, wires[0], memo);
+    } else {
+      const auto t = gc.getGateType(wires[0]);
+      truth = t == gate_one ? 1 : t == gate_zero ? 0 : -1;
     }
 
-    /* A degenerate Bernoulli carries no coupling: collapsing the
+    /* A deterministic selector carries no coupling: collapsing the
      * mixture to its surviving arm is exact even when the selector is
      * shared with other mixtures (they too are deterministic).  This is
-     * unsound at any fractional pi, which is why the switch above admits
-     * only the exact 0/1 cases.  liftConditionedToTarget rewrites g as a
-     * single-wire arith PLUS REFERENCING the survivor, so a shared
-     * survivor RV keeps its single gate identity (and single MC draw);
-     * foldSemiringIdentities then collapses the passthrough wrapper, and
-     * a constant survivor lets runConstantFold reduce the enclosing sum
-     * (e.g. avg's provenance-weighted count) to a gate_value. */
-    if (pi == 1.0) {
-      gc.liftConditionedToTarget(g, wires[1]);
-      ++counter;
-    } else if (pi == 0.0) {
-      gc.liftConditionedToTarget(g, wires[2]);
+     * unsound for a selector that varies across worlds, which is why
+     * only the certain cases fold. */
+    if (truth == 1 || truth == 0) {
+      subst[g] = wires[truth == 1 ? 1 : 2];
       ++counter;
     }
   }
+  /* Point every parent straight at the surviving arm (and the mixture's
+   * UUID too, should it be a root resolved afterwards), so the closed
+   * forms that look for a bare gate_rv or gate_value child see one; the
+   * survivor keeps its single identity (one Monte Carlo draw however
+   * many parents), and a constant survivor lets runConstantFold reduce
+   * the enclosing sum (e.g. avg's provenance-weighted count) to a
+   * gate_value. */
+  gc.redirectGates(std::move(subst));
   return counter;
 }
 

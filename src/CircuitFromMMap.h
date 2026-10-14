@@ -72,6 +72,25 @@ BooleanCircuit getBooleanCircuit(
 GenericCircuit getGenericCircuit(pg_uuid_t token);
 
 /**
+ * @brief Simplify a loaded circuit for a probability readout.
+ *
+ * The load-time passes of @c getGenericCircuit / @c getJointCircuit read
+ * no probability, so the circuit they return keeps every tuple token and
+ * serves every consumer, the displayed circuit included.  A readout of a
+ * probability or of a distribution (expectation, moments, quantiles,
+ * samples, histograms, information measures, event probabilities) may
+ * further read a mixture whose selector is certain by the probabilities
+ * of its inputs as its surviving arm; this applies that rewrite
+ * (@c foldDegenerateMixtures with @c read_probabilities) and the
+ * constant folding it enables.  Gated, like the load-time passes, by
+ * @c provsql.simplify_on_load.  Call it right after loading, before any
+ * evaluation.
+ *
+ * @param gc  Circuit, rewritten in place.
+ */
+void applyProbabilisticSimplification(GenericCircuit &gc);
+
+/**
  * @brief Propagate the per-gate d-DNNF certificate from @p gc to @p c.
  *
  * For every @c gate_plus / @c gate_times of @p gc carrying the
@@ -118,9 +137,10 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token);
  * the value's draw through @c Sampler's per-iteration cache.
  *
  * The on-load simplification passes that @c getGenericCircuit runs
- * (@c runRangeCheck and @c foldSemiringIdentities, gated by
- * @c provsql.simplify_on_load) are applied to the joint circuit too.
- * Both passes are in-place: gate types may change, but UUID-to-gate_t
+ * (gated by @c provsql.simplify_on_load) are applied to the joint
+ * circuit too, followed by @c applyProbabilisticSimplification: every
+ * caller of this loader is a probability or distribution readout.  The
+ * passes are in-place: gate types may change, but UUID-to-gate_t
  * mappings stay valid, so callers can resolve their two roots via
  * @c getGate after the call returns.
  *

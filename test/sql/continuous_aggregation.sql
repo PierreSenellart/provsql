@@ -431,6 +431,49 @@ RESET provsql.simplify_on_load;
 DROP TABLE rv_avg_absent_res;
 DROP TABLE rv_avg_absent;
 
+-- 7c''.  Join: the per-row selector is times(left, right), a compound
+--   Boolean selector.  Every input is at probability 1 (the default) or
+--   0, so it is the same in every world and the mixtures fold: avg is
+--   computed in closed form, with the Monte Carlo fallback disabled.
+--   Rows: a (N(28, 2)) and b (N(40, 4)) in group g1; c in group g2 with
+--   its right-hand row at probability 0, so g2 is certainly empty.
+
+CREATE TABLE rv_join_l(id int, grp text, x random_variable);
+CREATE TABLE rv_join_r(id int, ok boolean);
+INSERT INTO rv_join_l VALUES
+  (1, 'g1', provsql.normal(28, 2)),
+  (2, 'g1', provsql.normal(40, 4)),
+  (3, 'g2', provsql.normal(10, 1));
+INSERT INTO rv_join_r VALUES (1, true), (2, true), (3, false);
+SELECT add_provenance('rv_join_l');
+SELECT add_provenance('rv_join_r');
+DO $$ BEGIN PERFORM set_prob(provsql, 0) FROM rv_join_r WHERE id = 3; END $$;
+
+CREATE TABLE rv_join_res AS
+  SELECT l.grp, provsql.avg(l.x) AS a
+  FROM rv_join_l l JOIN rv_join_r r ON r.id = l.id
+  GROUP BY l.grp;
+SELECT remove_provenance('rv_join_res');
+
+SET provsql.rv_mc_samples = 0;
+SELECT grp,
+       provsql.expected(a)  AS join_avg_mean,
+       provsql.variance(a)  AS join_avg_var
+  FROM rv_join_res ORDER BY grp;
+SET provsql.rv_mc_samples = 50000;
+
+-- The fold is the readouts' only: the circuit shown for g1 (what Studio
+-- and view_circuit display) keeps its mixtures and the tuples' tokens.
+SELECT bool_or(e->>'gate_type' = 'mixture') AS shown_keeps_mixtures,
+       bool_or(e->>'gate_type' = 'input')   AS shown_keeps_tokens
+  FROM rv_join_res,
+       jsonb_array_elements(provsql.simplified_circuit_subgraph(a::uuid, 8)) e
+ WHERE grp = 'g1';
+
+DROP TABLE rv_join_res;
+DROP TABLE rv_join_l;
+DROP TABLE rv_join_r;
+
 -- 7d.  Direct (untracked) call.
 --   No add_provenance => the planner hook leaves the Aggref alone and
 --   the FFUNC sees raw RV uuids, not mixture-wrapped ones.  The fallback
