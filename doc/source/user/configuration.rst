@@ -38,10 +38,11 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``'absorptive'``
         Circuits may additionally be valid only for *absorptive*
         commutative semirings (those where :math:`1 \oplus a = 1`:
-        probability, Boolean, min-plus over nonnegative costs,
-        Viterbi…); a semiring whose multiplication does not commute,
-        such as :sqlfunc:`sr_best_path`, refuses the circuits that rely
-        on it, which do not keep the order of the query. Recursive
+        Boolean, min-plus over nonnegative costs, Viterbi…), and for
+        probability computation; a semiring whose multiplication does
+        not commute, such as :sqlfunc:`sr_best_path`, refuses the
+        circuits that rely on it, which do not keep the order of the
+        query. Recursive
         reachability on bounded-treewidth data is then compiled so that
         it evaluates exactly under all of them, e.g., min-cost
         reachability (see :doc:`semirings` and :doc:`probabilities`),

@@ -528,9 +528,10 @@
           ? ('Absorptive root: this subcircuit was compiled by the '
              + 'bounded-treewidth reachability route, and represents a '
              + 'recursive query\u2019s provenance only up to absorption. '
-             + 'Only absorptive semirings (probability, Boolean, '
-             + 'nonnegative min-plus, Viterbi, ...) are sound to evaluate '
-             + 'here ; counting and why-provenance refuse.')
+             + 'Only probability and commutative absorptive semirings '
+             + '(Boolean, nonnegative min-plus, Viterbi\u2026) are sound '
+             + 'to evaluate here; counting, why-provenance and the '
+             + 'non-commutative best-path refuse.')
           : ('Absorptive fold: this gate\u2019s wires were simplified '
              + 'under rules sound in every absorptive semiring '
              + '(plus-idempotence, plus-with-one, plus-absorbs-times). '

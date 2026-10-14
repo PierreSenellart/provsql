@@ -336,7 +336,7 @@
             <span>Boolean</span>
           </label>
           <label class="wp-prov-scheme__opt" data-scheme="absorptive"
-                 title="Assume an absorptive semiring (idempotent product-of-the-same): licenses constructions sound only for absorptive semirings, such as stopping cyclic recursive queries at the absorptive-value fixpoint and absorptive circuit simplifications. Only absorptive (and Boolean-rewrite-compatible) semirings may then be evaluated.">
+                 title="Assume a commutative absorptive semiring (one where 1 ⊕ a = 1: Boolean, nonnegative min-plus, Viterbi…): licenses constructions sound only for these, chiefly the exact reachability route over graphs of bounded treewidth, and absorptive circuit simplifications. Only commutative absorptive (and Boolean-compatible) semirings, and probability computation, may then evaluate the circuit; a non-commutative one, such as best-path, refuses it.">
             <input type="radio" name="prov-scheme" value="absorptive">
             <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
             <span>Absorptive</span>

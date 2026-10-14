@@ -1076,7 +1076,7 @@
         n.absorptive_assumed
           ? ('Absorptive root: compiled by the bounded-treewidth '
              + 'reachability route, exact only up to absorption; only '
-             + 'absorptive semirings are sound here.')
+             + 'commutative absorptive semirings are sound here.')
           : ('Absorptive fold: wires simplified under rules sound in every '
              + 'absorptive semiring; absorptive and Boolean-compatible '
              + 'semirings are sound here.'));

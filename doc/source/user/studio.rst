@@ -245,10 +245,12 @@ query box selects the provenance class the next batch runs under:
   Boolean-compatible semirings evaluate the resulting circuit; the
   eval-strip semiring picker hides the others.
 * :guilabel:`Absorptive`: sets ``provsql.provenance = 'absorptive'``,
-  allowing constructions sound only for absorptive semirings, chiefly
-  the exact reachability route over graphs of bounded treewidth (see
-  :ref:`network-reliability-btw`). Only absorptive (and
-  Boolean-compatible) semirings then evaluate the circuit.
+  allowing constructions sound only for commutative absorptive
+  semirings, chiefly the exact reachability route over graphs of
+  bounded treewidth (see :ref:`network-reliability-btw`). Only
+  commutative absorptive (and Boolean-compatible) semirings then
+  evaluate the circuit; a non-commutative one, such as
+  :sqlfunc:`sr_best_path`, refuses it.
 
 The switch is free in Circuit and Notebook modes. Where mode locks it
 to :guilabel:`Where`; **Contributions** and **Temporal** modes lock it
