@@ -54,3 +54,6 @@ ERROR:  provsql.mixture: p must be a Boolean gate (input/mulinput/update/plus/ti
 ERROR:  provsql.mixture: probability must be in [0,1] (got 1.5)
 ERROR:  provsql.mixture: probability must be in [0,1] (got -0.1)
 ERROR:  provsql.mixture: probability must be in [0,1] (got NaN)
+p1_is_x|p0_is_y
+t|t
+(1 row)

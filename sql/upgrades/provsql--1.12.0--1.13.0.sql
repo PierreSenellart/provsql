@@ -6121,5 +6121,31 @@ $$
   SELECT * FROM provsql.provenance_evaluate_best_path(token, costs, labels);
 $$ LANGUAGE sql STRICT PARALLEL SAFE STABLE;
 
+-- mixture(p, x, y) with a literal probability of exactly 1 or 0 is x or y
+-- itself: no Bernoulli gate is minted for a constant.
+CREATE OR REPLACE FUNCTION mixture(
+  p_value double precision,
+  x random_variable,
+  y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  p_token uuid;
+BEGIN
+  IF p_value IS NULL OR p_value <> p_value OR p_value < 0 OR p_value > 1 THEN
+    RAISE EXCEPTION 'provsql.mixture: probability must be in [0,1] (got %)', p_value;
+  END IF;
+  IF p_value = 1 THEN
+    RETURN x;
+  ELSIF p_value = 0 THEN
+    RETURN y;
+  END IF;
+  p_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(p_token, 'input');
+  PERFORM provsql.set_prob(p_token, p_value);
+  RETURN provsql.mixture(p_token, x, y);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
 SELECT reset_constants_cache();
 

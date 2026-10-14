@@ -5475,6 +5475,9 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
  * @c uuid_generate_v4() token, pins @p p_value via @c set_prob, and
  * threads everything into the uuid-keyed constructor.
  *
+ * A probability of exactly 1 or 0 is a constant, not a coin: the
+ * mixture is then @p x or @p y itself, and no gate is created.
+ *
  * Each call mints a NEW Bernoulli, so two calls to
  * <tt>mixture(0.5, X, Y)</tt> are *independent* mixtures whose branch
  * selections are uncorrelated.  When coupling is desired (e.g. two
@@ -5499,6 +5502,11 @@ DECLARE
 BEGIN
   IF p_value IS NULL OR p_value <> p_value OR p_value < 0 OR p_value > 1 THEN
     RAISE EXCEPTION 'provsql.mixture: probability must be in [0,1] (got %)', p_value;
+  END IF;
+  IF p_value = 1 THEN
+    RETURN x;
+  ELSIF p_value = 0 THEN
+    RETURN y;
   END IF;
   p_token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(p_token, 'input');

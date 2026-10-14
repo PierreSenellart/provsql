@@ -180,3 +180,14 @@ SELECT provsql.mixture((-0.1)::float8, provsql.normal(0, 1), provsql.normal(0, 1
 SELECT provsql.mixture('NaN'::float8, provsql.normal(0, 1), provsql.normal(0, 1));
 
 \set VERBOSITY default
+
+-- G. probability-shorthand overload at the endpoints: a literal
+--    probability of exactly 1 or 0 is a constant, not a coin, so the
+--    mixture is the corresponding branch itself and no Bernoulli gate
+--    is minted.
+CREATE TEMP TABLE mix_endpoints AS
+  SELECT provsql.normal(3, 1) AS x, provsql.uniform(0, 1) AS y;
+SELECT (provsql.mixture(1::float8, x, y))::uuid = x::uuid AS p1_is_x,
+       (provsql.mixture(0::float8, x, y))::uuid = y::uuid AS p0_is_y
+  FROM mix_endpoints;
+DROP TABLE mix_endpoints;
