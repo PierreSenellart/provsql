@@ -349,12 +349,12 @@ Re-open the filtered query from Step 2:
     WHERE pm25 > 35
       AND station_id = 's1'
 
-Click a result row's ``pm25`` cell. The eval strip's
-:guilabel:`Condition on` text input auto-presets to the row's
-provenance UUID, and the :guilabel:`Conditioned by:` badge
-underneath the input is active. Pick *Distribution profile* and
-run: the histogram now shows the *truncated* shape, restricted to
-the tail above ``35``. Pick *Moment* with ``k = 1`` and ``raw``:
+Click a result row's ``pm25`` cell and pick *Distribution profile*
+in the eval strip. The strip then shows a :guilabel:`Condition on`
+text input, preset to the row's provenance UUID, with the
+:guilabel:`Conditioned by:` badge underneath it active. Run: the
+histogram now shows the *truncated* shape, restricted to the tail
+above ``35``. Pick *Moment* with ``k = 1`` and ``raw``:
 the panel returns the closed-form Mills-ratio mean of the
 `truncated normal
 <https://en.wikipedia.org/wiki/Truncated_normal_distribution>`_,
