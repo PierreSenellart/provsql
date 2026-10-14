@@ -518,6 +518,7 @@ _C_FUNC_MAP = {
     'dDNNF::simplify':                       '/doxygen-c/html/classdDNNF.html#a6cfc6e47106f1a7a2c7149933f01f6de',
     'dDNNFTreeDecompositionBuilder::builddDNNF': '/doxygen-c/html/classdDNNFTreeDecompositionBuilder.html#a576d126fe1e385a20c0522322bec82ef',
     'getJointCircuit':                       '/doxygen-c/html/CircuitFromMMap_8h.html#aa005f0d1643bf481ed57ee2bc3134f20',
+    'applyProbabilisticSimplification':      '/doxygen-c/html/CircuitFromMMap_8h.html#a45c03f959e96a30d121f2083d2ef9ab8',
     'shapley_internal':                      '/doxygen-c/html/shapley_8cpp.html#a4703d29e438b3454874017304a945d67',
     # CircuitCache
     'CircuitCache':                          '/doxygen-c/html/classCircuitCache.html',
