@@ -259,7 +259,7 @@ a Bernoulli mixture:
 .. code-block:: postgresql
 
     SELECT r.id, r.station_id,
-           provsql.mixture(cs.p, r.pm25, r.pm25 / 1.2) AS pm25_calibrated
+           mixture(cs.p, r.pm25, r.pm25 / 1.2) AS pm25_calibrated
     FROM readings r JOIN calibration_status cs USING (station_id)
     WHERE r.station_id = 's1'
 
@@ -523,10 +523,9 @@ Because the children here are mixtures (not bare leaves), the
 expectation is estimated by Monte Carlo.
 
 The same-row form is ``greatest`` / ``least``: the SQL keywords
-accept ``random_variable`` arguments in a query over a
-provenance-tracked relation; in a query that involves none, use the
-schema-qualified ``provsql.greatest(…)`` / ``provsql.least(…)``
-constructors instead, as Step 15 does:
+accept ``random_variable`` arguments, which ProvSQL rewrites into
+order statistics (Step 15 uses ``least`` outside any
+provenance-tracked relation):
 
 .. code-block:: postgresql
 
@@ -624,7 +623,7 @@ makes them correlated -- then measure it:
 
 .. code-block:: postgresql
 
-    WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+    WITH plume AS (SELECT normal(0, 3) AS dust)
     SELECT covariance(a.pm25 + p.dust, b.pm25 + p.dust)  AS cov_shared,
            correlation(a.pm25 + p.dust, b.pm25 + p.dust) AS corr_shared,
            covariance(a.pm25, b.pm25)                    AS cov_indep,
@@ -655,9 +654,9 @@ chi-squared test statistic:
 
 .. code-block:: postgresql
 
-    SELECT expected(provsql.gamma(2.5, 0.5))       AS drift_mean,
-           variance(provsql.gamma(2.5, 0.5))       AS drift_var,
-           quantile(provsql.chi_squared(4), 0.95)  AS chi2_crit
+    SELECT expected(gamma(2.5, 0.5))       AS drift_mean,
+           variance(gamma(2.5, 0.5))       AS drift_var,
+           quantile(chi_squared(4), 0.95)  AS chi2_crit
 
 ``gamma(k = 2.5, λ = 0.5)`` has mean ``k/λ = 5`` and variance
 ``k/λ² = 10``, both exact; the χ²₄ critical value comes out
@@ -669,9 +668,9 @@ units fails over to the second when the first dies; the time to
 
 .. code-block:: postgresql
 
-    SELECT expected(provsql.least(provsql.weibull(1.5, 4.0),
-                                  provsql.weibull(1.5, 4.0))) AS first_failure,
-           expected(provsql.weibull(1.5, 4.0))                AS single_lifetime
+    SELECT expected(least(weibull(1.5, 4.0),
+                          weibull(1.5, 4.0))) AS first_failure,
+           expected(weibull(1.5, 4.0))        AS single_lifetime
 
 A single ``weibull(k = 1.5, λ = 4)`` unit lasts
 ``λ·Γ(1 + 1/k) ≈ 3.61`` years on average; the minimum of two
@@ -683,9 +682,9 @@ over a 30 μg/m³ floor:
 
 .. code-block:: postgresql
 
-    SELECT expected(provsql.pareto(30, 2.5))       AS spike_mean,
-           quantile(provsql.pareto(30, 2.5), 0.95) AS spike_p95,
-           expected(provsql.pareto(30, 1.0))       AS undefined_mean
+    SELECT expected(pareto(30, 2.5))       AS spike_mean,
+           quantile(pareto(30, 2.5), 0.95) AS spike_p95,
+           expected(pareto(30, 1.0))       AS undefined_mean
 
 The ``α = 2.5`` spike averages ``α·xₘ/(α−1) = 50`` with a 95th
 percentile near 99.4 -- the heavy tail at work. The last column
@@ -700,8 +699,8 @@ integrates the pair by quadrature -- exact-grade, no sampling:
 .. code-block:: postgresql
 
     SELECT probability(x > y) AS p_spike_beats_normal
-    FROM (SELECT provsql.pareto(30, 2.5) AS x,
-                 provsql.normal(45, 5)   AS y) t
+    FROM (SELECT pareto(30, 2.5) AS x,
+                 normal(45, 5)   AS y) t
 
 which returns ≈ 0.384: even though the spike's *mean* (50) is
 above the normal's (45), the spike spends most of its mass near
@@ -847,7 +846,7 @@ information-theoretic counterpart -- symmetric, in nats, and zero
 
 .. code-block:: postgresql
 
-    WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+    WITH plume AS (SELECT normal(0, 3) AS dust)
     SELECT mutual_information(a.pm25, b.pm25)  AS mi_indep,
            mutual_information(a.pm25 + p.dust,
                               b.pm25 + p.dust) AS mi_shared

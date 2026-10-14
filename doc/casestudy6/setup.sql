@@ -75,19 +75,19 @@ CREATE TABLE readings (
   id          INTEGER PRIMARY KEY,
   station_id  TEXT NOT NULL REFERENCES stations(id),
   ts          TIMESTAMP NOT NULL,
-  pm25        provsql.random_variable  -- NULL: sensor offline, no reading
+  pm25        random_variable  -- NULL: sensor offline, no reading
 );
 
 TRUNCATE readings;
 INSERT INTO readings (id, station_id, ts, pm25) VALUES
-  (1, 's1', '2026-05-12 08:00', provsql.normal(28.0, 2.0)),       -- high-end Gaussian
-  (2, 's2', '2026-05-12 08:00', provsql.uniform(10.0, 22.0)),     -- low-cost uniform window
-  (3, 's3', '2026-05-12 08:00', provsql.exponential(0.04)),       -- drift-prone, mean = 25
-  (4, 's4', '2026-05-12 08:00', 15.0),                            -- reference (implicit cast)
-  (5, 's1', '2026-05-12 09:00', provsql.normal(40.0, 4.0)),       -- high-end, into Unhealthy
-  (6, 's2', '2026-05-12 09:00', provsql.uniform(12.0, 24.0)),     -- low-cost, into Moderate
-  (7, 's3', '2026-05-12 09:00', provsql.erlang(3, 0.1)),          -- multi-pass Erlang, mean = 30
-  (8, 's4', '2026-05-12 09:00', 16.5);                            -- reference
+  (1, 's1', '2026-05-12 08:00', normal(28.0, 2.0)),       -- high-end Gaussian
+  (2, 's2', '2026-05-12 08:00', uniform(10.0, 22.0)),     -- low-cost uniform window
+  (3, 's3', '2026-05-12 08:00', exponential(0.04)),       -- drift-prone, mean = 25
+  (4, 's4', '2026-05-12 08:00', 15.0),                    -- reference (implicit cast)
+  (5, 's1', '2026-05-12 09:00', normal(40.0, 4.0)),       -- high-end, into Unhealthy
+  (6, 's2', '2026-05-12 09:00', uniform(12.0, 24.0)),     -- low-cost, into Moderate
+  (7, 's3', '2026-05-12 09:00', erlang(3, 0.1)),          -- multi-pass Erlang, mean = 30
+  (8, 's4', '2026-05-12 09:00', 16.5);                    -- reference
 
 SELECT add_provenance('readings');
 
@@ -98,18 +98,18 @@ CREATE TABLE historical_readings (
   id          INTEGER PRIMARY KEY,
   station_id  TEXT NOT NULL REFERENCES stations(id),
   ts          TIMESTAMP NOT NULL,
-  pm25        provsql.random_variable NOT NULL
+  pm25        random_variable NOT NULL
 );
 
 TRUNCATE historical_readings;
 INSERT INTO historical_readings (id, station_id, ts, pm25) VALUES
-  (1, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
-  (2, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
-  (3, 's3', '2026-05-11 08:00', provsql.exponential(0.03)),
+  (1, 's1', '2026-05-11 08:00', normal(34.0, 2.5)),
+  (2, 's2', '2026-05-11 08:00', uniform(15.0, 28.0)),
+  (3, 's3', '2026-05-11 08:00', exponential(0.03)),
   (4, 's4', '2026-05-11 08:00', 18.0),
-  (5, 's1', '2026-05-11 09:00', provsql.normal(42.0, 3.0)),
-  (6, 's2', '2026-05-11 09:00', provsql.uniform(20.0, 35.0)),
-  (7, 's3', '2026-05-11 09:00', provsql.erlang(3, 0.08)),
+  (5, 's1', '2026-05-11 09:00', normal(42.0, 3.0)),
+  (6, 's2', '2026-05-11 09:00', uniform(20.0, 35.0)),
+  (7, 's3', '2026-05-11 09:00', erlang(3, 0.08)),
   (8, 's4', '2026-05-11 09:00', 19.5);
 
 SELECT add_provenance('historical_readings');
