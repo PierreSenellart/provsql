@@ -31,6 +31,7 @@ website/.bundle
 
 # studio Python venv + build artefacts
 studio/.venv/
+/.venv/
 studio/provsql_studio.egg-info/
 studio/provsql_studio/__pycache__/
 studio/**/__pycache__/
