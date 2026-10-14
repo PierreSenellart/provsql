@@ -141,7 +141,7 @@ In the Studio query box:
 
 The result table renders ``pm25`` as a clickable ``random_variable``
 cell carrying the underlying gate UUID. Click into a row's
-``pm25``: Studio switches to Circuit mode and renders the
+``pm25``: Studio renders its circuit, a single
 ``gate_rv`` leaf with the distribution-kind initial in the circle
 (N for a Normal, U for Uniform, Exp for Exponential, Erl
 for Erlang).
