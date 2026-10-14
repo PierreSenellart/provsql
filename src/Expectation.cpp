@@ -1482,10 +1482,13 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
             /* A divisor that is zero in every world leaves no world with a
-             * value, so there is no moment to report: NaN, as for a world an
-             * aggregate has no contributor in, rather than an infinity. */
+             * value, so there is no moment to report: SQL's NULL, as the
+             * Monte Carlo path answers when no draw has a value (avg over a
+             * group whose rows are all certainly absent), rather than an
+             * infinity or a NaN. */
             if (divisor == 0.0)
-              return std::numeric_limits<double>::quiet_NaN();
+              throw NoValueException(
+                "Expectation of gate_arith DIV by a constant zero");
             return rec_expectation(gc, wires[0], fp) / divisor;
           }
           return mc_raw_moment(gc, g, 1,
@@ -1656,8 +1659,9 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
             throw CircuitException("gate_arith DIV must be binary");
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
-            if (divisor == 0.0)
-              return std::numeric_limits<double>::quiet_NaN();
+            if (divisor == 0.0)   // no world has a value: see Expectation
+              throw NoValueException(
+                "Variance of gate_arith DIV by a constant zero");
             return rec_variance(gc, wires[0], fp) / (divisor * divisor);
           }
           return mc_var(
@@ -1834,8 +1838,9 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
             throw CircuitException("gate_arith DIV must be binary");
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
-            if (divisor == 0.0)
-              return std::numeric_limits<double>::quiet_NaN();
+            if (divisor == 0.0)   // no world has a value: see Expectation
+              throw NoValueException(
+                "Raw moment of gate_arith DIV by a constant zero");
             return rec_raw_moment(gc, wires[0], k, fp)
                  / std::pow(divisor, static_cast<double>(k));
           }

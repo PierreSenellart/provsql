@@ -397,6 +397,40 @@ SELECT provsql.avg(x) IS NULL AS avg_empty_is_null
 
 DROP TABLE rv_avg_empty;
 
+-- 7c'.  Group present in SQL but certainly empty: every row has
+--   probability 0.  No world has a value, so expected / variance / moment
+--   are NULL, as SQL's AVG over no rows.  With simplify_on_load the
+--   degenerate mixtures fold and the denominator becomes the constant 0
+--   (closed-form DIV); without it, Monte Carlo finds no draw with a
+--   value.  The two paths must agree (the closed form used to give NaN).
+
+CREATE TABLE rv_avg_absent(label text, x random_variable);
+INSERT INTO rv_avg_absent VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', NULL);
+SELECT add_provenance('rv_avg_absent');
+DO $$ BEGIN PERFORM set_prob(provsql, 0) FROM rv_avg_absent WHERE label IN ('a', 'b'); END $$;
+
+CREATE TABLE rv_avg_absent_res AS
+  SELECT provsql.avg(x) AS a FROM rv_avg_absent;
+SELECT remove_provenance('rv_avg_absent_res');
+
+SET provsql.simplify_on_load = on;
+SELECT provsql.expected(a) IS NULL       AS folded_mean_is_null,
+       provsql.variance(a) IS NULL       AS folded_var_is_null,
+       provsql.moment(a, 2) IS NULL      AS folded_moment_is_null
+  FROM rv_avg_absent_res;
+SET provsql.simplify_on_load = off;
+SELECT provsql.expected(a) IS NULL       AS mc_mean_is_null,
+       provsql.variance(a) IS NULL       AS mc_var_is_null,
+       provsql.moment(a, 2) IS NULL      AS mc_moment_is_null
+  FROM rv_avg_absent_res;
+RESET provsql.simplify_on_load;
+
+DROP TABLE rv_avg_absent_res;
+DROP TABLE rv_avg_absent;
+
 -- 7d.  Direct (untracked) call.
 --   No add_provenance => the planner hook leaves the Aggref alone and
 --   the FFUNC sees raw RV uuids, not mixture-wrapped ones.  The fallback

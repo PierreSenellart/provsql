@@ -116,6 +116,18 @@ add_provenance
 avg_empty_is_null|provsql
 t|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+folded_mean_is_null|folded_var_is_null|folded_moment_is_null
+t|t|t
+(1 row)
+mc_mean_is_null|mc_var_is_null|mc_moment_is_null
+t|t|t
+(1 row)
 den_kind|den_child_kind
 arith|value
 (1 row)
