@@ -130,7 +130,31 @@ docs: notebooks
 	$(MAKE) -f $(INTERNAL) sql/provsql.sql $(ARGS)
 	cd doc/source && make html
 
-## website              Build docs + assemble the Jekyll site
+# Fast edit-and-reload loop for the user/dev pages: an incremental Sphinx
+# build only (no notebooks, Doxygen, link check, or Jekyll), mirrored into
+# an already-built website/_site/docs/ so a local server over _site picks it
+# up. Pages that depend on a changed one (labels, toctree, bibliography) may
+# stay stale; run `make docs` / `make website` before committing or deploying.
+## docs-quick           Incremental Sphinx-only rebuild, for previewing edits
+.PHONY: docs-quick
+docs-quick:
+	cd doc/source && python3 -m sphinx -M html . _build -q
+	@if [ -d website/_site/docs ]; then \
+		rsync -a --omit-dir-times doc/source/_build/html/ website/_site/docs/; \
+	fi
+
+# Serve the built site locally (port 8080, since Studio defaults to 8000);
+# pair with `make docs-quick` in another terminal and reload the browser.
+DOCS_PORT ?= 8080
+## docs-serve           Serve website/_site on localhost:8080 (DOCS_PORT=)
+.PHONY: docs-serve
+docs-serve:
+	@test -d website/_site/docs || { \
+		echo "website/_site/docs missing: run 'make website' once first"; exit 1; }
+	@echo "Serving http://localhost:$(DOCS_PORT)/docs/ (Ctrl-C to stop)"
+	python3 -m http.server -d website/_site -b 127.0.0.1 $(DOCS_PORT)
+
+## website             Build docs + assemble the Jekyll site
 .PHONY: website
 website: docs
 	# Copy branding assets into website source

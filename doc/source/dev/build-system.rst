@@ -442,6 +442,19 @@ Documentation Build
 5. Runs the coherence checker (``check-doc-links.py``) to validate
    all ``sqlfunc`` and ``cfunc`` cross-references.
 
+It also regenerates the Studio example notebooks from the tutorial and
+case-study sources, and Sphinx rebuilds every page from scratch (``-E``).
+
+``make docs-quick`` is the fast preview loop while editing pages: an
+incremental Sphinx build only, which also refreshes
+``website/_site/docs/`` when a site has already been built there, so a
+local server over ``website/_site`` shows the change; ``make docs-serve``
+provides one, on ``http://localhost:8080/`` (``DOCS_PORT=`` to change it,
+since Studio takes 8000), once ``make website`` has run. Pages that depend
+on the edited one (labels, table of contents, bibliography) may stay
+stale, so run ``make docs`` (which regenerates the notebooks to commit)
+or ``make website`` before committing or deploying.
+
 
 Releases
 --------
