@@ -29,7 +29,7 @@ Your tasks:
   expectation beyond it;
 * model calibration as a mixture, aggregate readings per district, and
   watch the simplifier fold the result;
-* combine batches with ``UNION ALL``, and compare probability methods;
+* combine batches with ``UNION``, and compare probability methods;
 * find the worst reading per district, percentiles, and expected
   exceedances;
 * couple two sensors through a shared plume, and measure the coupling;
@@ -127,6 +127,8 @@ this column build provenance circuits, so a condition like
    terracotta :sc:`rv` pill marking it as a ``random_variable``
    column.
 
+.. _cs6-step-1:
+
 Step 1: Inspect a Noisy Reading
 --------------------------------
 
@@ -168,6 +170,8 @@ pinning ``provsql.monte_carlo_seed`` in the Config panel (under
    When the gate has a closed-form family (here a bare Normal),
    Studio overlays the analytical PDF on top of the bars.
 
+.. _cs6-step-2:
+
 Step 2: A First Probabilistic Threshold
 ----------------------------------------
 
@@ -187,7 +191,7 @@ and ProvSQL attaches that event to each row's provenance.
 Click into a result row's auto-added ``provsql`` cell. Circuit mode shows the
 Boolean wrapper (a ``gate_times`` over the row's input token and
 the ``gate_cmp``); the cmp's child link reaches into the
-``gate_rv`` from Step 1.
+``gate_rv`` from :ref:`Step 1 <cs6-step-1>`.
 
 The eval strip's *Marginal probability* entry exposes the
 full method catalogue (see :doc:`the chapter on probabilities
@@ -220,7 +224,7 @@ universally false because the uniform's upper bound is below the
 threshold. The fold is controlled by ``provsql.simplify_on_load``
 (default on), which the Config panel exposes under *Evaluation*.
 
-Click into row 2's auto-added ``provsql`` cell from the Step 2
+Click into row 2's auto-added ``provsql`` cell from the :ref:`Step 2 <cs6-step-2>`
 result (station ``s2``, ``pm25 ~ U(10, 22)``). With
 ``provsql.simplify_on_load`` on, the canvas shows a single
 ``𝟘`` (zero) gate: the simplifier resolved the comparator to a
@@ -299,6 +303,8 @@ weighting.
    significant figures; the inspector pinned to either child
    surfaces the full-precision parameters.
 
+.. _cs6-step-5:
+
 Step 5: Aggregation Over Random Variables
 ------------------------------------------
 
@@ -337,10 +343,12 @@ the inclusion-weighted mean.
    the ``gate_rv`` leaves at the bottom are the per-reading
    distributions; the ``ι`` leaves anchor each row's provenance.
 
+.. _cs6-step-6:
+
 Step 6: Conditional Inference
 ------------------------------
 
-Re-open the filtered query from Step 2:
+Re-open the filtered query from :ref:`Step 2 <cs6-step-2>`:
 
 .. code-block:: postgresql
 
@@ -398,15 +406,11 @@ conditional distribution. With the same row pinned and the
 shows a six-value inline preview with a "show full list"
 expander; clicking it dumps all 200 samples.
 
-For shapes that fall outside the closed-form table the sampler
-falls back to rejection sampling at the
-``provsql.rv_mc_samples`` budget; if the conditioning event is
-so unlikely that fewer than ``n`` samples land inside that
-budget, the panel shows a hint pointing at the GUC, e.g.,
-*MC accepted 47/200. Raise* ``provsql.rv_mc_samples`` *in the
-Config panel to widen the rejection-sampling budget.*
-Re-running with a larger budget (set ``rv_mc_samples = 50000``
-in the Config panel) recovers the full batch.
+Both rows of the query are bare Normals conditioned on an
+interval, so all 200 samples come straight from the truncated
+distribution; for other shapes, :sqlfunc:`rv_sample` falls back to
+rejection sampling and may return fewer (see
+:doc:`continuous-distributions`).
 
 Step 8: Combining Batches via UNION
 ------------------------------------
@@ -429,8 +433,8 @@ carries a ``gate_cmp(pm25 > 35)`` of its own:
 Pick a result row's ``provsql`` cell: Circuit mode shows a
 ``gate_plus`` (``⊕``) over the two contributing inputs (today's
 row and yesterday's row), each carrying its own
-``gate_cmp(pm25 > 35)`` from the lifted ``WHERE``.
-``probability_evaluate(provenance())`` on the result gives the
+``gate_cmp(pm25 > 35)`` from the lifted ``WHERE``. Run
+*Marginal probability* from the eval strip: it gives the
 probability that *at least one* of the two days produced an
 Unhealthy reading for that slot. We deliberately keep the
 ``random_variable`` ``pm25`` column out of the ``SELECT``: there
@@ -441,7 +445,7 @@ meaning.
 Step 9: Filtering Grouped Random Variables by Expected Value
 -------------------------------------------------------------
 
-Filter the per-district aggregates from Step 5 by their expected
+Filter the per-district aggregates from :ref:`Step 5 <cs6-step-5>` by their expected
 average. Because :sqlfunc:`avg` over a ``random_variable`` column
 returns a ``random_variable`` (not an ``agg_token``), and
 :sqlfunc:`expected` collapses it to a plain ``double``, the
@@ -457,7 +461,7 @@ evaluates directly; each surviving group's provenance still gets a
     HAVING expected(avg(r.pm25)) > 20
 
 :sqlfunc:`expected` collapses the inner :sqlfunc:`avg` (the
-division circuit of Step 5) to its mean. It does so exactly here: no
+division circuit of :ref:`Step 5 <cs6-step-5>`) to its mean. It does so exactly here: no
 probability has been written on these rows' tokens, so every row is
 certainly present, the count in the denominator is a constant, and
 the mean of the average is the average of the means. ``> 20`` then
@@ -466,7 +470,7 @@ expected average exceeds the threshold. For the case-study fixture
 both districts pass (centre at 25.5, east at 21.625); clicking either
 result row's
 ``provsql`` cell shows the ``delta(gate_agg)`` shape, identical
-to the no-HAVING aggregate from Step 5 but filtered to the
+to the no-HAVING aggregate from :ref:`Step 5 <cs6-step-5>` but filtered to the
 surviving groups.
 
 Step 10: Independent vs Monte Carlo
@@ -475,23 +479,14 @@ Step 10: Independent vs Monte Carlo
 For threshold queries whose contributing rows have structurally
 independent provenance, the ``'independent'`` probability method
 (see :doc:`the chapter on probabilities <probabilities>`) is *exact*
-and far cheaper than Monte
-Carlo. Compare two exact methods against
-``monte-carlo`` on the Step 2 query:
-
-.. code-block:: postgresql
-
-    SELECT id,
-      probability_evaluate(provenance(), 'independent')         AS p_ind,
-      probability_evaluate(provenance(), 'monte-carlo', '10000') AS p_mc,
-      probability_evaluate(provenance(), 'tree-decomposition')  AS p_td
-    FROM readings WHERE pm25 > 35
-
-Studio's eval strip exposes these methods directly; running each
-method against the same pinned subnode shows the analytic
-``independent`` and ``tree-decomposition`` returning the same
-value to full precision, while ``monte-carlo`` returns a
-Hoeffding-bounded estimate that tightens as ``n`` grows.
+and far cheaper than Monte Carlo. Re-run the :ref:`Step 2 <cs6-step-2>` query, click a
+result row's ``provsql`` cell, and run *Marginal probability* from
+the eval strip three times, with the methods ``independent``,
+``tree-decomposition``, and ``monte-carlo`` at ``n = 10000``: the two
+exact methods return the same value to full precision, while
+``monte-carlo`` returns a Hoeffding-bounded estimate that tightens
+as ``n`` grows. From SQL, the same methods are arguments of
+:sqlfunc:`probability_evaluate`.
 
 Step 11: The Worst Reading in a District
 -----------------------------------------
@@ -511,9 +506,11 @@ over a ``random_variable`` column builds exactly that:
 
 The *centre* district's worst reading averages ≈ 40.0 -- its
 ``N(40, 4)`` reading dominates the maximum -- and *east* comes out
-at ≈ 39.2, driven by the heavy right tails of ``Exp(0.04)`` and
-``erlang(3, 0.1)`` even though both means sit near 25--30. Note how
-the extremum tells a different story from Step 5's averages
+at ≈ 39.6 (a Monte Carlo estimate, see below, so it varies by a
+few tenths between runs and with the seed), driven by the heavy
+right tails of ``Exp(0.04)`` and ``erlang(3, 0.1)`` even though both
+means sit near 25--30. Note how
+the extremum tells a different story from the averages of :ref:`Step 5 <cs6-step-5>`
 (≈ 25.5 and ≈ 21.6): the east district looks fine on average and
 just as alarming at the extreme. ``worst_mean`` itself is a plain
 number -- ``expected`` has already collapsed the distribution to
@@ -531,7 +528,7 @@ by Monte Carlo.
 
 The same-row form is ``greatest`` / ``least``: the SQL keywords
 accept ``random_variable`` arguments, which ProvSQL rewrites into
-order statistics (Step 15 uses ``least`` outside any
+order statistics (:ref:`Step 15 <cs6-step-15>` uses ``least`` outside any
 provenance-tracked relation):
 
 .. code-block:: postgresql
@@ -584,7 +581,7 @@ quantile of the truncated distribution, again in closed form:
 Row 1 (``N(28, 2)``, for which the event is a far tail) gives
 ≈ 35.36, just above the threshold; row 5 (``N(40, 4)``) gives
 ≈ 40.53. In the eval strip, the same conditioning rides on the
-*Conditioned by* badge from Step 6: with it active, *Quantile*
+*Conditioned by* badge from :ref:`Step 6 <cs6-step-6>`: with it active, *Quantile*
 returns the truncated-distribution quantile.
 
 Step 13: Expected Excess via CASE
@@ -620,6 +617,8 @@ equivalently ``0::random_variable``) on the ``ELSE`` branch:
 ``CASE`` type resolution needs the branches in a single type
 category, so a bare numeric literal will not lift on its own.
 
+.. _cs6-step-14:
+
 Step 14: Correlated Sensors
 ----------------------------
 
@@ -649,6 +648,8 @@ no closed form, so both statistics are estimated by Monte Carlo
 from coupled draws, the plume being drawn once per iteration and
 shared by both readings, which keeps the estimates tight around the
 theoretical values.
+
+.. _cs6-step-15:
 
 Step 15: Drift, Lifetime, and Spikes: More Families
 ----------------------------------------------------
@@ -846,7 +847,7 @@ to :math:`0.7 \cdot 0.60 + 0.3 \cdot 1.00 = 0.72`.
 Step 18: Shared Information in Nats
 ------------------------------------
 
-Step 14 measured the plume coupling with
+:ref:`Step 14 <cs6-step-14>` measured the plume coupling with
 :sqlfunc:`correlation`; :sqlfunc:`mutual_information` is its
 information-theoretic counterpart -- symmetric, in nats, and zero
 *exactly* when the two variables share no randomness:
@@ -866,7 +867,7 @@ plume-shifted pair shares the ``dust`` leaf, and the readout
 estimates their mutual information by a 2-D histogram over
 *coupled* joint draws (each iteration draws the shared plume once
 and both sums observe it) -- about ``0.21`` nats at seed 42. For
-a jointly-Gaussian pair with the Step 14 correlation
+a jointly-Gaussian pair with the :ref:`Step 14 <cs6-step-14>` correlation
 :math:`\rho \approx 0.545` the closed form would give
 :math:`-\tfrac12\ln(1-\rho^2) \approx 0.176`; the estimate lands
 in that neighbourhood, a little above: the pair is not jointly
