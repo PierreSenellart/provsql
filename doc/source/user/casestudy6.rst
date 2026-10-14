@@ -457,11 +457,14 @@ evaluates directly; each surviving group's provenance still gets a
     HAVING expected(avg(r.pm25)) > 20
 
 :sqlfunc:`expected` collapses the inner :sqlfunc:`avg` (the
-division circuit of Step 5) to its mean, by Monte Carlo here since
-the division has no closed-form evaluator; ``> 20`` then compares
-two ``double`` values, so a group survives exactly when its expected
-average exceeds the threshold. For the case-study fixture both districts pass
-(centre at ≈ 25.5, east at ≈ 21.6); clicking either result row's
+division circuit of Step 5) to its mean. It does so exactly here: no
+probability has been written on these rows' tokens, so every row is
+certainly present, the count in the denominator is a constant, and
+the mean of the average is the average of the means. ``> 20`` then
+compares two ``double`` values, so a group survives exactly when its
+expected average exceeds the threshold. For the case-study fixture
+both districts pass (centre at 25.5, east at 21.625); clicking either
+result row's
 ``provsql`` cell shows the ``delta(gate_agg)`` shape, identical
 to the no-HAVING aggregate from Step 5 but filtered to the
 surviving groups.
@@ -519,8 +522,12 @@ aggregate: the ``worst`` cell is a clickable ``random_variable``
 token whose circuit is a ``gate_arith`` ``MAX`` root over the
 per-row mixtures; a row absent in a world contributes ``-∞``, the
 order-statistic identity, so it never perturbs the maximum.
-Because the children here are mixtures (not bare leaves), the
-expectation is estimated by Monte Carlo.
+Since every row is certainly present, :sqlfunc:`expected` reads the
+maximum of the readings themselves: over continuous distributions,
+as in the centre district, it is computed exactly by a
+one-dimensional integral; the east district's constant reference
+readings fall outside that formula, and its expectation is estimated
+by Monte Carlo.
 
 The same-row form is ``greatest`` / ``least``: the SQL keywords
 accept ``random_variable`` arguments, which ProvSQL rewrites into
