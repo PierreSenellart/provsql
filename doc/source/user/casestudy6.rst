@@ -553,7 +553,7 @@ the natural regulatory question is "what level is only exceeded
 
 .. code-block:: postgresql
 
-    SELECT id, station_id, quantile(pm25, 0.95) AS p95
+    SELECT id, station_id, pm25, quantile(pm25, 0.95) AS p95
     FROM readings
     WHERE id IN (1, 3, 5, 7)
     ORDER BY id
@@ -573,7 +573,7 @@ quantile of the truncated distribution, again in closed form:
 
 .. code-block:: postgresql
 
-    SELECT id, quantile(pm25, 0.5, provenance()) AS median_given_high
+    SELECT id, pm25, quantile(pm25, 0.5, provenance()) AS median_given_high
     FROM readings
     WHERE pm25 > 35 AND station_id = 's1'
     ORDER BY id
