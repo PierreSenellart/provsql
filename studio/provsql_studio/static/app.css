@@ -1035,8 +1035,15 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
 #result-banners:not(:empty) { margin: 0.4rem 0 0.6rem; }
 
 /* ───────── shared site footer (mirrors website + docs) ───────── */
+/* The links and the versions share one line while both fit, the links
+   centred in what the versions leave; past that, the versions wrap to a
+   line of their own instead of overlapping the links. */
 #provsql-site-footer {
-  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 1.5em;
+  row-gap: 0.3em;
   text-align: center;
   padding: 0.8em 1em;
   background: var(--purple-900);
@@ -1047,6 +1054,7 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
 #provsql-site-footer a {
   color: rgba(244,240,250,0.85);
   text-decoration: none;
+  white-space: nowrap;
 }
 #provsql-site-footer a:hover { color: var(--gold-500); }
 #provsql-site-footer a:visited { color: rgba(244,240,250,0.85); }
@@ -1054,11 +1062,10 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   margin: 0 0.4em;
   color: rgba(244,240,250,0.4);
 }
+#provsql-site-footer .links { flex: 1 1 auto; }
 #provsql-site-footer .versions {
-  position: absolute;
-  right: 1em;
-  top: 50%;
-  transform: translateY(-50%);
+  flex: 0 1 auto;
+  margin-left: auto;
   font-size: 0.75rem;
   color: rgba(244,240,250,0.45);
   letter-spacing: 0.01em;
