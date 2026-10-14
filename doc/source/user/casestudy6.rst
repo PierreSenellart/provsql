@@ -70,7 +70,7 @@ into a fresh PostgreSQL database:
 The script creates the schema below and seeds the random-variable
 readings via the constructors documented in :doc:`the chapter on
 continuous distributions <continuous-distributions>`. It is five
-tables:
+data tables plus a provenance mapping:
 
 * ``stations(id, name, district)`` -- four monitoring stations
   across two districts, provenance-tracked.
@@ -86,6 +86,10 @@ tables:
   bounds.
 * ``historical_readings(...)`` -- same shape as ``readings``,
   populated from yesterday's batch.
+* ``station_mapping(value, provenance)`` -- a provenance mapping
+  from each reading's token to its station's name, so that
+  :sqlfunc:`sr_formula` and PROV-XML export show station names
+  instead of raw UUIDs.
 
 .. nb:omit-begin
 

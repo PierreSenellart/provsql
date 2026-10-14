@@ -117,7 +117,6 @@ SELECT add_provenance('historical_readings');
 -- A provenance mapping so the Studio eval-strip's sr_formula and
 -- PROV-XML export can label leaves with station names rather than
 -- raw UUIDs.
-DROP TABLE IF EXISTS station_mapping;
 DROP TABLE IF EXISTS station_mapping CASCADE;
 CREATE TABLE station_mapping AS
   SELECT s.name AS value, r.provsql AS provenance
