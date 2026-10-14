@@ -55,7 +55,7 @@ endif
 endif
 
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
-EXTRA_CLEAN = sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files src/*.gcno src/*.gcda src/semiring/*.gcno src/semiring/*.gcda coverage
+EXTRA_CLEAN = $(DEPS) sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files src/*.gcno src/*.gcda src/semiring/*.gcno src/semiring/*.gcda coverage
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -104,7 +104,15 @@ include $(PGXS)
 
 all: $(DATA) $(MODULE_big)$(DLSUFFIX) test/schedule
 
-$(OBJS): $(wildcard src/*.h src/semiring/*.h src/distributions/*.h src/*.hpp)
+# Header dependencies: each compile writes, next to the object, a .d file
+# listing the headers it actually includes (-MMD -MP in the %.o rules below),
+# read back here.  An object without one -- built before this was set up --
+# depends on every header instead, until its next compile writes it.  Never
+# on src/build_id.h, which changes with every commit and only build_id.c
+# includes (see its rule below).
+DEPS = $(OBJS:.o=.d)
+-include $(wildcard $(DEPS))
+$(foreach o,$(OBJS),$(if $(wildcard $(o:.o=.d)),,$(eval $(o): $(filter-out src/build_id.h,$(wildcard src/*.h src/semiring/*.h src/distributions/*.h src/*.hpp)))))
 
 sql/provsql.sql: sql/provsql.*.sql
 	cat sql/provsql.common.sql > sql/provsql.sql
@@ -140,7 +148,7 @@ endif
 
 
 %.o : %.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(CPPFLAGS) -MMD -MP -c -o $@ $<
 
 ifeq ($(OS), Darwin)
 HOMEBREW_PREFIX = $(shell brew --prefix)
@@ -165,7 +173,7 @@ endif
 PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC -DBOOST_BIND_GLOBAL_PLACEHOLDERS
 
 %.o : %.cpp
-	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -MMD -MP -c -o $@ $<
 
 LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 

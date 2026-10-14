@@ -2,6 +2,8 @@
 *.so
 src/*.o
 src/distributions/*.o
+src/*.d
+src/distributions/*.d
 src/*.bc
 sql/provsql--*.sql
 sql/provsql.sql
