@@ -346,6 +346,33 @@ def test_schema_panel_column_click_prefills_query(
     )
 
 
+_POPOVERS = {
+    "history-btn": "history-menu",
+    "modeswitch-btn": "modeswitch-menu",
+    "conn-dot": "dsn-panel",
+    "conn-info": "dbmenu",
+    "schema-btn": "schema-panel",
+    "tools-btn": "tools-panel",
+    "config-btn": "config-panel",
+}
+
+
+def test_opening_a_popover_closes_the_others(
+    page: Page, studio_url: str
+) -> None:
+    """The popovers are mutually exclusive: opening one (here, each in
+    turn, then the mode switcher over the schema panel) leaves only it
+    open."""
+    page.goto(studio_url + "/where")
+    for btn in [*_POPOVERS, "schema-btn", "modeswitch-btn"]:
+        page.locator(f"#{btn}").click()
+        for other_btn, panel in _POPOVERS.items():
+            if other_btn == btn:
+                expect(page.locator(f"#{panel}")).to_be_visible()
+            else:
+                expect(page.locator(f"#{panel}")).to_be_hidden()
+
+
 def test_circuit_prov_scheme_selector_is_interactive(
     page: Page, studio_url: str
 ) -> None:

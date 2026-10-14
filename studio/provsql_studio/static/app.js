@@ -52,17 +52,22 @@
   window.ProvsqlStudio = window.ProvsqlStudio || {};
   window.ProvsqlStudio.metadata = Metadata;
 
-  // The top-nav popovers (Schema, Config, Tools) are mutually exclusive:
+  // The popovers (mode switcher, connection editor, database menu, the
+  // Schema / Tools / Config panels, query history) are mutually exclusive:
   // opening one closes the others.  Each calls this from its open() before
   // showing itself (their own click handlers stopPropagation, so the others'
   // outside-click handlers never fire on their own).
-  const NAV_PANELS = [
-    { panel: 'schema-panel', btn: 'schema-btn' },
-    { panel: 'config-panel', btn: 'config-btn' },
-    { panel: 'tools-panel',  btn: 'tools-btn' },
+  const POPOVERS = [
+    { panel: 'modeswitch-menu', btn: 'modeswitch-btn' },
+    { panel: 'dsn-panel',       btn: 'conn-dot' },
+    { panel: 'dbmenu',          btn: 'conn-info' },
+    { panel: 'schema-panel',    btn: 'schema-btn' },
+    { panel: 'tools-panel',     btn: 'tools-btn' },
+    { panel: 'config-panel',    btn: 'config-btn' },
+    { panel: 'history-menu',    btn: 'history-btn' },
   ];
-  function closeOtherNavPanels(exceptPanelId) {
-    for (const { panel, btn } of NAV_PANELS) {
+  function closeOtherPopovers(exceptPanelId) {
+    for (const { panel, btn } of POPOVERS) {
       if (panel === exceptPanelId) continue;
       const p = document.getElementById(panel);
       const b = document.getElementById(btn);
@@ -209,7 +214,10 @@
       if (lbl) lbl.textContent = current.textContent.trim();
     }
     const close = () => { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); };
-    const open  = () => { menu.hidden = false; trigger.setAttribute('aria-expanded', 'true'); };
+    const open  = () => {
+      closeOtherPopovers('modeswitch-menu');
+      menu.hidden = false; trigger.setAttribute('aria-expanded', 'true');
+    };
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       if (menu.hidden) open(); else close();
@@ -1044,6 +1052,7 @@
       ).join('') + '<li class="wp-history__clear" data-clear="1">Clear history</li>';
     }
     function open() {
+      closeOtherPopovers('history-menu');
       renderMenu();
       menu.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
@@ -1198,6 +1207,7 @@
     btn.dataset.bound = '1';
 
     async function openMenu() {
+      closeOtherPopovers('dbmenu');
       btn.setAttribute('aria-expanded', 'true');
       menu.hidden = false;
       menu.innerHTML = '<li style="opacity:.6">loading…</li>';
@@ -1632,7 +1642,7 @@
     window.ProvsqlStudio.loadConfig = loadConfig;
 
     function open() {
-      closeOtherNavPanels('config-panel');
+      closeOtherPopovers('config-panel');
       panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
       if (!loaded) loadConfig();
@@ -2029,7 +2039,7 @@
     });
 
     function open() {
-      closeOtherNavPanels('tools-panel'); panel.hidden = false;
+      closeOtherPopovers('tools-panel'); panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true'); showList(); load();
       // The Settings section (tool_search_path, fallback_compiler,
       // kcmcp_server) is filled by the Config panel's loader.
@@ -2347,7 +2357,7 @@
     });
 
     function open() {
-      closeOtherNavPanels('schema-panel');
+      closeOtherPopovers('schema-panel');
       panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
       // Re-fetch on open if either we never loaded, or an exec since the
@@ -3975,6 +3985,7 @@
       // The user retypes the password when switching role/host if
       // needed; we don't echo secrets back.
       if (_currentConn && _currentConn.dsn) input.value = _currentConn.dsn;
+      closeOtherPopovers('dsn-panel');
       panel.hidden = false;
       dot.setAttribute('aria-expanded', 'true');
       showStatus('');
