@@ -62,6 +62,12 @@ hard_exact
 remove_provenance
 
 (1 row)
+hard_default|method
+0.881791|d-tree
+(1 row)
+remove_provenance
+
+(1 row)
 mobius_root|mobius_prob
 mobius|0.056923
 (1 row)

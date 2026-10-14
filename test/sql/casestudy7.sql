@@ -253,6 +253,20 @@ SELECT remove_provenance('cs7_hard');
 SELECT hard_exact FROM cs7_hard;
 DROP TABLE cs7_hard;
 
+-- The default exact request: the cost-based chooser picks d-tree on the
+-- literal circuit (the case study shows Studio's "via d-tree").
+-- provsql.last_eval_method lists every method of the session's
+-- evaluations, so empty it to read this query's alone.
+SET provsql.last_eval_method = '';
+CREATE TABLE cs7_hard_default AS
+  SELECT round(probability_evaluate(provenance())::numeric,6) AS hard_default
+  FROM (SELECT DISTINCT 1 FROM bid b, expertise e, topic_of t
+        WHERE b.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=b.paper) q;
+SELECT remove_provenance('cs7_hard_default');
+SELECT hard_default, current_setting('provsql.last_eval_method') AS method
+  FROM cs7_hard_default;
+DROP TABLE cs7_hard_default;
+
 -- ---------------------------------------------------------------------
 -- Part A, safe by cancellation (Möbius).  The dense q9 / QW external pool:
 -- a safe UCQ that is neither hierarchical nor inversion-free, tractable only

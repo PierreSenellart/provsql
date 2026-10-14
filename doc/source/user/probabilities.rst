@@ -945,8 +945,8 @@ evaluation handles in one linear pass; no method needs to be named.
 :doc:`Case Study 7 <casestudy7>` runs the complete :math:`q_9`
 example.
 
-Like the safe-query rewrite, this is a shortcut, not a different
-result: the query's literal provenance is kept, so :sqlfunc:`shapley`,
+This is a shortcut, not a different result, and unlike the safe-query
+rewrite it keeps the query's literal provenance, so :sqlfunc:`shapley`,
 :sqlfunc:`banzhaf`, PROV export, and any *named* probability method
 (``possible-worlds``…) answer exactly as on the ordinary provenance,
 necessarily more slowly, since the literal provenance is the

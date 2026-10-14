@@ -20,9 +20,9 @@ tractability comes from*:
 * **Part A -- the query is safe.** Some questions are tractable whatever
   the data, because the query (with the schema's keys) is *safe*. Four
   steps cover the four ways that happens.
-* **Part B -- the query is hard.** When no query-side route applies the
-  answer is genuinely :math:`\#P`-hard, and ProvSQL hands it to a knowledge
-  compiler.
+* **Part B -- the query is hard.** When no query-side route applies,
+  computing the probability is genuinely :math:`\#P`-hard, and ProvSQL
+  hands the provenance to a knowledge compiler.
 * **Part C -- the data is well-structured.** A hard *query* can still be
   easy on *this* data, because ProvSQL compiles along the structure of the
   data itself.
@@ -267,9 +267,10 @@ too large* card in place of it. Choose
 :guilabel:`Render at depth 1`: the root is a single **μ** (Möbius-function)
 gate, each child edge labelled with its integer coefficient, the hard term
 among them cancelled to zero. (The pool is **dense** on purpose: on sparse
-data Part C's compiler would also handle it and hide the point. As with every
-Part A route, the literal lineage is kept, so ``shapley`` and ``sr_formula``
-still work on it.)
+data Part C's compiler would also handle it and hide the point. Unlike the
+safe-query rewrite of the key step, which replaces the provenance with that
+of a restructured query, the μ gate keeps the query's literal lineage as a
+child, so ``shapley`` and ``sr_formula`` still evaluate that lineage.)
 
 .. _cs7-route-map:
 
@@ -326,16 +327,22 @@ The hard query, and what a compiler does with it
 
 Set the toggle to :guilabel:`Semiring` so no Boolean shortcut fires, and
 the provenance is the literal circuit of the cyclic join -- Studio draws it,
-visibly bushy. Try ``independent``: it **errors**. Try ``tree-decomposition``
-or a compiler: ``≈ 0.8818``.
+visibly bushy. Run :guilabel:`Marginal probability` with the default
+``exact`` method: rather than trying methods in turn, ProvSQL's
+:ref:`cost-based chooser <probability-guarantees>` inspects the circuit and
+runs the exact method it expects to be cheapest, and Studio names it next to
+the result -- here *via d-tree*, ``≈ 0.8818`` in milliseconds. Forcing a
+method shows what the chooser avoided: ``independent`` **errors**, while
+``tree-decomposition`` or ``compilation`` agree on ``≈ 0.8818``.
 
 Why it is hard: with ``paper`` free, ``reviewer``, ``paper`` and ``topic``
 form a cycle with no nesting -- non-hierarchical, not inversion-free, and a
-single conjunct so nothing cancels. All of Part A is exhausted, and the
-probability is :math:`\#P`-hard :cite:`DBLP:journals/jacm/DalviS12`. The
-circuit's treewidth is **4** (against **1** for a safe query), so a real
-compiler (:guilabel:`Compiled d-D circuit` with ``d4``) turns it into a d-DNNF of
-order a thousand nodes -- and the number ``0.8818``.
+single conjunct so nothing cancels. All of Part A is exhausted, and computing
+the probability of this query is :math:`\#P`-hard in the size of the data
+:cite:`DBLP:journals/jacm/DalviS12`. The
+circuit's treewidth is **4** (against **1** for a safe query), and an
+external compiler (:guilabel:`Compiled d-D circuit` with ``d4``) turns it
+into a d-DNNF of order a thousand nodes -- and the number ``0.8818``.
 
 That compiled circuit is the object the rest of Part B inspects.
 
@@ -360,28 +367,34 @@ same mapping is a table through :sqlfunc:`tseytin_cnf_mapping`).
 Comparing compilers and methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Pick :guilabel:`Probability benchmark`: it times every probability method on the hard
-circuit, one row each, with the compiled d-DNNF size beside the run time.
-Observe the spread: the exact methods that finish (``tree-decomposition``,
-the compilers, the model counters) all agree to full precision;
-``monte-carlo`` lands in its confidence band; ``independent`` shows its
-error; and methods that do not scale -- ``possible-worlds`` enumeration --
-hit the ``statement_timeout``. :sqlfunc:`ddnnf_stats` exposes the same sizes
-as ``jsonb`` for comparing one circuit across compilers.
+Pick :guilabel:`Probability benchmark`: it times every probability method
+on the hard circuit, one row each, with the compiled d-DNNF size beside the
+run time. Observe the spread: the exact methods that finish (``d-tree``,
+``tree-decomposition``, the compilers, the model counters) all agree to full
+precision, ``d-tree`` -- the chooser's pick above -- being the fastest of
+them; the samplers ``monte-carlo`` and ``karp-luby`` land near ``0.8818``;
+``independent`` shows its error; and methods that do not scale --
+``possible-worlds`` enumeration, the ``panini-obdd`` compiler, the
+``weightmc`` counter -- hit the ``statement_timeout``. The compiled sizes
+span two orders of magnitude, from a few hundred nodes to over a hundred
+thousand; :sqlfunc:`ddnnf_stats` exposes them as ``jsonb`` for comparing one
+circuit across compilers.
 
 .. figure:: /_static/casestudy7/probability-benchmark.png
    :alt: The probability-benchmark table on the hard circuit, one row
-         per method, with method, args, probability, time, and the
-         compiled d-DNNF node/edge sizes; the compilers, tree-decomposition
-         and the model counters that finish return 0.8818, monte-carlo
-         returns 0.8822, independent shows a "not an independent circuit"
-         error, and possible-worlds and the weightmc counter hit the
+         per method sorted by time, with method, args, probability, time,
+         and the compiled d-DNNF node/edge sizes; d-tree,
+         tree-decomposition, the compilers and the model counters that
+         finish return 0.8818, monte-carlo and karp-luby return nearby
+         estimates, independent shows a "not an independent circuit"
+         error, and possible-worlds, weightmc and panini-obdd hit the
          statement timeout.
 
-   The probability benchmark on the hard circuit: the compilers,
-   ``tree-decomposition`` and the model counters agree on ``0.8818``;
-   ``monte-carlo`` lands in its band; ``independent`` reports the circuit is
-   not independent; ``possible-worlds`` and ``weightmc`` time out.
+   The probability benchmark on the hard circuit, sorted by time:
+   ``d-tree``, ``tree-decomposition``, the compilers and the model counters
+   agree on ``0.8818``; ``monte-carlo`` and ``karp-luby`` land close;
+   ``independent`` reports the circuit is not independent;
+   ``possible-worlds``, ``weightmc`` and ``panini-obdd`` time out.
 
 Which compilers appear depends on what is installed; the Tools panel (the
 :fa:`tools` button) lists the registry and flags each as available / enabled, read
@@ -413,8 +426,8 @@ before any compiler runs, so even ``independent`` answers it.
 Part C: The Data Is Well-Structured
 -----------------------------------
 
-Part B's whole-program coverage is :math:`\#P`-hard in its *shape* -- yet on
-*this* data it is tractable. When no query-side route applies, ProvSQL still
+Computing the probability of Part B's whole-program coverage is
+:math:`\#P`-hard over arbitrary data -- yet on *this* data it is tractable. When no query-side route applies, ProvSQL still
 avoids a compiler if the **data** is well-structured: it compiles a certified
 circuit along a tree decomposition of the data itself, exactly and in linear
 time -- over independent data, correlated data, and through recursion.
@@ -433,8 +446,8 @@ Set the toggle back to :guilabel:`Boolean` and re-run Part B's hard query:
     WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
 
 Now ``independent`` **succeeds**, the same ``≈ 0.8818`` -- and no compiler
-ran. The query is still :math:`\#P`-hard in shape, but on this data the **joint
-treewidth** (the data graph together with its correlations) is bounded, so
+ran. Over arbitrary data the problem is still :math:`\#P`-hard, but on this
+data the **joint treewidth** (the data graph together with its correlations) is bounded, so
 ProvSQL's **joint-width compiler** :cite:`Amarilli2016thesis` recognises the
 shape and compiles the provenance along a tree decomposition of the *data*
 into a certified d-D that ``independent`` reads in linear time. This is the
