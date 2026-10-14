@@ -127,8 +127,10 @@
   // entirely -- offering it would only set the user up for a guaranteed
   // run-time error; the Tools panel remains the discovery surface for
   // registered-but-missing tools.  The selection is kept if still listed,
-  // else moved to the first available option.  A `change` event fires so
-  // dependent UI updates.
+  // else moved to the first available option.  A `change` event fires
+  // only when the selection actually moved, so dependent UI updates
+  // without a mere refresh (e.g. opening the Tools panel) wiping the eval
+  // strip's result.
   function _rebuildSelect(selectEl, entries) {
     const prev = selectEl.value;
     const avail = entries.filter((e) => e.available);
@@ -150,7 +152,7 @@
     }
     selectEl.value = avail.some((e) => e.name === prev) ? prev
       : (avail.length ? avail[0].name : '');
-    selectEl.dispatchEvent(new Event('change'));
+    if (selectEl.value !== prev) selectEl.dispatchEvent(new Event('change'));
   }
 
   function applyToolAvailability(data) {

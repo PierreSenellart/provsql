@@ -113,3 +113,24 @@ def test_nav_panels_mutually_exclusive(page: Page, studio_url: str) -> None:
     expect(page.locator("#tools-panel")).to_be_visible()
     expect(page.locator("#config-panel")).to_be_hidden()
     expect(page.locator("#schema-panel")).to_be_hidden()
+
+
+def test_opening_tools_panel_keeps_eval_result(page: Page, studio_url: str) -> None:
+    """Opening the Tools panel refreshes the eval strip's tool dropdowns; a
+    refresh that leaves their selection unchanged must not clear the result
+    already shown in the strip."""
+    page.goto(studio_url + "/circuit")
+    page.locator("#request").fill("SELECT name FROM personnel LIMIT 3;")
+    page.locator("#run-btn").click()
+    expect(page.locator("#result-count")).to_have_text("3", timeout=8000)
+    page.locator("#result-body tr").first.locator("td").last.click()
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+    page.locator("#eval-semiring").select_option(value="boolexpr")
+    page.locator("#eval-run").click()
+    result = page.locator("#eval-result")
+    expect(result).not_to_be_empty(timeout=8000)
+
+    page.locator("#tools-btn").click()
+    expect(page.locator("#tools-body")).to_contain_text("d4", timeout=8000)
+    page.wait_for_load_state("networkidle")
+    expect(result).not_to_be_empty()

@@ -2870,7 +2870,9 @@ table thead th[data-sort="desc"]::after {
    (compiler names, numbers, single-word methods); only the trailing
    error cell wraps when a long ProvSQL banner needs the room. */
 .cv-kc-panel td { white-space: nowrap; }
-.cv-kc-panel td:last-child { white-space: normal; }
+/* Wrap between words: the result chip's break-all (meant for long UUIDs
+   and numbers) would otherwise split "independent" mid-word. */
+.cv-kc-panel td:last-child { white-space: normal; word-break: normal; overflow-wrap: break-word; }
 /* Inline source-tuple annotation appended to each "c input" comment
    line in the CNF panel (resolved via /api/leaf). Muted so it reads as
    Studio-side enrichment rather than part of the DIMACS the counter
