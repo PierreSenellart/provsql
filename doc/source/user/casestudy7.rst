@@ -148,13 +148,17 @@ Try ``independent`` with the toggle on :guilabel:`Semiring`: it
 :guilabel:`Boolean` and try again: it succeeds, ``≈ 0.4259``, matching
 *Tree decomposition* exactly.
 
-The difference is the **key**. This query is non-hierarchical -- ``bid``
-mentions only ``reviewer``, ``topic_of`` only ``topic``, ``expertise``
-both -- so its literal lineage reuses the shared ``topic_of(p1, t1)`` tuple
-(Alice, Bob and Judy are all database experts who bid on ``p1``) and is
-*not* read-once. But because ``expertise`` is keyed on ``reviewer``, each
-reviewer has a single topic, so the safe-query rewriter can group the
-experts by topic and factor that shared tuple out:
+Under :guilabel:`Semiring`, the circuit is the query's literal lineage.
+This query is non-hierarchical -- ``bid`` mentions only ``reviewer``,
+``topic_of`` only ``topic``, ``expertise`` both -- so that lineage reuses the
+shared ``topic_of(p1, t1)`` tuple (Alice, Bob and Judy are all database
+experts who bid on ``p1``) and is *not* read-once, hence the error.
+:guilabel:`Boolean` turns on the safe-query rewriter, which restructures the
+query before it runs. The restructured circuit has the same probability, but
+not necessarily the same value in every semiring, which is why the rewriter
+waits for the toggle. Here it relies on the **key**: because ``expertise``
+is keyed on ``reviewer``, each reviewer has a single topic, so the rewriter
+can group the experts by topic and factor that shared tuple out:
 
 .. math::
 
@@ -164,10 +168,15 @@ experts by topic and factor that shared tuple out:
 
 Each leaf now appears once -- read-once again, and ``independent`` is exact.
 The lesson: **safety depends on the query and the keys together**. Drop the
-key (``ALTER TABLE expertise DROP CONSTRAINT expertise_pkey``) and
-``independent`` still returns ``0.4259``, but the route changes -- the query
-is now genuinely hard and falls through to Part C's data compiler. Add it
-back before continuing:
+key:
+
+.. code-block:: postgresql
+
+    ALTER TABLE expertise DROP CONSTRAINT expertise_pkey;
+
+and ``independent`` still returns ``0.4259``, but the route changes -- the
+query is now genuinely hard and falls through to Part C's data compiler. Add
+the key back before continuing:
 
 .. code-block:: postgresql
 
@@ -195,9 +204,10 @@ championing -- a sign they engaged deeply?*
 
 On Olga's row, try the heavy methods first: ``tree-decomposition`` gives up
 (*"Treewidth greater than 10"*), ``possible-worlds`` refuses (over 64
-inputs), and a real compiler (``d4``) is cut off by ``statement_timeout`` on
-the 24-paper instance. Then try ``inversion-free`` -- or just the default
-method -- and it returns ``0.975314`` in milliseconds.
+inputs), and ``compilation`` with an external compiler such as ``d4`` is cut
+off by ``statement_timeout`` on the 24-paper instance. Then try
+``inversion-free`` -- or just the default ``exact`` method -- and it returns
+``0.975314`` in milliseconds.
 
 Why the gap: grouping on the reviewer makes the two evidence sides share the
 ``bid(r15, *)`` tuples, so the lineage is **not** read-once and every
