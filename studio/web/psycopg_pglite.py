@@ -31,6 +31,9 @@ def _to_py(v):
 
 psycopg = types.ModuleType("psycopg")
 psycopg.Error = type("Error", (Exception,), {})
+# Never raised here (the in-process PGlite is always reachable), but app.py
+# subclasses it at import time.
+psycopg.OperationalError = type("OperationalError", (psycopg.Error,), {})
 
 
 class _Diag:
