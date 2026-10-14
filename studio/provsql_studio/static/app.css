@@ -264,6 +264,11 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   box-shadow: 0 0 0 3px rgba(111,207,151,0.25);
   flex-shrink: 0;
 }
+/* Until the first /api/conn answer: neither connected nor not. */
+.wp-nav__dot.is-pending {
+  background: rgba(255,255,255,0.45);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.12);
+}
 .wp-nav__dot.is-offline {
   background: var(--terracotta-500);
   box-shadow: 0 0 0 3px rgba(196, 102, 74, 0.25);
@@ -1090,6 +1095,12 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   text-align: right;
 }
 .wp-db-hint i { color: var(--gold-700); margin-right: 0.4rem; }
+/* The database asked for cannot be reached. */
+.wp-db-hint--error {
+  background: rgba(196, 102, 74, 0.14);
+  border-bottom-color: var(--terracotta-500);
+}
+.wp-db-hint--error i { color: var(--terracotta-500); }
 .wp-db-hint code {
   font-family: var(--font-mono); font-size: 0.82em;
   padding: 0.05rem 0.3rem; background: rgba(0,0,0,0.05);

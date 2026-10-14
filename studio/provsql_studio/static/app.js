@@ -1090,6 +1090,9 @@
   }
 
   let _currentConn = null;
+  // The DSN of a database that could not be reached since the page
+  // loaded, for the connection editor to prefill (password stripped).
+  let _connFailDsn = null;
 
   async function fetchConnInfo() {
     const el  = document.getElementById('conn-info');
@@ -1101,13 +1104,16 @@
     const dot = document.querySelector('.wp-nav__dot');
     if (!el) return;
     let reason = '';
+    let failBody = null;
     try {
       const resp = await fetch('/api/conn');
       if (!resp.ok) {
-        // /api/conn responds with 503 + JSON {error, reason} when the
-        // pool can't reach PG. Pull the reason out for the dot tooltip.
+        // /api/conn responds with 503 + JSON {error, reason, database,
+        // dsn, databases_listable} when PG can't be reached. Pull the
+        // reason out for the dot tooltip.
         try {
           const body = await resp.json();
+          failBody = body;
           reason = body.reason || body.error || `HTTP ${resp.status}`;
         } catch (_) {
           reason = `HTTP ${resp.status}`;
@@ -1157,7 +1163,7 @@
       showVersion(studioEl, 'Studio', c.studio_version, c.studio_build);
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
-      if (dot) dot.classList.remove('is-offline');
+      if (dot) dot.classList.remove('is-pending', 'is-offline');
       if (trigger) {
         // Surface only the server endpoint. The DB name is already
         // shown right next to the dot in the switcher chip, so we
@@ -1171,7 +1177,7 @@
       // the server fell back to the postgres maintenance DB. Show a
       // dismissible banner pointing the user at the switcher; once
       // they pick a real DB the flag clears server-side.
-      _renderDbAutoHint(!!c.db_is_auto);
+      _renderConnHint(c.db_is_auto ? { kind: 'auto' } : null);
       // Render search_path with `provsql` shown as a locked chip so the
       // user can tell at a glance which segment is enforced by Studio.
       // The compose helper on the server already pinned provsql to the
@@ -1192,9 +1198,25 @@
       // transient blip: the chip keeps showing the last-known db name
       // (so the dropdown still works); only the dot turns red and the
       // tooltip explains.
-      if (dot) dot.classList.add('is-offline');
+      if (dot) {
+        dot.classList.remove('is-pending');
+        dot.classList.add('is-offline');
+      }
       if (trigger) {
         trigger.title = `Cannot reach the database: ${reason || e.message || 'cannot connect to PostgreSQL'}`;
+      }
+      // Never connected since the page loaded: no blip, but a database
+      // that cannot be reached (wrong name or host, server down…). Name
+      // it in the chip and say so in the banner, with the way out.
+      if (!_currentConn && failBody) {
+        if (failBody.database) el.textContent = failBody.database;
+        _connFailDsn = failBody.dsn || null;
+        _renderConnHint({
+          kind: 'error',
+          database: failBody.database || null,
+          reason,
+          listable: !!failBody.databases_listable,
+        });
       }
     }
     setupDbSwitcher();
@@ -3985,6 +4007,7 @@
       // The user retypes the password when switching role/host if
       // needed; we don't echo secrets back.
       if (_currentConn && _currentConn.dsn) input.value = _currentConn.dsn;
+      else if (_connFailDsn) input.value = _connFailDsn;
       closeOtherPopovers('dsn-panel');
       panel.hidden = false;
       dot.setAttribute('aria-expanded', 'true');
@@ -4041,35 +4064,56 @@
   }
   setupConnEditor();
 
-  // Show / clear the "no DB selected" hint banner. Lives at the top of
-  // the page (above the wp-shell grid) so it's the first thing the user
-  // sees on a freshly-launched studio with no --dsn. Single instance
-  // keyed by id so repeated /api/conn polls don't duplicate it.
-  function _renderDbAutoHint(show) {
+  // The banner under the nav that says why there is no usable database
+  // and offers the way out: `auto` when no DB was picked at launch (Studio
+  // sits on the postgres maintenance DB; it lives at the top of the page
+  // so it's the first thing the user sees on a freshly-launched studio
+  // with no --dsn), `error` when the database asked for cannot be
+  // reached. null clears it. Single instance keyed by id so repeated
+  // /api/conn polls don't duplicate it.
+  function _renderConnHint(hint) {
     const id = 'db-auto-hint';
     let el = document.getElementById(id);
-    if (!show) {
+    if (!hint) {
       if (el) el.remove();
       return;
     }
-    if (el) return;
-    el = document.createElement('div');
-    el.id = id;
-    el.className = 'wp-db-hint';
-    el.innerHTML =
-      `<i class="fas fa-info-circle"></i> `
-      + `No database picked at launch: currently on the <code>postgres</code> `
-      + `maintenance DB. `
-      + `<button type="button" class="wp-db-hint__btn" id="db-auto-pick">`
+    const key = JSON.stringify(hint);
+    if (el && el.dataset.key === key) return;
+    const fresh = !el;
+    if (fresh) {
+      el = document.createElement('div');
+      el.id = id;
+    }
+    el.dataset.key = key;
+    el.className = 'wp-db-hint' + (hint.kind === 'error' ? ' wp-db-hint--error' : '');
+    const pickBtn = `<button type="button" class="wp-db-hint__btn" id="db-auto-pick">`
       + `Pick a database…</button>`;
+    if (hint.kind === 'error') {
+      el.innerHTML =
+        `<i class="fas fa-exclamation-triangle"></i> Cannot connect`
+        + (hint.database ? ` to <code>${escapeHtml(hint.database)}</code>` : '')
+        + `: ${escapeHtml(hint.reason)} `
+        + (hint.listable ? pickBtn : '')
+        + `<button type="button" class="wp-db-hint__btn" id="db-hint-edit">`
+        + `Edit connection…</button>`;
+    } else {
+      el.innerHTML =
+        `<i class="fas fa-info-circle"></i> `
+        + `No database picked at launch: currently on the <code>postgres</code> `
+        + `maintenance DB. `
+        + pickBtn;
+    }
     // Insert directly after <nav>; using body.firstChild was unsafe
     // because whitespace text nodes sit before the nav element and
     // pushed the banner above it.
-    const nav = document.querySelector('.wp-nav');
-    if (nav && nav.parentNode) {
-      nav.parentNode.insertBefore(el, nav.nextSibling);
-    } else {
-      document.body.appendChild(el);
+    if (fresh) {
+      const nav = document.querySelector('.wp-nav');
+      if (nav && nav.parentNode) {
+        nav.parentNode.insertBefore(el, nav.nextSibling);
+      } else {
+        document.body.appendChild(el);
+      }
     }
     // Open the database menu (the user@dbname chip in the top-right of
     // the nav) on click. The chip's own click toggles the dropdown, so
@@ -4083,6 +4127,15 @@
       e.stopPropagation();
       const chip = document.getElementById('conn-info');
       if (chip) chip.click();
+    };
+    // Opens the connection editor (the plug icon left of the chip),
+    // with the DSN asked for, to correct it. Same stopPropagation
+    // reasoning as above.
+    const edit = document.getElementById('db-hint-edit');
+    if (edit) edit.onclick = (e) => {
+      e.stopPropagation();
+      const plug = document.getElementById('conn-dot');
+      if (plug) plug.click();
     };
   }
 

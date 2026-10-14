@@ -652,16 +652,52 @@ def configure_connection(conn: psycopg.Connection) -> None:
             pass
 
 
+_LIST_DATABASES_SQL = (
+    "SELECT datname FROM pg_database "
+    "WHERE NOT datistemplate "
+    "  AND has_database_privilege(current_user, datname, 'CONNECT') "
+    "ORDER BY datname"
+)
+
+
 def list_databases(pool: ConnectionPool) -> list[str]:
     """Names of every database the current_user is allowed to CONNECT to,
     excluding template databases. Used to populate the database-switcher."""
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT datname FROM pg_database "
-            "WHERE NOT datistemplate "
-            "  AND has_database_privilege(current_user, datname, 'CONNECT') "
-            "ORDER BY datname"
-        )
+        cur.execute(_LIST_DATABASES_SQL)
+        return [r[0] for r in cur.fetchall()]
+
+
+# A connection attempt that fails gives up after this many seconds (an
+# unreachable host would otherwise hang for the kernel's TCP timeout).
+PROBE_CONNECT_TIMEOUT = 5
+
+
+def probe(dsn: str) -> str | None:
+    """Why a connection to `dsn` fails, or None if it succeeds. One direct
+    attempt, outside the pool, which retries a failing connection in the
+    background and only reports it after its 30-second wait."""
+    try:
+        psycopg.connect(dsn, connect_timeout=PROBE_CONNECT_TIMEOUT).close()
+    except psycopg.Error as e:
+        return str(e).strip() or repr(e)
+    return None
+
+
+def maintenance_dsn(dsn: str) -> str:
+    """`dsn` with its database replaced by the `postgres` maintenance one:
+    the same server and role, for listing databases when the one asked
+    for cannot be reached (it does not exist, say)."""
+    params = psycopg.conninfo.conninfo_to_dict(dsn)
+    params["dbname"] = "postgres"
+    return psycopg.conninfo.make_conninfo(**params)
+
+
+def list_databases_at(dsn: str) -> list[str]:
+    """list_databases over a direct connection to `dsn`, outside the pool."""
+    with psycopg.connect(dsn, connect_timeout=PROBE_CONNECT_TIMEOUT) as conn, \
+         conn.cursor() as cur:
+        cur.execute(_LIST_DATABASES_SQL)
         return [r[0] for r in cur.fetchall()]
 
 

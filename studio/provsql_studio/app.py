@@ -49,6 +49,14 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _WRAPPABLE_RE = re.compile(r"^\s*(WITH|SELECT)\b", re.IGNORECASE)
 
 
+class DatabaseUnreachable(psycopg.OperationalError):
+    """The configured database cannot be connected to (wrong host or
+    database name, server down, authentication refused…). Raised by
+    get_pool() straight away, instead of every request waiting out the
+    pool's 30 seconds; an OperationalError, so the routes that already
+    turn one into a 503 handle it, and an error handler the others."""
+
+
 def create_app(
     *,
     dsn: str | None = None,
@@ -146,7 +154,43 @@ def create_app(
     # (when the user switches database) is picked up without re-binding
     # closures.
     def get_pool():
-        return app.extensions["provsql_pool"]
+        pool = app.extensions["provsql_pool"]
+        # A healthy pool keeps a connection available; with none, either
+        # all are busy or none can be opened, which one direct attempt
+        # tells apart.
+        if pool.get_stats().get("pool_available", 1) == 0:
+            reason = db.probe(app.config["DSN"])
+            if reason is not None:
+                raise DatabaseUnreachable(reason)
+        return pool
+
+    @app.errorhandler(DatabaseUnreachable)
+    def _database_unreachable(e):
+        return jsonify({"error": "database unreachable", "reason": str(e)}), 503
+
+    def _public_dsn() -> str:
+        """The configured DSN without its password, for the connection
+        editor to prefill: the user retypes the password if they need to
+        switch host or role."""
+        try:
+            params = psycopg.conninfo.conninfo_to_dict(app.config.get("DSN", ""))
+            params.pop("password", None)
+            return psycopg.conninfo.make_conninfo(**params)
+        except Exception:
+            return ""
+
+    def _accessible_databases() -> list[str]:
+        """The databases the switcher offers. When the configured one
+        cannot be reached, those of its server, through the `postgres`
+        maintenance database, so that a wrong database name can be fixed
+        by picking a right one; DatabaseUnreachable if that fails too."""
+        try:
+            return db.list_databases(get_pool())
+        except DatabaseUnreachable as e:
+            try:
+                return db.list_databases_at(db.maintenance_dsn(app.config["DSN"]))
+            except psycopg.Error:
+                raise e from None
 
     def _backend_gucs(extra: dict[str, str] | None = None) -> dict[str, str]:
         """Merge the panel overlay + session-sticky mode flags + any
@@ -224,9 +268,22 @@ def create_app(
         try:
             info = db.conn_info(get_pool())
         except psycopg.OperationalError as e:
+            # What the page needs to offer a way out: the database asked
+            # for, the DSN to correct in the connection editor, and
+            # whether the switcher can list the server's databases.
+            dbname = psycopg.conninfo.conninfo_to_dict(
+                app.config.get("DSN", "")).get("dbname")
+            try:
+                db.list_databases_at(db.maintenance_dsn(app.config["DSN"]))
+                databases_listable = True
+            except psycopg.Error:
+                databases_listable = False
             return jsonify({
                 "error": "database unreachable",
                 "reason": str(e).strip() or "cannot connect to PostgreSQL",
+                "database": dbname,
+                "dsn": _public_dsn(),
+                "databases_listable": databases_listable,
             }), 503
         # Display the path that user queries effectively see: the Studio
         # override (Config panel) when set, else the session value, with
@@ -239,16 +296,7 @@ def create_app(
         info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
         info["studio_version"] = STUDIO_VERSION
         info["studio_build"] = build_id_mod.studio_build()
-        # Send back a password-stripped DSN so the connection editor
-        # can prefill its input without leaking secrets to the page.
-        # The user re-types the password if they need to switch host
-        # or role.
-        try:
-            params = psycopg.conninfo.conninfo_to_dict(app.config.get("DSN", ""))
-            params.pop("password", None)
-            info["dsn"] = psycopg.conninfo.make_conninfo(**params)
-        except Exception:
-            info["dsn"] = ""
+        info["dsn"] = _public_dsn()
         return jsonify(info)
 
     @app.post("/api/conn")
@@ -294,7 +342,7 @@ def create_app(
         elif target and isinstance(target, str):
             # Convenience path: swap dbname only, preserving the rest of
             # the connection parameters. Used by the top-nav switcher.
-            accessible = db.list_databases(get_pool())
+            accessible = _accessible_databases()
             if target not in accessible:
                 return jsonify({"error": f"database {target!r} not accessible"}), 403
             params = psycopg.conninfo.conninfo_to_dict(app.config["DSN"])
@@ -394,7 +442,7 @@ def create_app(
 
     @app.get("/api/databases")
     def api_databases():
-        return jsonify(db.list_databases(get_pool()))
+        return jsonify(_accessible_databases())
 
     @app.get("/api/relations")
     def api_relations():

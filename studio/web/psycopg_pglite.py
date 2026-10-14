@@ -493,6 +493,11 @@ class ConnectionPool:
     def connection(self, *a, **k):
         return _Conn()
 
+    # The in-process PGlite is always reachable: a connection is always
+    # available, so app.get_pool() never probes it.
+    def get_stats(self):
+        return {"pool_available": 1}
+
     def close(self):
         pass
 

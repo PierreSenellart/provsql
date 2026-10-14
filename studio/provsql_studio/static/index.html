@@ -34,14 +34,17 @@
     </div>
     <span class="wp-nav__conn">
       <button type="button" class="wp-nav__connbtn" id="conn-dot"
-              title="connected to a live PostgreSQL server"
+              title="connecting…"
               aria-haspopup="dialog" aria-expanded="false"
               aria-label="Edit connection">
         <i class="fas fa-plug wp-nav__connicon" aria-hidden="true"></i>
-        <span class="wp-nav__dot"></span>
+        <span class="wp-nav__dot is-pending"></span>
       </button>
       <div class="wp-nav__dsnpanel" id="dsn-panel" role="dialog" hidden>
-        <h4 class="wp-nav__dsntitle">Connection</h4>
+        <h4 class="wp-nav__dsntitle">Connection<a class="wp-help"
+            href="https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING"
+            target="_blank" rel="noopener"
+            aria-label="Help: PostgreSQL connection strings"><i class="fas fa-question-circle"></i></a></h4>
         <p class="wp-nav__dsnhint">Paste a DSN (host, port, user, password, dbname, options…).</p>
         <input type="text" class="wp-nav__dsninput" id="dsn-input"
                placeholder="host=localhost port=5432 user=alice dbname=cs5"

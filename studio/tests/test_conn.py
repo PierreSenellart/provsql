@@ -7,7 +7,12 @@ read-only switch, so we use it as the destination.
 """
 from __future__ import annotations
 
+import time
+
 import psycopg
+import pytest
+
+from provsql_studio.app import create_app
 
 
 def test_conn_reports_user_and_test_database(client, test_dsn):
@@ -91,3 +96,47 @@ def test_conn_switch_rejects_inaccessible_database(client):
 def _dbname_of(dsn: str) -> str:
     """Extract the dbname from a libpq-style DSN string."""
     return psycopg.conninfo.conninfo_to_dict(dsn)["dbname"]
+
+
+@pytest.fixture()
+def unreachable_client(test_dsn, tmp_path, monkeypatch):
+    """A Studio whose DSN names a database that does not exist on the
+    test server (the shape of a mistyped --dsn)."""
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
+    params = psycopg.conninfo.conninfo_to_dict(test_dsn)
+    params["dbname"] = "provsql_studio_no_such_db"
+    app = create_app(dsn=psycopg.conninfo.make_conninfo(**params))
+    app.config.update(TESTING=True)
+    try:
+        yield app.test_client()
+    finally:
+        app.extensions["provsql_pool"].close()
+
+
+def test_unreachable_database_fails_fast_with_a_way_out(unreachable_client):
+    """/api/conn answers at once (not after the pool's 30 s wait) with the
+    reason, the database asked for, the DSN to correct, and whether the
+    server's databases can be listed; other routes answer 503 too."""
+    start = time.monotonic()
+    resp = unreachable_client.get("/api/conn")
+    assert time.monotonic() - start < 10
+    assert resp.status_code == 503
+    body = resp.get_json()
+    assert body["reason"]
+    assert body["database"] == "provsql_studio_no_such_db"
+    assert "provsql_studio_no_such_db" in body["dsn"]
+    assert body["databases_listable"] is True
+    assert unreachable_client.get("/api/relations").status_code == 503
+
+
+def test_unreachable_database_switcher_lists_the_server(
+    unreachable_client, test_dsn
+):
+    """The switcher lists the server's databases through the maintenance
+    DB, and picking one of them recovers."""
+    dbs = unreachable_client.get("/api/databases").get_json()
+    assert _dbname_of(test_dsn) in dbs
+    resp = unreachable_client.post(
+        "/api/conn", json={"database": _dbname_of(test_dsn)})
+    assert resp.status_code == 200, resp.data
+    assert unreachable_client.get("/api/conn").status_code == 200
