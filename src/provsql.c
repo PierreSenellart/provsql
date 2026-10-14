@@ -38233,7 +38233,8 @@ void _PG_init(void) {
                            NULL,
                            NULL);
   DefineCustomIntVariable("provsql.monte_carlo_seed",
-                          "Seed for the Monte Carlo sampler.",
+                          "Seed for the Monte Carlo sampler; -1 draws a fresh "
+                          "random seed for each evaluation.",
                           "-1 (default) seeds from std::random_device for "
                           "non-deterministic sampling. Any other value "
                           "(including 0) is used as a literal seed for "
