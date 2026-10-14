@@ -118,8 +118,8 @@ expertise?*
 
 Click into ``p1``'s ``provsql`` cell and, in the eval strip, pick
 :guilabel:`Marginal probability` with the ``independent`` method. It returns
-``≈ 0.666`` instantly -- and *Compiled d-D circuit* with *interpret as d-D*,
-or *Tree decomposition*, all agree.
+``≈ 0.666`` instantly, and the other exact methods, such as
+``tree-decomposition``, give the same value.
 
 Why it works: the query is **hierarchical** -- the atoms mentioning
 ``topic`` (just ``expertise``) sit inside those mentioning ``reviewer``
@@ -146,7 +146,7 @@ topics?*
 Try ``independent`` with the toggle on :guilabel:`Semiring`: it
 **errors** -- *"Not an independent circuit"*. Switch the toggle to
 :guilabel:`Boolean` and try again: it succeeds, ``≈ 0.4259``, matching
-*Tree decomposition* exactly.
+``tree-decomposition`` exactly.
 
 Under :guilabel:`Semiring`, the circuit is the query's literal lineage.
 This query is non-hierarchical -- ``bid`` mentions only ``reviewer``,
@@ -233,9 +233,7 @@ chairs (``c1``–``c4``) each run three independent assessment passes -- a
 
 *Is the pool in a "well-attended" state?* -- a union of four overlapping
 patterns of who-assessed-what. This is the textbook query :math:`q_9` /
-:math:`Q_W` (Dalvi & Suciu); its four patterns have no tidy English gloss,
-because its tractability is *purely structural* -- which is exactly the
-point.
+:math:`Q_W` (Dalvi & Suciu).
 
 .. code-block:: postgresql
 
@@ -253,19 +251,19 @@ point.
       WHERE d.chair = d1.chair AND d1b.chair = d2.chair AND d1b.sub = d2.sub
         AND d2b.chair = d3.chair AND d2b.sub = d3.sub
 
-Try :guilabel:`Marginal probability` with the toggle on :guilabel:`Boolean`:
-it returns the exact ``0.056923`` with no method named (the chooser routes
-it through the Möbius compiler automatically; once the μ root is rendered you
-can also pick the ``mobius`` method explicitly). Any circuit compiler
+Try :guilabel:`Marginal probability` with the ``exact`` method and the
+toggle on :guilabel:`Boolean`: it returns ``0.056923`` (the chooser routes it
+through the Möbius compiler; once the μ root is rendered you can also pick
+the ``mobius`` method explicitly). Any circuit compiler
 blows up instead: :math:`q_9` provably has no polynomial
 OBDD / FBDD / decision-DNNF :cite:`DBLP:journals/mst/AmarilliCMS20`.
 
 Why it is nonetheless safe: writing the probability by inclusion-exclusion,
 the one :math:`\#P`-hard term -- the conjunction of all four patterns --
 gets a **zero Möbius coefficient** and cancels, leaving only easy terms.
-ProvSQL's Möbius compiler computes exactly that signed combination. Click the
-existence row's ``provsql`` cell: the circuit also carries the whole literal
-lineage, so Studio shows a *Circuit too large* card. Choose
+ProvSQL's Möbius compiler computes exactly that signed combination. The
+circuit also carries the whole literal lineage, so Studio shows a *Circuit
+too large* card in place of it. Choose
 :guilabel:`Render at depth 1`: the root is a single **μ** (Möbius-function)
 gate, each child edge labelled with its integer coefficient, the hard term
 among them cancelled to zero. (The pool is **dense** on purpose: on sparse
@@ -336,7 +334,7 @@ form a cycle with no nesting -- non-hierarchical, not inversion-free, and a
 single conjunct so nothing cancels. All of Part A is exhausted, and the
 probability is :math:`\#P`-hard :cite:`DBLP:journals/jacm/DalviS12`. The
 circuit's treewidth is **4** (against **1** for a safe query), so a real
-compiler (*Compiled d-D circuit* with ``d4``) turns it into a d-DNNF of
+compiler (:guilabel:`Compiled d-D circuit` with ``d4``) turns it into a d-DNNF of
 order a thousand nodes -- and the number ``0.8818``.
 
 That compiled circuit is the object the rest of Part B inspects.
@@ -344,7 +342,7 @@ That compiled circuit is the object the rest of Part B inspects.
 Reading the CNF back against the data
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Pick *Tseytin CNF*: the panel shows the DIMACS CNF ProvSQL streams to an
+Pick :guilabel:`Tseytin CNF`: the panel shows the DIMACS CNF ProvSQL streams to an
 external compiler, with one ``c input`` comment per variable. Studio
 annotates each with the source tuple it stands for, so a model or weighted
 count returned by an outside tool reads back against the reviewing data (the
@@ -362,7 +360,7 @@ same mapping is a table through :sqlfunc:`tseytin_cnf_mapping`).
 Comparing compilers and methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Pick *Probability benchmark*: it times every probability method on the hard
+Pick :guilabel:`Probability benchmark`: it times every probability method on the hard
 circuit, one row each, with the compiled d-DNNF size beside the run time.
 Observe the spread: the exact methods that finish (``tree-decomposition``,
 the compilers, the model counters) all agree to full precision;
@@ -385,8 +383,8 @@ as ``jsonb`` for comparing one circuit across compilers.
    ``monte-carlo`` lands in its band; ``independent`` reports the circuit is
    not independent; ``possible-worlds`` and ``weightmc`` time out.
 
-Which compilers appear depends on what is installed; the **Tools** panel (the
-wrench icon) lists the registry and flags each as available / enabled, read
+Which compilers appear depends on what is installed; the Tools panel (the
+:fa:`tools` button) lists the registry and flags each as available / enabled, read
 live from ``provsql.tools`` (see :doc:`the external-tool registry
 </user/tool-registry>`).
 
@@ -451,7 +449,7 @@ Read it per paper -- *for each paper, how competently is it covered?*
     WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
     GROUP BY t.paper ORDER BY t.paper
 
-:guilabel:`Marginal probability` gives each group's value -- ``p1``
+:guilabel:`Marginal probability` with ``exact`` gives each group's value -- ``p1``
 ``0.425869``, ``p4`` ``0.300776`` -- matching a compiler to full precision,
 from the data's structure with no external tool.
 
@@ -568,8 +566,8 @@ count.
 
 The probability is then **two-terminal network reliability** -- that ``r1``
 stays connected when each edge is present independently -- which is
-:math:`\#P`-hard in general. Yet :guilabel:`Marginal probability` reads
-``r1`` reaches ``r5`` with reliability ``0.5496`` straight off, and even
+:math:`\#P`-hard in general. Yet ``exact`` reads ``r1`` reaches ``r5``
+with reliability ``0.5496`` straight off, and even
 ``independent`` evaluates it. Why: ProvSQL recognises the reachability shape
 and, by the provenance form of Courcelle's theorem
 :cite:`DBLP:conf/icalp/AmarilliBS15`, compiles along a tree decomposition of

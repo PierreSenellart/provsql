@@ -81,7 +81,7 @@ for French officials; it is the relation we place on the timeline below.
 Opening Temporal mode
 ---------------------
 
-Point Studio at the database and pick **Temporal** from the mode switcher
+Point Studio at the database and pick :guilabel:`Temporal` from the mode switcher
 (see :ref:`the mode reference <studio-temporal-mode>` for the full UI):
 
 .. code-block:: bash
@@ -90,8 +90,8 @@ Point Studio at the database and pick **Temporal** from the mode switcher
 
 Two controls drive every view that follows:
 
-* **Source** -- a tracked **Relation** (such as the ``person_position``
-  view) or an arbitrary **Query** typed into the query box.
+* **Source** -- a tracked :guilabel:`Relation` (such as the ``person_position``
+  view) or an arbitrary :guilabel:`Query` typed into the query box.
 * **Time operation** -- :guilabel:`Full` (every row, full validity),
   :guilabel:`As of` (an instant), or :guilabel:`During` (a window).
 
@@ -102,7 +102,7 @@ mapping**; leave it at the canonical ``provsql.time_validity_view`` that
 The full history of a person (Full)
 -----------------------------------
 
-With the **Query** source and the :guilabel:`Full` operation, ask for
+With the :guilabel:`Query` source and the :guilabel:`Full` operation, ask for
 every position Jacques Chirac has held:
 
 .. code-block:: postgresql
@@ -141,7 +141,7 @@ provenance. The equivalent SQL, which Temporal mode runs for you, is:
 A snapshot in time (As of)
 --------------------------
 
-So far we typed SQL into the **Query** source; the **Relation** source is
+So far we typed SQL into the :guilabel:`Query` source; the :guilabel:`Relation` source is
 quicker when you just want a tracked table or view on the timeline. Pick
 ``person_position`` from the :guilabel:`Relation` selector, switch the
 operation to :guilabel:`As of`, and set the instant to ``1981-07-01``:
@@ -216,7 +216,7 @@ the semantics of :sqlfunc:`timeslice`:
 The full history of a role (Full)
 ---------------------------------
 
-Keep the **Query** source on :guilabel:`Full` and list every holder of a
+Keep the :guilabel:`Query` source on :guilabel:`Full` and list every holder of a
 role to read its succession as a stack of lanes:
 
 .. code-block:: postgresql
@@ -275,7 +275,7 @@ them and appoint a placeholder:
     INSERT INTO holds (id, position, country)
       VALUES (100000, 'Prime Minister of France', 'FR');
 
-Put the Prime Ministers back on the timeline (the **Query** source):
+Put the Prime Ministers back on the timeline (the :guilabel:`Query` source):
 
 .. code-block:: postgresql
 

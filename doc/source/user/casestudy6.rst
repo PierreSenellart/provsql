@@ -147,7 +147,7 @@ cell carrying the underlying gate UUID. Click into a row's
 ``gate_rv`` leaf with the distribution-kind initial in the circle
 (N for a Normal, U for Uniform, Exp for Exponential, Erl
 for Erlang).
-Pick *Distribution profile* from the *Distribution* group of the
+Pick :guilabel:`Distribution profile` from the :guilabel:`Distribution` group of the
 eval strip and click :guilabel:`Run`: the panel returns
 headline stats: support, mean :math:`\mu`, standard deviation :math:`\sigma`, and entropy :math:`H`,
 as well as an inline
@@ -155,7 +155,7 @@ histogram with a PDF/CDF toggle.
 
 The histogram is backed server-side by :sqlfunc:`rv_histogram`;
 pinning ``provsql.monte_carlo_seed`` in the Config panel (under
-*Evaluation*) makes the shape reproducible across re-runs.
+:guilabel:`Evaluation`) makes the shape reproducible across re-runs.
 
 .. figure:: /_static/casestudy6/gate-rv-distribution-profile.png
    :alt: Studio Circuit mode showing the gate_rv N(28,2) leaf at
@@ -165,7 +165,7 @@ pinning ``provsql.monte_carlo_seed`` in the Config panel (under
          by a terracotta analytical PDF curve.
 
    The ``gate_rv`` leaf for ``pm25`` on row 1 is a ``N(28, 2)``
-   circle; the eval-strip *Distribution profile* panel shows the
+   circle; the eval-strip :guilabel:`Distribution profile` panel shows the
    :math:`\mu`, :math:`\sigma`, :math:`H`, support, and an inline histogram.
    When the gate has a closed-form family (here a bare Normal),
    Studio overlays the analytical PDF on top of the bars.
@@ -193,7 +193,7 @@ Boolean wrapper (a ``gate_times`` over the row's input token and
 the ``gate_cmp``); the cmp's child link reaches into the
 ``gate_rv`` from :ref:`Step 1 <cs6-step-1>`.
 
-The eval strip's *Marginal probability* entry exposes the
+The eval strip's :guilabel:`Marginal probability` entry exposes the
 full method catalogue (see :doc:`the chapter on probabilities
 <probabilities>`). Pick
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
@@ -222,7 +222,7 @@ then folds comparators whose answer can be decided from the
 operands' support alone: for example, ``U(10, 22) > 35`` is
 universally false because the uniform's upper bound is below the
 threshold. The fold is controlled by ``provsql.simplify_on_load``
-(default on), which the Config panel exposes under *Evaluation*.
+(default on), which the Config panel exposes under :guilabel:`Evaluation`.
 
 Click into row 2's auto-added ``provsql`` cell from the :ref:`Step 2 <cs6-step-2>`
 result (station ``s2``, ``pm25 ~ U(10, 22)``). With
@@ -324,7 +324,7 @@ over two ``gate_arith(PLUS, …)`` subtrees, each child a per-row
 ``gate_mixture``. The right child of the outer division is the count of *included*
 rows under their per-row provenance: rows whose provenance is
 false contribute the additive identity to both numerator and
-denominator. Run *Distribution profile* on the root: the panel
+denominator. Run :guilabel:`Distribution profile` on the root: the panel
 shows the per-district average as a tight distribution centred at
 the inclusion-weighted mean.
 
@@ -357,12 +357,12 @@ Re-open the filtered query from :ref:`Step 2 <cs6-step-2>`:
     WHERE pm25 > 35
       AND station_id = 's1'
 
-Click a result row's ``pm25`` cell and pick *Distribution profile*
+Click a result row's ``pm25`` cell and pick :guilabel:`Distribution profile`
 in the eval strip. The strip then shows a :guilabel:`Condition on`
 text input, preset to the row's provenance UUID, with the
 :guilabel:`Conditioned by:` badge underneath it active. Run: the
 histogram now shows the *truncated* shape, restricted to the tail
-above ``35``. Pick *Moment* with ``k = 1`` and ``raw``:
+above ``35``. Pick :guilabel:`Moment` with ``k = 1`` and ``raw``:
 the panel returns the closed-form Mills-ratio mean of the
 `truncated normal
 <https://en.wikipedia.org/wiki/Truncated_normal_distribution>`_,
@@ -390,8 +390,8 @@ moment is estimated by rejection sampling at budget
 
    The conditional distribution profile for row 5 (``pm25 ∼
    N(40, 4)``) under the event ``pm25 > 35``. Studio auto-presets
-   the *Condition on* input with the row's provenance UUID and
-   activates the *Conditioned by* badge; the panel's header
+   the :guilabel:`Condition on` input with the row's provenance UUID and
+   activates the :guilabel:`Conditioned by:` badge; the panel's header
    reflects the truncated support ``[35, +∞]`` and the
    Mills-ratio mean ``μ ≈ 40.82``, ``σ ≈ 3.35`` (closed form on
    the truncated normal).
@@ -401,8 +401,8 @@ Step 7: Diagnostic Sampling
 
 For raw inspection or downstream analytics, draw samples from the
 conditional distribution. With the same row pinned and the
-*Conditioned by* badge active, pick *Sample* from the
-*Distribution* group; set ``n = 200`` and run. The result panel
+:guilabel:`Conditioned by:` badge active, pick :guilabel:`Sample` from the
+:guilabel:`Distribution` group; set ``n = 200`` and run. The result panel
 shows a six-value inline preview with a "show full list"
 expander; clicking it dumps all 200 samples.
 
@@ -434,7 +434,7 @@ Pick a result row's ``provsql`` cell: Circuit mode shows a
 ``gate_plus`` (``⊕``) over the two contributing inputs (today's
 row and yesterday's row), each carrying its own
 ``gate_cmp(pm25 > 35)`` from the lifted ``WHERE``. Run
-*Marginal probability* from the eval strip: it gives the
+:guilabel:`Marginal probability` from the eval strip: it gives the
 probability that *at least one* of the two days produced an
 Unhealthy reading for that slot. We deliberately keep the
 ``random_variable`` ``pm25`` column out of the ``SELECT``: there
@@ -480,7 +480,7 @@ For threshold queries whose contributing rows have structurally
 independent provenance, the ``'independent'`` probability method
 (see :doc:`the chapter on probabilities <probabilities>`) is *exact*
 and far cheaper than Monte Carlo. Re-run the :ref:`Step 2 <cs6-step-2>` query, click a
-result row's ``provsql`` cell, and run *Marginal probability* from
+result row's ``provsql`` cell, and run :guilabel:`Marginal probability` from
 the eval strip three times, with the methods ``independent``,
 ``tree-decomposition``, and ``monte-carlo`` at ``n = 10000``: the two
 exact methods return the same value to full precision, while
@@ -564,7 +564,7 @@ Each family answers through its own inverse CDF: the normals give
 the Erlang -- which has no elementary inverse -- is bisected on its
 closed-form CDF to ≈ 62.96. No sampling is involved in any of
 these. The same readout is available interactively: with a
-``pm25`` cell pinned, pick *Quantile* from the *Distribution*
+``pm25`` cell pinned, pick :guilabel:`Quantile` from the :guilabel:`Distribution`
 group of the eval strip, set the fraction ``p``, and run.
 
 Quantiles compose with conditioning: the median of a reading
@@ -581,7 +581,7 @@ quantile of the truncated distribution, again in closed form:
 Row 1 (``N(28, 2)``, for which the event is a far tail) gives
 ≈ 35.36, just above the threshold; row 5 (``N(40, 4)``) gives
 ≈ 40.53. In the eval strip, the same conditioning rides on the
-*Conditioned by* badge from :ref:`Step 6 <cs6-step-6>`: with it active, *Quantile*
+:guilabel:`Conditioned by:` badge from :ref:`Step 6 <cs6-step-6>`: with it active, :guilabel:`Quantile`
 returns the truncated-distribution quantile.
 
 Step 13: Expected Excess via CASE
@@ -935,10 +935,10 @@ stations:
     JOIN stations s2 ON s2.id = c2.station_id AND s2.district = s1.district
     ORDER BY s1.district;
 
-Click the ``provsql`` cell of the centre's row, pick *Łukasiewicz (numeric
-fuzzy)* from the *Numeric* group of the eval strip, select the
-``calibration_degree`` mapping, and run; then do the same with *Viterbi
-(max-times)*. The Łukasiewicz semiring conjoins with the t-norm
+Click the ``provsql`` cell of the centre's row, pick :guilabel:`Łukasiewicz (numeric
+fuzzy)` from the :guilabel:`Numeric` group of the eval strip, select the
+``calibration_degree`` mapping, and run; then do the same with :guilabel:`Viterbi
+(max-times)`. The Łukasiewicz semiring conjoins with the t-norm
 :math:`\max(a + b - 1, 0)`: the centre, corroborated by City Centre (0.95)
 and Riverside Park (0.70), gets 0.65. The two stations' shortfalls from
 full confidence, 0.05 and 0.30, add up. Viterbi multiplies instead, 0.665.

@@ -142,9 +142,9 @@ the two mutually-exclusive worlds in which the test reads positive (the
 diseased true positive and the healthy false positive). That little circuit
 *is* the event "the test is positive".
 
-On that circuit cell, press :fa:`bolt` **Evaluate** to add an evaluation
-cell bound to the circuit above. Leave the scheme on **Probability** and
-press :fa:`play` **Run**: ProvSQL walks the circuit and returns about
+On that circuit cell, press :fa:`bolt` :guilabel:`Evaluate` to add an evaluation
+cell bound to the circuit above. Leave the scheme on :guilabel:`Probability` and
+press :fa:`play` :guilabel:`Run`: ProvSQL walks the circuit and returns about
 **0.0585** -- a positive result is uncommon.
 
 That click-path is one SQL query. :sqlfunc:`probability_evaluate` takes a
@@ -245,7 +245,7 @@ every result row, so a constant label is enough to read:
 
 **Click the token to see its circuit.** ``obesity`` appears as a *single*
 gate feeding both branches: the shared cause is the same node everywhere,
-and that overlap is exactly what an independence assumption ignores. Press :fa:`bolt` **Evaluate** and :fa:`play` **Run**: about
+and that overlap is exactly what an independence assumption ignores. Press :fa:`bolt` :guilabel:`Evaluate` and :fa:`play` :guilabel:`Run`: about
 **0.44**.
 
 Compare that with the independence estimate, plain arithmetic
@@ -325,9 +325,9 @@ token to bring the circuit back up:
       AND x.factor IN ('insulin_resistance', 'high_salt')
     GROUP BY ();
 
-Press :fa:`bolt` **Evaluate**, leave the method on its default, and
-:fa:`play` **Run**: 0.44, and the strip notes *via possible-worlds* -- the
-exact method the chooser judged cheapest here. Now change the **method**
+Press :fa:`bolt` :guilabel:`Evaluate`, leave the method on its default, and
+:fa:`play` :guilabel:`Run`: 0.44, and the strip notes *via possible-worlds* -- the
+exact method the chooser judged cheapest here. Now change the method
 dropdown in the strip and re-run:
 
 * `Monte-Carlo <https://en.wikipedia.org/wiki/Monte_Carlo_method>`_ works on
@@ -370,13 +370,13 @@ standard deviation 5, and look at it:
     SELECT normal(20, 5) AS biomarker;
 
 One row comes back with a ``random_variable`` token. **Click it**, then on
-the circuit cell press :fa:`external-link-alt` **Circuit mode** (this leaves
-the notebook; you will come back through the :fa:`book-open` **Notebook**
+the circuit cell press :fa:`external-link-alt` :guilabel:`Circuit mode` (this leaves
+the notebook; you will come back through the :fa:`book-open` :guilabel:`Notebook`
 tab in the mode switcher at the top). In Circuit mode, press :fa:`play`
-**Run** on the evaluation strip: for a continuous variable the default
-evaluation is its *distribution profile*, and Studio draws the bell curve
+:guilabel:`Run` on the evaluation strip: for a continuous variable the default
+evaluation is its :guilabel:`Distribution profile`, and Studio draws the bell curve
 of Normal(20, 5), centred on 20. Have a look, then return through the
-**Notebook** tab -- the notebook reopens where you left it.
+:guilabel:`Notebook` tab -- the notebook reopens where you left it.
 
 Its `mean <https://en.wikipedia.org/wiki/Expected_value>`_ is no surprise:
 
@@ -419,8 +419,8 @@ inspect whole. Print it:
     SELECT (x | (x > 25)) AS referred_biomarker
     FROM r;
 
-**Click its token, open** :fa:`external-link-alt` **Circuit mode, and press**
-:fa:`play` **Run.** Its distribution profile is the *truncated* bell curve
+**Click its token, open** :fa:`external-link-alt` :guilabel:`Circuit mode`
+**and press** :fa:`play` :guilabel:`Run`. Its distribution profile is the *truncated* bell curve
 -- everything below 25 cut away, the rest renormalised -- with its support,
 mean, and variance reported alongside: the same conditioned variable you
 just took moments of, now seen as a whole distribution.
@@ -525,9 +525,10 @@ right -- here an ``agg_token``. Select it directly to get its token:
 
 **Click that token to see its circuit** -- the same ``∣`` gate as before,
 now over the aggregate and the evidence. In :fa:`external-link-alt`
-**Circuit mode**, the evaluation strip defaults to the *distribution profile*;
-switch it to the **moment** evaluator (order *k* = 1, *raw*) and press
-:fa:`play` **Run**: its expected value comes back as **5.5**, the same answer
+:guilabel:`Circuit mode`, the evaluation strip defaults to
+:guilabel:`Distribution profile`; switch it to the :guilabel:`Moment`
+evaluator (order *k* = 1, ``raw``) and press
+:fa:`play` :guilabel:`Run`: its expected value comes back as **5.5**, the same answer
 as above. A moment of an aggregate is computed *exactly* -- by enumerating the
 rows' contributions and weighting each by its probability -- so it needs no
 sampling and is unaffected by the ``provsql.rv_mc_samples = 0`` you set in
