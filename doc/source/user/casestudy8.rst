@@ -27,6 +27,14 @@ continuous random variables, and for probabilistic aggregates alike.
    <https://provsql.org/playground/?nb=cs8>`_ and step through the cells.
    See the :ref:`Playground note <playground-note>`.
 
+   With ProvSQL installed, launch Studio (``provsql-studio``), switch to
+   :guilabel:`Notebook` mode, and pick *Case Study: ProvSQL as a
+   Probability Calculator* from the :guilabel:`Open example…` menu. The
+   notebook is bound to a database named ``cs8``: if it does not exist
+   yet, press :guilabel:`Create cs8` in the banner above the notebook (see
+   :ref:`studio-example-notebooks`). Then step through the cells, or press
+   :fa:`forward` :guilabel:`Run all`.
+
 The Scenario
 ------------
 
