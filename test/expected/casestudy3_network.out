@@ -27,7 +27,7 @@ ERROR:  ProvSQL: This tuple has infinitely many derivations (it is derived throu
 DETAIL:  provsql-reason: recursion-infinite-count; scope: deliberate
 CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
 sr_formula
-x₂ where x₁ = 𝟙 ⊕ (C->A ⊗ x₃) ⊕ (B->A ⊗ x₂), x₂ = (A->B ⊗ x₁) ⊕ (C->B ⊗ x₃), x₃ = (A->C ⊗ x₁) ⊕ (B->C ⊗ x₂) ⊕ (D->C ⊗ x₄), x₄ = C->D ⊗ x₃
+x₂ where x₁ = C->D ⊗ x₃, x₂ = (A->B ⊗ x₄) ⊕ (C->B ⊗ x₃), x₃ = (A->C ⊗ x₄) ⊕ (B->C ⊗ x₂) ⊕ (D->C ⊗ x₁), x₄ = 𝟙 ⊕ (C->A ⊗ x₃) ⊕ (B->A ⊗ x₂)
 (1 row)
 station|exact|additive_ok|monte_carlo_ok
 B|0.992750|t|t

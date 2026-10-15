@@ -49,6 +49,10 @@ CREATE TABLE absr_t AS
 SELECT remove_provenance('absr_t');
 SELECT sr_counting(pv, 'absr_cost') FROM absr_t WHERE node = 4;
 SELECT sr_tropical(pv, 'absr_cost') FROM absr_t WHERE node = 4;
+-- Formula is not refused: it serialises the circuit rather than evaluating
+-- it, so it renders the tagged sub-circuit as it is.
+SELECT sr_formula(pv, 'absr_cost') IS NOT NULL AS formula_renders
+  FROM absr_t WHERE node = 4;
 -- ... and the nonnegative variant rejects negative costs.
 CREATE TABLE absr_neg(v float8);
 INSERT INTO absr_neg VALUES (-1);

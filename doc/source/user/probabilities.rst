@@ -435,7 +435,9 @@ fuzzy path, and :sqlfunc:`sr_temporal` the instants at which a vertex is
 reachable (see :doc:`temporal`).  The result carries the
 ``'absorptive'`` assumption (:sqlfunc:`get_gate_type` reports its root as
 ``assumed``): semirings that are not absorptive, such as counting and
-why-provenance, raise an error on it instead of returning a wrong value.
+why-provenance, raise an error on it instead of returning a wrong value,
+while :sqlfunc:`sr_formula`, which does not evaluate the circuit but
+displays it, shows the compiled circuit as it is.
 
 .. _bounded-joint-width:
 

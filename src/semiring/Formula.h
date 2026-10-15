@@ -37,6 +37,7 @@
 #ifndef FORMULA_H
 #define FORMULA_H
 
+#include <algorithm>
 #include <numeric>
 #include <vector>
 #include <string>
@@ -190,8 +191,10 @@ class Formula : public semiring::Semiring<std::string>
 /** The unknowns named and the equations recorded during one evaluation,
  *  shared by the copies of the semiring that evaluation makes. */
 struct Equations {
-  std::vector<std::string> names;      ///< x₁, x₂, ..., in order
+  std::vector<std::string> names;      ///< x₁, x₂, ..., in naming order
   std::vector<std::string> rhs;        ///< Right-hand side of each
+  /** Listing order of each: its primes, then its position in its system. */
+  std::vector<std::pair<std::size_t, std::size_t> > order;
   std::map<std::string, std::size_t> index;
 };
 std::shared_ptr<Equations> equations = std::make_shared<Equations>();
@@ -207,7 +210,8 @@ static std::string subscript(std::size_t n) {
 }
 
 /** @brief The indices of the unknowns occurring in @p s: a name counts
- *  where no further subscript digit follows it (x₁ is not in x₁₂). */
+ *  where no further subscript digit or prime follows it (x₁ is neither in
+ *  x₁₂ nor in x₁′). */
 std::vector<std::size_t> unknowns_in(const std::string &s) const {
   std::vector<std::size_t> r;
   for(std::size_t k = 0; k < equations->names.size(); ++k) {
@@ -217,8 +221,10 @@ std::vector<std::size_t> unknowns_in(const std::string &s) const {
       const std::size_t e = p + nm.size();
       const bool more = e + 2 < s.size()
                         && (unsigned char) s[e] == 0xE2
-                        && (unsigned char) s[e + 1] == 0x82
-                        && ((unsigned char) s[e + 2] & 0xF0) == 0x80;
+                        && (((unsigned char) s[e + 1] == 0x82
+                             && ((unsigned char) s[e + 2] & 0xF0) == 0x80)
+                            || ((unsigned char) s[e + 1] == 0x80
+                                && (unsigned char) s[e + 2] == 0xB2));
       if(!more) {
         r.push_back(k);
         break;
@@ -232,11 +238,23 @@ public:
 virtual bool symbolic() const override {
   return true;
 }
-virtual value_type symbolic_unknown() const override {
-  const std::string nm = "x" + subscript(equations->names.size() + 1);
+/**
+ * @brief Name an unknown after its position in its system, @c xᵢ: the
+ *        name ProvSQL Studio gives the same unknown on the circuit.  An
+ *        unknown of another system of the same evaluation at the same
+ *        position is told apart by primes (@c x₁′).
+ */
+virtual value_type symbolic_unknown(std::size_t position) const override {
+  std::string nm = "x" + subscript(position);
+  std::size_t primes = 0;
+  while(equations->index.count(nm)) {
+    nm += "′";
+    ++primes;
+  }
   equations->index.emplace(nm, equations->names.size());
   equations->names.push_back(nm);
   equations->rhs.emplace_back();
+  equations->order.emplace_back(primes, position);
   return nm;
 }
 virtual void define(const value_type &unknown, const value_type &rhs) const override {
@@ -598,7 +616,7 @@ std::string to_text(value_type s) const {
    * would double it. */
   strip_outer_in_place(s);
   /* The equations of the unknowns @p s reads, directly or through other
-   * equations, in the order they were named. */
+   * equations, by position in their system. */
   std::vector<bool> needed(equations->names.size(), false);
   std::vector<std::size_t> todo = unknowns_in(s);
   while(!todo.empty()) {
@@ -610,11 +628,18 @@ std::string to_text(value_type s) const {
     for(const auto j : unknowns_in(equations->rhs[k]))
       todo.push_back(j);
   }
-  std::string eqs;
+  std::vector<std::size_t> listed;
   for(std::size_t k = 0; k < needed.size(); ++k)
     if(needed[k])
-      eqs += (eqs.empty() ? " where " : ", ") + equations->names[k] + " = " +
-             strip_outer(equations->rhs[k]);
+      listed.push_back(k);
+  std::sort(listed.begin(), listed.end(),
+            [this](std::size_t a, std::size_t b) {
+                return equations->order[a] < equations->order[b];
+              });
+  std::string eqs;
+  for(const auto k : listed)
+    eqs += (eqs.empty() ? " where " : ", ") + equations->names[k] + " = " +
+           strip_outer(equations->rhs[k]);
   s += eqs;
   return s;
 }

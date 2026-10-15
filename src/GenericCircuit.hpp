@@ -190,7 +190,12 @@ const typename S::value_type &GenericCircuit::evaluate(gate_t g, std::unordered_
                     "products are not in the order of the query, and the "
                     "requested semiring is not commutative.  Re-run the "
                     "query under the 'semiring' provenance class.");
-          if(!semiring.absorptive())
+          /* The absorptive quotient determines the Boolean function of
+           * the lineage, so a semiring tolerating the stronger Boolean
+           * rewrite tolerates it too -- in practice Formula, which
+           * serialises the circuit rather than evaluating it, and so
+           * renders the truncated or compiled structure faithfully. */
+          if(!semiring.absorptive() && !semiring.compatibleWithBooleanRewrite())
             throw CircuitException(
                     "The requested semiring is not absorptive; the "
                     "wrapped sub-circuit only represents the absorptive "
@@ -198,8 +203,8 @@ const typename S::value_type &GenericCircuit::evaluate(gate_t g, std::unordered_
                     "(fixpoint truncation or compiled reachability "
                     "circuit), so its value is only defined for "
                     "absorptive semirings (probability, boolean, "
-                    "formula-with-absorption, nonnegative tropical, "
-                    "...).  Counting and why-provenance of such a "
+                    "nonnegative tropical, ...) and for formula, "
+                    "which renders it as it is.  Counting and why-provenance of such a "
                     "recursion are genuinely infinite: a tuple derived "
                     "through itself gains a derivation per round, which "
                     "cyclic data does and so does a null-padded row that "
@@ -681,7 +686,8 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
                 "order of the query, and the requested semiring is not "
                 "commutative.  Re-run the query under the 'semiring' "
                 "provenance class.");
-      if(assumption == "absorptive" && !semiring.absorptive())
+      if(assumption == "absorptive" && !semiring.absorptive()
+         && !semiring.compatibleWithBooleanRewrite())
         throw CircuitException(
                 "The requested semiring is not absorptive; part of this "
                 "recursion's equations was computed under an absorptive "
@@ -779,7 +785,7 @@ std::vector<typename S::value_type> GenericCircuit::solveFixSystem(gate_t sys, s
       /* A rendering semiring: the component's tuples become named unknowns,
        * and their equations are recorded with them. */
       for(const auto i : comp)
-        x[i] = semiring.symbolic_unknown();
+        x[i] = semiring.symbolic_unknown(i + 1);
       for(std::size_t k = 0; k < comp.size(); ++k) {
         V v = entry[k];
         for(const auto &t : in[comp[k]])

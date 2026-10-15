@@ -22,17 +22,17 @@ remove_provenance
 
 (1 row)
 n|equations|paths
-a|x₁ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)*
-b|x₃ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)* · ab
-c|x₂ where x₁ = 𝟙 ⊕ (x₂ ⊗ ca), x₂ = (x₁ ⊗ ac) ⊕ (x₃ ⊗ bc), x₃ = x₁ ⊗ ab|((ac | ab · bc) · ca)* · (ac | ab · bc)
+a|x₃ where x₁ = x₃ ⊗ ab, x₂ = (x₃ ⊗ ac) ⊕ (x₁ ⊗ bc), x₃ = 𝟙 ⊕ (x₂ ⊗ ca)|((ac | ab · bc) · ca)*
+b|x₁ where x₁ = x₃ ⊗ ab, x₂ = (x₃ ⊗ ac) ⊕ (x₁ ⊗ bc), x₃ = 𝟙 ⊕ (x₂ ⊗ ca)|((ac | ab · bc) · ca)* · ab
+c|x₂ where x₁ = x₃ ⊗ ab, x₂ = (x₃ ⊗ ac) ⊕ (x₁ ⊗ bc), x₃ = 𝟙 ⊕ (x₂ ⊗ ca)|((ac | ab · bc) · ca)* · (ac | ab · bc)
 (3 rows)
 remove_provenance
 
 (1 row)
 n|equations|paths
-a|x₁ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|(ca · (ac | bc · ab))*
-b|x₃ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|ab · (ca · (ac | bc · ab))*
-c|x₂ where x₁ = 𝟙 ⊕ (ca ⊗ x₂), x₂ = (ac ⊗ x₁) ⊕ (bc ⊗ x₃), x₃ = ab ⊗ x₁|(ac | bc · ab) · (ca · (ac | bc · ab))*
+a|x₃ where x₁ = ab ⊗ x₃, x₂ = (ac ⊗ x₃) ⊕ (bc ⊗ x₁), x₃ = 𝟙 ⊕ (ca ⊗ x₂)|(ca · (ac | bc · ab))*
+b|x₁ where x₁ = ab ⊗ x₃, x₂ = (ac ⊗ x₃) ⊕ (bc ⊗ x₁), x₃ = 𝟙 ⊕ (ca ⊗ x₂)|ab · (ca · (ac | bc · ab))*
+c|x₂ where x₁ = ab ⊗ x₃, x₂ = (ac ⊗ x₃) ⊕ (bc ⊗ x₁), x₃ = 𝟙 ⊕ (ca ⊗ x₂)|(ac | bc · ab) · (ca · (ac | bc · ab))*
 (3 rows)
 remove_provenance
 
@@ -60,7 +60,7 @@ remove_provenance
 
 (1 row)
 n|equations
-b|x₁ where x₁ = ca ⊗ x₂ ⊗ ab, x₂ = 𝟙 ⊕ (ac ⊗ x₃ ⊗ ca) ⊕ (bc ⊗ x₃ ⊗ ca), x₃ = (ca ⊗ x₂ ⊗ ac) ⊕ (ab ⊗ x₁ ⊗ bc)
+b|x₂ where x₁ = (ca ⊗ x₃ ⊗ ac) ⊕ (ab ⊗ x₂ ⊗ bc), x₂ = ca ⊗ x₃ ⊗ ab, x₃ = 𝟙 ⊕ (ac ⊗ x₁ ⊗ ca) ⊕ (bc ⊗ x₁ ⊗ ca)
 (1 row)
 ERROR:  ProvSQL: A HAVING condition's provenance is a product over the worlds of its group, in no order of the query: it has no value in a semiring whose multiplication does not commute.
 DETAIL:  provsql-reason: having-noncommutative; scope: gap

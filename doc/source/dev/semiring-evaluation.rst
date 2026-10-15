@@ -346,11 +346,15 @@ template itself (``src/GenericCircuit.hpp``) : the ``gate_assumed``
 case checks the label during traversal, and the in-memory side-band
 markers (``boolean_assumed_gates`` / ``absorptive_assumed_gates``)
 are checked per gate before the memo lookup.  When a gate carries an
-assumption marker the chosen semiring's predicate does not license
-(``compatibleWithBooleanRewrite()`` for ``'boolean'``,
-``absorptive()`` for ``'absorptive'``), the evaluator throws a
-structured :cfunc:`CircuitException` rather than silently producing
-an incorrect value.  An ``'absorptive'`` ``gate_assumed`` also requires
+assumption marker the chosen semiring's predicates do not license
+(``compatibleWithBooleanRewrite()`` for ``'boolean'``; ``absorptive()``
+or ``compatibleWithBooleanRewrite()`` for ``'absorptive'``, since the
+absorptive quotient determines the Boolean function, so a semiring
+tolerating the stronger Boolean rewrite tolerates it too), the evaluator
+throws a structured :cfunc:`CircuitException` rather than silently
+producing an incorrect value.  The second disjunct is what admits
+``Formula`` under an ``'absorptive'`` marker: being a serialisation of the
+circuit, it renders the truncated or compiled sub-circuit as it is.  An ``'absorptive'`` ``gate_assumed`` also requires
 ``commutative()``: the reachability route and the truncation of cyclic
 recursion build its sub-circuit without the order of the query, so that
 a non-commutative absorptive semiring (``BestPath``) refuses it

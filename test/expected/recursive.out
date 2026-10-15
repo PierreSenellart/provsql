@@ -33,8 +33,8 @@ remove_provenance
 
 (1 row)
 node|reachable|equations
-1|t|x₁ where x₁ = 𝟙 ⊕ (e21 ⊗ x₂), x₂ = e12 ⊗ x₁
-2|t|x₂ where x₁ = 𝟙 ⊕ (e21 ⊗ x₂), x₂ = e12 ⊗ x₁
+1|t|x₂ where x₁ = e12 ⊗ x₂, x₂ = 𝟙 ⊕ (e21 ⊗ x₁)
+2|t|x₁ where x₁ = e12 ⊗ x₂, x₂ = 𝟙 ⊕ (e21 ⊗ x₁)
 (2 rows)
 NOTICE:  node 1: count refused
 NOTICE:  node 2: count refused

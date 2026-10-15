@@ -1087,11 +1087,12 @@ _INTERVAL_KERNELS = {
 # test will fail and this dict must be updated.
 #
 # `absorptive`: mirrors the C++ `semiring::*::absorptive()` predicate.
-# A persistent `gate_assumed` wrapper labelled 'absorptive' (a root
-# compiled by the bounded-treewidth reachability route) is only
-# sound for absorptive semirings; the in-memory absorptive-fold marker
-# additionally tolerates Boolean-rewrite-compatible semirings (the
-# folds preserve the Boolean function).  Same drift rule:
+# A persistent `gate_assumed` wrapper labelled 'absorptive' (a truncated
+# recursion, or a root compiled by the bounded-treewidth reachability
+# route) and the in-memory absorptive-fold marker are both sound for
+# absorptive semirings and for Boolean-rewrite-compatible ones (the
+# absorptive quotient preserves the Boolean function; in practice this
+# admits formula, which renders the circuit as it is).  Same drift rule:
 # `test/sql/btw_tropical.sql` pins the refusals.
 _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Boolean & symbolic.

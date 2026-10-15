@@ -1601,12 +1601,13 @@
   // `absorptive`: mirrors the C++ per-semiring `absorptive()`
   // predicate and Python's `_COMPILED_SEMIRINGS[*].absorptive`.  When
   // the eval target carries `absorptive_assumed = true` (descendant of
-  // an elided 'absorptive'-labelled gate_assumed wrapper -- a
-  // reachability circuit of the bounded-treewidth route), only
-  // `absorptive: true` options are sound; when it carries
-  // `absorptive_folded = true` (the in-memory absorptive-fold marker),
-  // `booleanCompatible` options are additionally sound (the folds
-  // preserve the Boolean function).  Pinned by
+  // an elided 'absorptive'-labelled gate_assumed wrapper -- a truncated
+  // recursion, or a reachability circuit of the bounded-treewidth
+  // route) or `absorptive_folded = true` (the in-memory absorptive-fold
+  // marker), `absorptive` options are sound, and so are
+  // `booleanCompatible` ones (the absorptive quotient preserves the
+  // Boolean function; in practice this admits Formula, which renders
+  // the circuit as it is).  Pinned by
   // `test/sql/absorptive_recursion.sql`.
   //
   // `aggCompatible`: mirrors which semirings override
@@ -2182,11 +2183,7 @@
           const spec = _COMPILED_REGISTRY[opt.value];
           if (spec && spec.booleanCompatible === false) hide = true;
         }
-        if (!hide && absorptiveOnly) {
-          const spec = _COMPILED_REGISTRY[opt.value];
-          if (spec && spec.absorptive === false) hide = true;
-        }
-        if (!hide && absorptiveFold) {
+        if (!hide && (absorptiveOnly || absorptiveFold)) {
           const spec = _COMPILED_REGISTRY[opt.value];
           if (spec && spec.absorptive === false
               && spec.booleanCompatible === false) hide = true;

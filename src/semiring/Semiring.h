@@ -544,9 +544,14 @@ virtual bool symbolic() const {
 /**
  * @brief A fresh unknown, as a value.
  *
+ * @param position  1-based position of the unknown among its system's
+ *                  unknowns: the index a @c gate_fixpoint reading it
+ *                  stores in @c info1, and the name ProvSQL Studio gives
+ *                  it, so a rendering can use the same name.
  * @return the unknown; throws by default.
  */
-virtual value_type symbolic_unknown() const {
+virtual value_type symbolic_unknown(std::size_t position) const {
+  (void) position;
   throw SemiringException("This semiring has no symbolic unknowns.");
 }
 
