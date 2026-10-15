@@ -207,7 +207,7 @@ On Olga's row, try the heavy methods first: ``tree-decomposition`` gives up
 inputs), and ``compilation`` with an external compiler such as ``d4`` is cut
 off by ``statement_timeout`` on the 24-paper instance. Then try
 ``inversion-free`` -- or just the default ``exact`` method -- and it returns
-``0.975314`` in milliseconds.
+``≈ 0.9753`` in milliseconds.
 
 Why the gap: grouping on the reviewer makes the two evidence sides share the
 ``bid(r15, *)`` tuples, so the lineage is **not** read-once and every
@@ -252,7 +252,7 @@ patterns of who-assessed-what. This is the textbook query :math:`q_9` /
         AND d2b.chair = d3.chair AND d2b.sub = d3.sub
 
 Try :guilabel:`Marginal probability` with the ``exact`` method and the
-toggle on :guilabel:`Boolean`: it returns ``0.056923`` (the chooser routes it
+toggle on :guilabel:`Boolean`: it returns ``≈ 0.0569`` (the chooser routes it
 through the Möbius compiler; once the μ root is rendered you can also pick
 the ``mobius`` method explicitly). Any circuit compiler
 blows up instead: :math:`q_9` provably has no polynomial
@@ -445,26 +445,15 @@ Set the toggle back to :guilabel:`Boolean` and re-run Part B's hard query:
     FROM bid b, expertise e, topic_of t
     WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
 
-Now ``independent`` **succeeds**, the same ``≈ 0.8818`` -- and no compiler
-ran. Over arbitrary data the problem is still :math:`\#P`-hard, but on this
-data the **joint treewidth** (the data graph together with its correlations) is bounded, so
-ProvSQL's **joint-width compiler** :cite:`Amarilli2016thesis` recognises the
-shape and compiles the provenance along a tree decomposition of the *data*
-into a certified d-D that ``independent`` reads in linear time. This is the
-route the dropped-key query of Part A fell through to.
-
-Read it per paper -- *for each paper, how competently is it covered?*
-
-.. code-block:: postgresql
-
-    SELECT t.paper
-    FROM bid b, expertise e, topic_of t
-    WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
-    GROUP BY t.paper ORDER BY t.paper
-
-:guilabel:`Marginal probability` with ``exact`` gives each group's value -- ``p1``
-``0.425869``, ``p4`` ``0.300776`` -- matching a compiler to full precision,
-from the data's structure with no external tool.
+Exact probability computation now takes a different route: Studio shows
+*via bounded-jw*, the same ``≈ 0.8818`` -- and no compiler ran. Over
+arbitrary data the problem is still :math:`\#P`-hard, but on this data the
+**joint treewidth** (the data graph together with its correlations) is
+bounded, so ProvSQL's **joint-width compiler** :cite:`Amarilli2016thesis`
+recognises the shape and compiles the provenance along a tree decomposition
+of the *data* into a certified d-D, read in linear time; even
+``independent``, which rejected the literal circuit, now succeeds on it.
+This is the route the dropped-key query of Part A fell through to.
 
 Correlated inputs
 ^^^^^^^^^^^^^^^^^
@@ -491,12 +480,12 @@ paper). *Which papers get an assigned reviewer?*
    (``repair_key`` on ``reviewer``, dotted underline); the TID tables carry
    solid-underlined primary keys.
 
-Try ``independent`` -- it **agrees** with the exact methods (``p1`` ``0.875``,
-``p2`` ``0.75``): within a block, ``independent`` *sums* the probabilities
-of mutually exclusive alternatives instead of multiplying them. This kind of
-block correlation, unlike the cycle of Part B, stays tractable with no
-compiler at all, because the *query* here is safe; only the *inputs* are
-correlated.
+Run ``independent`` on ``p1``'s row: it returns the exact ``0.875``
+(``0.75`` for ``p2``) although the inputs are now correlated, because within
+a block it *sums* the probabilities of the mutually exclusive alternatives
+instead of multiplying them. This kind of block correlation, unlike the
+cycle of Part B, stays tractable with no compiler at all, because the
+*query* here is safe; only the *inputs* are correlated.
 
 Hard *and* correlated
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -518,8 +507,10 @@ routes do not apply to the cyclic shape. Switch the toggle back to
 :guilabel:`Boolean` and the joint-width route compiles it anyway: the joint
 treewidth -- data graph *plus* the ``repair_key`` exclusion blocks -- is
 bounded, so ProvSQL builds a certified d-D that ``independent`` evaluates
-to the exact ``0.735868``. This is the one cell of the :ref:`tractability
-table <tractable-cases>` nothing else fills: :math:`\#P`-hard *and* correlated, exact and linear in the data.
+exactly, in linear time: ``≈ 0.7359``. In the :ref:`tractability table
+<tractable-cases>`, this is the joint-treewidth row: it puts no condition on
+the query, only on the data together with its correlations, and stays exact
+and linear in the data.
 
 Recursion: reachability and reliability
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -534,66 +525,96 @@ relations exercise the two regimes: ``extends(citing, cited)`` is an
 **acyclic** citation graph, ``coreview(a, b)`` a **symmetric** (hence cyclic)
 collaboration graph.
 
-*What does paper* ``p6`` *transitively build on?*
+*What does paper* ``p6`` *transitively build on?* Set the toggle back to
+:guilabel:`Semiring` first.
+
+.. nb:scheme: semiring
 
 .. code-block:: postgresql
 
     WITH RECURSIVE anc(paper) AS (
         SELECT 'p6'
       UNION
-        SELECT e.cited FROM extends e JOIN anc a ON e.citing = a.paper
+        SELECT e.cited FROM anc a JOIN extends e ON e.citing = a.paper
     )
     SELECT p.id, p.title
     FROM anc JOIN papers p ON anc.paper = p.id
     WHERE anc.paper <> 'p6' ORDER BY p.id
 
-``sr_formula`` shows each ancestor's lineage as the conjunction along the
-path (``p1`` is ``ext(p4,p1) ⊗ ext(p6,p4)``) and :guilabel:`Marginal
-probability` gives its value (``p1`` ``0.72``). Because the graph is acyclic
-the lineage is read-once per ancestor, so *every* semiring evaluation works,
-not just probability.
+Click ``p1``'s ``provsql`` cell and, in the eval strip, pick
+:guilabel:`Formula` with the ``extends_label`` mapping: the lineage is the
+conjunction along the path, ``ext(p6,p4) ⊗ ext(p4,p1)``, and
+:guilabel:`Marginal probability` gives its value, ``0.72``. Because the
+graph is acyclic the lineage is read-once per ancestor, so *every* semiring
+evaluation works, not just probability.
 
 *Who is reviewer* ``r1`` *connected to through co-reviewing?* -- now a cyclic
 walk:
 
-.. nb:scheme: absorptive
+.. nb:scheme: semiring
 
 .. code-block:: postgresql
 
     WITH RECURSIVE conn(node) AS (
         SELECT 'r1'
       UNION
-        SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+        SELECT e.b FROM conn c JOIN coreview e ON e.a = c.node
     )
     SELECT r.id, r.name
     FROM conn JOIN reviewers r ON conn.node = r.id
     WHERE conn.node <> 'r1' ORDER BY r.id
 
-With the toggle on :guilabel:`Semiring` (the default), a cycle gives a
-reviewer infinitely many derivations: ProvSQL records the recursion as
-equations between the reviewers reached, which each evaluation solves, so
-:guilabel:`Marginal probability` already answers. Switch the toggle to
-:guilabel:`Absorptive`: :math:`1 \oplus a = 1`, so a longer cycle-revisiting
-path is absorbed by the shorter one inside it, and only the minimal paths
-count.
+With the toggle still on :guilabel:`Semiring`, a cycle gives a reviewer
+infinitely many derivations: ``r1`` reaches ``r5`` through ``r2``, but also
+through ``r2``, back to ``r1``, ``r2`` again, and so on. ProvSQL does not
+unroll them; it records the recursion as equations between the reviewers
+reached. Click ``r5``'s ``provsql`` cell: the root is an **lfp** node,
+``r5``'s value in the least solution of the equation system held by the
+**≡** node, shared by the reviewers of the cycle, whose wires are the
+unknowns (**x**) and their right-hand sides. :guilabel:`Formula` with the
+``coreview_label`` mapping writes the system out, with the same names:
+``x₁ where x₁ = (x₄ ⊗ co(r2,r5)) ⊕ (x₂ ⊗ co(r4,r5)), …, x₅ = 𝟙 ⊕ (x₄ ⊗
+co(r2,r1)) ⊕ (x₃ ⊗ co(r3,r1))``: ``r5`` is ``x₁``, the unknown its **lfp**
+node reads, and ``r1``, where the walk starts, is ``x₅``. Each product is in
+the order of the path, since ``conn`` comes first in the recursive ``FROM``
+clause.
 
-The probability is then **two-terminal network reliability** -- that ``r1``
-stays connected when each edge is present independently -- which is
-:math:`\#P`-hard in general. Yet ``exact`` reads ``r1`` reaches ``r5``
-with reliability ``0.5496`` straight off, and even
-``independent`` evaluates it. Why: ProvSQL recognises the reachability shape
-and, by the provenance form of Courcelle's theorem
+Each evaluation solves these equations in its own algebra:
+:guilabel:`Why-provenance` lists the sets of co-reviews the derivations use,
+while counting them would give infinity, which :sqlfunc:`sr_counting`
+refuses. :guilabel:`Marginal probability` gives ``≈ 0.5496``, *via
+possible-worlds*: it enumerates the :math:`2^{12}` subsets of the co-review
+edges. That is fine for twelve edges, not for a real collaboration graph:
+the probability that ``r1`` stays connected to ``r5`` when each edge is
+present independently is **two-terminal network reliability**, which is
+:math:`\#P`-hard to compute in general.
+
+Probability does not need the infinitely many derivations, though. A
+derivation that goes around a cycle uses every co-review of the shorter
+derivation inside it, so whenever the longer one is possible, so is the
+shorter: only the minimal paths matter. Algebraically, that is
+*absorption*, :math:`1 \oplus a = 1`: probability computation is
+unaffected by it, and so are commutative absorptive semirings such as
+Boolean or min-cost over nonnegative costs, but not counting or
+why-provenance.
+Switch the toggle to :guilabel:`Absorptive` to tell ProvSQL that only such
+evaluations will be asked of the result.
+
+ProvSQL can then do much better than enumerating worlds. It recognises the
+reachability shape and, by the provenance form of Courcelle's theorem
 :cite:`DBLP:conf/icalp/AmarilliBS15`, compiles along a tree decomposition of
 the **collaboration graph itself** into a certified d-D, one per reachable
-vertex, linear in the edges when the graph has bounded treewidth (see
-:ref:`network-reliability-btw`). That is the case study in miniature: Part B's
-hardness lived in the *query* and needed a compiler; here -- as throughout
-Part C -- it is dissolved by the structure of the *data*, with no external
-tool. (These tokens carry the absorptive assumption, so counting and
-why-provenance, which are not absorptive, refuse them rather than return a
-value only absorptive semirings justify. Under :guilabel:`Semiring`,
-why-provenance gives its witnesses, and counting refuses: the number of
-derivations is infinite.)
+reviewer, linear in the edges when the graph has bounded treewidth (see
+:ref:`network-reliability-btw`). :guilabel:`Marginal probability` now gives
+the same ``≈ 0.5496`` *via reachability*, and even ``independent``
+evaluates it. That is the case study in miniature: Part B's hardness lived
+in the *query* and needed a compiler; here -- as throughout Part C -- it is
+dissolved by the structure of the *data*, with no external tool.
+
+The price is the absorption assumption itself: each reviewer's root is now
+an ``assumed`` gate recording it, and the evaluations it does not justify
+refuse the circuit rather than return a wrong value: Studio no longer offers
+:guilabel:`Why-provenance`, for instance.
 
 The same walk gives *degrees of separation*: count one hop per
 co-review and take the cheapest path, in the tropical (min-plus) semiring.
@@ -611,7 +632,7 @@ does:
     WITH RECURSIVE conn(node) AS (
         SELECT 'r1'
       UNION
-        SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+        SELECT e.b FROM conn c JOIN coreview e ON e.a = c.node
     )
     SELECT r.id, r.name,
            sr_tropical(provenance(), 'coreview_hops', nonnegative => true)

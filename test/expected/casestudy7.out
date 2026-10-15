@@ -117,6 +117,18 @@ n_papers|agree
 remove_provenance
 
 (1 row)
+jw_default|method
+0.881791|bounded-jw
+(1 row)
+remove_provenance
+
+(1 row)
+jw_indep
+0.881791
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
@@ -127,9 +139,9 @@ remove_provenance
 
 (1 row)
 paper|lineage|prob
-p1|ext(p4,p1) ⊗ ext(p6,p4)|0.720000
-p2|ext(p5,p2) ⊗ ext(p6,p5)|0.490000
-p3|ext(p5,p3) ⊗ ext(p6,p5)|0.420000
+p1|ext(p6,p4) ⊗ ext(p4,p1)|0.720000
+p2|ext(p6,p5) ⊗ ext(p5,p2)|0.490000
+p3|ext(p6,p5) ⊗ ext(p5,p3)|0.420000
 p4|ext(p6,p4)|0.900000
 p5|ext(p6,p5)|0.700000
 (5 rows)
@@ -148,6 +160,12 @@ r3|0.800160
 r4|0.585600
 r5|0.549600
 (4 rows)
+provsql.last_eval_method
+possible-worlds
+(1 row)
+equations
+x₁ where x₁ = (x₄ ⊗ r2-r5) ⊕ (x₂ ⊗ r4-r5
+(1 row)
 node|witnesses|direct_edge_is_one
 r2|622|t
 r3|622|t
@@ -157,6 +175,9 @@ r5|718|f
 NOTICE:  counting refused as infinite on 4 of 4 nodes
 remove_provenance
 
+(1 row)
+provsql.last_eval_method
+reachability
 (1 row)
 node|reliability|reliability_independent
 r2|0.875040|0.875040

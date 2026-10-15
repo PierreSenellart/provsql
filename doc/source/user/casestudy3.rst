@@ -423,6 +423,11 @@ the times and accessibility of their hops:
 Step 8: Every Station Reachable from Luxembourg
 -----------------------------------------------
 
+.. note::
+
+   Recursive queries (``WITH RECURSIVE``), used from this step on, require
+   **PostgreSQL ≥ 15**.
+
 A journey with changes is a path in this network: a recursive query
 follows the hops from Luxembourg, a line change being just another hop out
 of the same station:
@@ -555,14 +560,14 @@ For Port Royal, the equations are:
 
 .. code-block:: text
 
-    x₁ where x₁ = x₂ ⊗ B: Luxembourg → Port Royal,
-             x₂ = 𝟙 ⊕ (x₁ ⊗ B: Port Royal → Luxembourg)
-                    ⊕ (x₃ ⊗ B: Saint-Michel Notre-Dame → Luxembourg),
-             x₃ = x₂ ⊗ B: Luxembourg → Saint-Michel Notre-Dame
+    x₂ where x₁ = x₃ ⊗ B: Luxembourg → Saint-Michel Notre-Dame,
+             x₂ = x₃ ⊗ B: Luxembourg → Port Royal,
+             x₃ = 𝟙 ⊕ (x₂ ⊗ B: Port Royal → Luxembourg)
+                    ⊕ (x₁ ⊗ B: Saint-Michel Notre-Dame → Luxembourg)
 
-One unknown per station: Luxembourg (``x₂``) holds from the start (``𝟙``)
-or by coming back from either neighbour, and each neighbour by a hop from
-Luxembourg. The regular expression lists the journeys themselves, any
+One unknown per station, numbered as in the circuit Studio draws:
+Luxembourg (``x₃``) holds from the start (``𝟙``) or by coming back from
+either neighbour, and each neighbour by a hop from Luxembourg. The regular expression lists the journeys themselves, any
 number of round trips from Luxembourg (``*``, with ``|`` between the two
 neighbours), then the hop to Port Royal:
 

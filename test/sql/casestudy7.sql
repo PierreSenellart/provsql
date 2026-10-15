@@ -448,6 +448,28 @@ SELECT count(*) AS n_papers,
   FROM cs7_jw_on a JOIN cs7_jw_off b USING (paper);
 DROP TABLE cs7_jw_on; DROP TABLE cs7_jw_off;
 
+-- The whole-program coverage under the 'boolean' class: the default exact
+-- request takes the joint-width route (the case study shows Studio's
+-- "via bounded-jw"), and independent now accepts the certified d-D.
+SET provsql.joint_width = on;
+SET provsql.last_eval_method = '';
+CREATE TABLE cs7_jw_whole AS
+  SELECT round(probability_evaluate(provenance())::numeric,6) AS jw_default
+  FROM (SELECT DISTINCT 1 FROM bid b, expertise e, topic_of t
+        WHERE b.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=b.paper) q;
+SELECT remove_provenance('cs7_jw_whole');
+SELECT jw_default, current_setting('provsql.last_eval_method') AS method
+  FROM cs7_jw_whole;
+DROP TABLE cs7_jw_whole;
+CREATE TABLE cs7_jw_whole_indep AS
+  SELECT round(probability_evaluate(provenance(),'independent')::numeric,6) AS jw_indep
+  FROM (SELECT DISTINCT 1 FROM bid b, expertise e, topic_of t
+        WHERE b.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=b.paper) q;
+SELECT remove_provenance('cs7_jw_whole_indep');
+SELECT jw_indep FROM cs7_jw_whole_indep;
+DROP TABLE cs7_jw_whole_indep;
+SET provsql.joint_width = off;
+
 -- Hard + correlated: cyclic coverage over the repair_key assignment.  The
 -- joint-width value (on) matches the circuit compiler (off) exactly.
 SET provsql.joint_width = on;
@@ -494,7 +516,7 @@ CREATE TABLE cs7_anc AS
   WITH RECURSIVE anc(paper) AS (
       SELECT 'p6'
     UNION
-      SELECT e.cited FROM extends e JOIN anc a ON e.citing = a.paper
+      SELECT e.cited FROM anc a JOIN extends e ON e.citing = a.paper
   )
   SELECT paper,
          sr_formula(provenance(),'extends_label') AS lineage,
@@ -513,17 +535,24 @@ DROP TABLE cs7_anc;
 SET provsql.provenance = 'semiring';
 SELECT create_provenance_mapping('cs7_count', 'coreview', '1');
 SELECT create_provenance_mapping('cs7_why', 'coreview', 'a || ''-'' || b');
+SET provsql.last_eval_method = '';
 CREATE TABLE cs7_conn AS
   WITH RECURSIVE conn(node) AS (
       SELECT 'r1'
     UNION
-      SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+      SELECT e.b FROM conn c JOIN coreview e ON e.a = c.node
   )
   SELECT node, round(probability_evaluate(provenance())::numeric,6) AS reliability,
          provenance() AS tok
   FROM conn WHERE node <> 'r1';
 SELECT remove_provenance('cs7_conn');
 SELECT node, reliability FROM cs7_conn ORDER BY node;
+-- The page shows "via possible-worlds": the chooser enumerates the worlds.
+SHOW provsql.last_eval_method;
+-- ... and quotes the equation system, each product in path order (conn
+-- first in the recursive FROM clause).
+SELECT left(sr_formula(tok, 'cs7_why'), 40) AS equations
+  FROM cs7_conn WHERE node = 'r5';
 SELECT node,
        length(w) - length(replace(w, '{', '')) - 1 AS witnesses,
        position('{r1-' || node || '}' IN w) > 0 AS direct_edge_is_one
@@ -549,19 +578,23 @@ DROP TABLE cs7_conn;
 -- same reliabilities, which the independent method evaluates too.  The tokens
 -- carry the absorptive assumption: counting and why-provenance refuse them.
 SET provsql.provenance = 'absorptive';
+SET provsql.last_eval_method = '';
 CREATE TABLE cs7_conn AS
   WITH RECURSIVE conn(node) AS (
       SELECT 'r1'
     UNION
-      SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
+      SELECT e.b FROM conn c JOIN coreview e ON e.a = c.node
   )
   SELECT node, round(probability_evaluate(provenance())::numeric,6) AS reliability,
-         round(probability_evaluate(provenance(), 'independent')::numeric,6)
-           AS reliability_independent,
          provenance() AS tok
   FROM conn WHERE node <> 'r1';
 SELECT remove_provenance('cs7_conn');
-SELECT node, reliability, reliability_independent FROM cs7_conn ORDER BY node;
+-- The page shows "via reachability": the compiled route, not the worlds.
+SHOW provsql.last_eval_method;
+SELECT node, reliability,
+       round(probability_evaluate(tok, 'independent')::numeric,6)
+         AS reliability_independent
+  FROM cs7_conn ORDER BY node;
 DO $$
 DECLARE why_refused int := 0; count_refused int := 0; r record;
 BEGIN
