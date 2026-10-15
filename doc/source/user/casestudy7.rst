@@ -544,7 +544,7 @@ collaboration graph.
 Click ``p1``'s ``provsql`` cell and, in the eval strip, pick
 :guilabel:`Formula` with the ``extends_label`` mapping: the lineage is the
 conjunction along the path, ``ext(p6,p4) ⊗ ext(p4,p1)``, and
-:guilabel:`Marginal probability` gives its value, ``0.72``. Because the
+:guilabel:`Marginal probability` with ``exact`` gives its value, ``0.72``. Because the
 graph is acyclic the lineage is read-once per ancestor, so *every* semiring
 evaluation works, not just probability.
 
@@ -581,8 +581,7 @@ clause.
 
 Each evaluation solves these equations in its own algebra:
 :guilabel:`Why-provenance` lists the sets of co-reviews the derivations use,
-while counting them would give infinity, which :sqlfunc:`sr_counting`
-refuses. :guilabel:`Marginal probability` gives ``≈ 0.5496``, *via
+and :guilabel:`Marginal probability` with ``exact`` gives ``≈ 0.5496``, *via
 possible-worlds*: it enumerates the :math:`2^{12}` subsets of the co-review
 edges. That is fine for twelve edges, not for a real collaboration graph:
 the probability that ``r1`` stays connected to ``r5`` when each edge is
@@ -605,7 +604,7 @@ reachability shape and, by the provenance form of Courcelle's theorem
 :cite:`DBLP:conf/icalp/AmarilliBS15`, compiles along a tree decomposition of
 the **collaboration graph itself** into a certified d-D, one per reachable
 reviewer, linear in the edges when the graph has bounded treewidth (see
-:ref:`network-reliability-btw`). :guilabel:`Marginal probability` now gives
+:ref:`network-reliability-btw`). :guilabel:`Marginal probability` with ``exact`` now gives
 the same ``≈ 0.5496`` *via reachability*, and even ``independent``
 evaluates it. That is the case study in miniature: Part B's hardness lived
 in the *query* and needed a compiler; here -- as throughout Part C -- it is
@@ -618,33 +617,39 @@ refuse the circuit rather than return a wrong value: Studio no longer offers
 
 The same walk gives *degrees of separation*: count one hop per
 co-review and take the cheapest path, in the tropical (min-plus) semiring.
-With ``nonnegative => true``, :sqlfunc:`sr_tropical` checks that the costs
-are nonnegative. A cycle can then only add to a path's cost, so the
-semiring is absorptive and accepts the absorptive tokens, as probability
-does:
+Its mapping gives every co-review the cost ``1``:
 
 .. code-block:: postgresql
 
     DROP TABLE IF EXISTS coreview_hops;
     SELECT create_provenance_mapping('coreview_hops', 'coreview', '1::float8');
 
-    SET provsql.provenance = 'absorptive';
+Run the co-review query again, the toggle still on :guilabel:`Absorptive`:
+
+.. nb:scheme: absorptive
+
+.. code-block:: postgresql
+
     WITH RECURSIVE conn(node) AS (
         SELECT 'r1'
       UNION
         SELECT e.b FROM conn c JOIN coreview e ON e.a = c.node
     )
-    SELECT r.id, r.name,
-           sr_tropical(provenance(), 'coreview_hops', nonnegative => true)
-             AS hops
+    SELECT r.id, r.name
     FROM conn JOIN reviewers r ON conn.node = r.id
-    WHERE conn.node <> 'r1' ORDER BY r.id;
-    RESET provsql.provenance;
+    WHERE conn.node <> 'r1' ORDER BY r.id
 
-``r2`` and ``r3`` are one co-review away from ``r1``, ``r4`` (through
-``r3``) and ``r5`` (through ``r2``) two. Without ``nonnegative``, costs may
-be negative and a cycle could lower them, so :sqlfunc:`sr_tropical`
-refuses these tokens, like counting.
+Click ``r5``'s ``provsql`` cell and, in the eval strip, pick
+:guilabel:`Tropical (min-plus, nonnegative)` with the ``coreview_hops``
+mapping: ``2``, ``r5`` being two co-reviews away from ``r1`` (through
+``r2``), as ``r4`` is (through ``r3``), while ``r2`` and ``r3`` are one away.
+This variant checks that the costs are nonnegative, so that a cycle can only
+add to a path's cost: the semiring is then absorptive, and accepts these
+circuits as probability does. The plain :guilabel:`Tropical (min-plus)` is
+not offered: it is not absorptive, so the assumption under which these
+circuits were built no longer holds for it. Under :guilabel:`Semiring`, it
+evaluates the equations without that assumption, and gives
+:math:`-\infty` if a cycle has a negative total cost.
 
 .. seealso::
 
