@@ -2374,12 +2374,12 @@ CREATE OR REPLACE FUNCTION identify_token(
 $$
 DECLARE
   t RECORD;
-  result RECORD;
+  found uuid;
 BEGIN
   table_name:=NULL;
   nb_columns:=-1;
   FOR t IN
-    SELECT relname,
+    SELECT pg_namespace.nspname, relname, attrelid,
       (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0 AND atttypid<>0)-1 c
     FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
                         JOIN pg_class ON attrelid=pg_class.oid
@@ -2388,13 +2388,17 @@ BEGIN
                                      AND nspname<>'provsql'
                                      AND attname='provsql'
   LOOP
-    EXECUTE format('SELECT * FROM %I WHERE provsql=%L',t.relname,token) INTO result;
-    -- Test result.provsql rather than the whole record: "RECORD IS NOT NULL"
-    -- is true only when every field is non-null, so a matched row that has any
-    -- NULL data column would be wrongly skipped. The provsql column is the
-    -- (non-null) token we matched on, so it is set iff a row was found.
-    IF result.provsql IS NOT NULL THEN
-      table_name:=t.relname;
+    -- Qualified by its schema, which need not be on the search_path; and a
+    -- table another session drops, or removes the provenance of, between the
+    -- catalog read and the query is skipped rather than failing the lookup.
+    BEGIN
+      EXECUTE format('SELECT provsql FROM %I.%I WHERE provsql=%L LIMIT 1',
+                     t.nspname, t.relname, token) INTO found;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
+    IF found IS NOT NULL THEN
+      table_name:=t.attrelid::regclass;
       nb_columns:=t.c;
       EXIT;
     END IF;
@@ -2642,7 +2646,6 @@ CREATE OR REPLACE FUNCTION resolve_input(uuid UUID)
 $$
 DECLARE
   t RECORD;
-  rel regclass;
   rd  JSONB;
   -- ProvSQL's rewriter unconditionally appends a provsql column to the
   -- targetlist of any SELECT reading from a tracked relation; capture and
@@ -2650,7 +2653,7 @@ DECLARE
   ign UUID;
 BEGIN
   FOR t IN
-    SELECT c.oid::regclass AS regc
+    SELECT c.oid::regclass AS regc, ns.nspname, c.relname
     FROM pg_attribute a
          JOIN pg_class c ON a.attrelid = c.oid
          JOIN pg_namespace ns ON c.relnamespace = ns.oid
@@ -2661,16 +2664,22 @@ BEGIN
       AND ns.nspname <> 'provsql'
       AND a.attnum > 0
   LOOP
-    FOR rel, rd, ign IN
-      EXECUTE format(
-        'SELECT %L::regclass, to_jsonb(t) - ''provsql'', t.provsql FROM %s AS t WHERE provsql = $1',
-        t.regc, t.regc)
-      USING uuid
-    LOOP
-      relation := rel;
-      row_data := rd;
-      RETURN NEXT;
-    END LOOP;
+    -- A table another session drops, or removes the provenance of, between
+    -- the catalog read and the query is skipped (see identify_token).
+    BEGIN
+      FOR rd, ign IN
+        EXECUTE format(
+          'SELECT to_jsonb(t) - ''provsql'', t.provsql FROM %I.%I AS t WHERE provsql = $1',
+          t.nspname, t.relname)
+        USING uuid
+      LOOP
+        relation := t.regc;
+        row_data := rd;
+        RETURN NEXT;
+      END LOOP;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
   END LOOP;
 END
 $$ LANGUAGE plpgsql STABLE;
@@ -8472,6 +8481,16 @@ CREATE OR REPLACE FUNCTION agg_collapsed_moments(token uuid)
   RETURNS double precision[]
   AS 'provsql','agg_collapsed_moments' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief For each contribution of an aggregation, in the order of its
+ *  children, the number of its independence component: contributions reaching
+ *  a common source of randomness (an input, a block of a multivalued input, a
+ *  random-variable leaf or the parameters of a latent one) share one, and
+ *  contributions of different components are independent.  NULL for a gate
+ *  that is no aggregation (internal, used by agg_raw_moment). */
+CREATE OR REPLACE FUNCTION agg_row_components(token uuid)
+  RETURNS integer[]
+  AS 'provsql','agg_row_components' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /**
  * @brief Boolean event "this aggregate-carrying gate's value is defined
  *        (non-NULL) in the world".
@@ -8789,6 +8808,65 @@ BEGIN
       END IF;
     END IF;
 
+    -- Independent rows: the first two moments from one probability per row.
+    -- Rows of different independence components (agg_row_components: no
+    -- source of randomness in common) are independent, so a pair of them is
+    -- present with the product of their probabilities, and
+    --   E[S]   = sum_i v_i p_i,
+    --   E[S^2] = sum_i v_i^2 p_i + (sum_i v_i p_i)^2 - sum_c (sum_{i in c} v_i p_i)^2
+    --            + sum_{i <> j in one component} v_i v_j P(t_i and t_j):
+    -- n probability evaluations, plus one per pair within a component,
+    -- instead of one per pair -- n^2, each a Monte Carlo estimate when the
+    -- rows' events compare random variables.  Unconditional only (an outer
+    -- event couples the rows).
+    IF prov = gate_one() AND k <= 2 THEN
+      DECLARE
+        comp integer[] := agg_row_components((token)::uuid);
+        p float8[] := ARRAY[]::float8[];
+        s1 float8 := 0;
+        sc float8[];
+        ncomp integer;
+        pair_tok uuid[];
+      BEGIN
+        FOR i IN 1..n LOOP
+          p := p || probability_evaluate(toks[i], method, arguments);
+          s1 := s1 + vals[i] * p[i];
+        END LOOP;
+        IF k = 1 THEN
+          total := s1;
+        ELSE
+          ncomp := (SELECT max(c) FROM unnest(comp) AS c);
+          sc := array_fill(0::float8, ARRAY[ncomp]);
+          total := 0;
+          FOR i IN 1..n LOOP
+            total := total + vals[i] * vals[i] * p[i];
+            sc[comp[i]] := sc[comp[i]] + vals[i] * p[i];
+          END LOOP;
+          total := total + s1 * s1;
+          FOR i IN 1..ncomp LOOP
+            total := total - sc[i] * sc[i];
+          END LOOP;
+          FOR i IN 1..n LOOP
+            FOR j IN 1..n LOOP
+              CONTINUE WHEN i = j OR comp[i] <> comp[j];
+              pair_tok := ARRAY(SELECT DISTINCT unnest(ARRAY[toks[i], toks[j]]));
+              total := total + vals[i] * vals[j] * CASE
+                WHEN array_length(pair_tok, 1) = 1 THEN p[i]
+                ELSE probability_evaluate(provenance_times(VARIADIC pair_tok),
+                                          method, arguments) END;
+            END LOOP;
+          END LOOP;
+        END IF;
+        IF defined_tok = gate_one() THEN
+          RETURN total;
+        END IF;
+        prob := probability_evaluate(defined_tok, method, arguments);
+        IF prob IS NULL OR prob <= 0 THEN
+          RETURN NULL;   -- never defined: SQL NULL
+        END IF;
+        RETURN total / prob;
+      END;
+    END IF;
     -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
     -- current tuple; we step through them in lexicographic order.
     total := 0;

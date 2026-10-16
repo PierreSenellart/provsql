@@ -701,6 +701,31 @@ the Monte-Carlo scalar path (``rv_moment``), which composes ``gate_case`` with
 the aggregate leaves. The MC sampler already handles ``gate_case`` + ``gate_agg``
 with no change.
 
+**SUM and COUNT moments** (``agg_raw_moment``'s ``sum`` / ``count`` arm).
+With :math:`S = \sum_i v_i \mathbf{1}_i`, the raw moment :math:`E[S^k]` is
+the sum over the k-tuples of rows of :math:`v_{i_1} \cdots v_{i_k}` times the
+probability that the rows of the tuple are all present. Three tiers, tried in
+order:
+
+- the shared-latent quadrature of :sqlfunc:`agg_collapsed_moment` (see
+  :doc:`continuous-distributions`), when the rows' events are coupled through
+  one continuous latent;
+- for :math:`k \le 2` and no conditioning event, the independence components
+  of :sqlfunc:`agg_row_components`: rows whose tokens reach no common source
+  of randomness (an input, a block of a ``mulinput``, a ``gate_rv`` leaf or
+  the parameters of a latent one) are independent, so a pair of them is
+  present with the product of their probabilities.  Then
+  :math:`E[S^2] = \sum_i v_i^2 p_i + (\sum_i v_i p_i)^2 - \sum_c (\sum_{i
+  \in c} v_i p_i)^2 + \sum_{i \ne j \text{ in one component}} v_i v_j
+  \Pr(t_i \wedge t_j)`: one probability per row, and one per pair within a
+  component, where the enumeration needs one per pair -- a Monte Carlo
+  estimate each when the rows' events compare random variables;
+- otherwise the enumeration of every k-tuple, each tuple's conjunction
+  evaluated by ``probability_evaluate``.
+
+The moment is conditional on the aggregate having a value (a row present),
+except for a scalar COUNT, whose value over no row is 0.
+
 **AVG moments** (``agg_raw_moment``'s ``avg`` arm). AVG = SUM/COUNT is a
 ratio of two correlated world-dependent quantities, so the SUM arm's
 k-tuple expansion does not apply. The exact arm

@@ -103,3 +103,77 @@ FROM expected_result;
 DROP TABLE expected_result;
 SELECT remove_provenance('expected_prod');
 DROP TABLE expected_prod;
+
+-- The first two moments of a SUM or COUNT over rows split into independence
+-- components (agg_row_components): one probability per row, and one per pair
+-- within a component, instead of one per pair of rows.  Checked against the
+-- enumeration of every pair, which conditioning on a certain event forces:
+-- independent rows (one component each), rows sharing inputs through a
+-- self-join (one component), and the alternatives of a block-independent
+-- table (one component per block).
+CREATE TABLE evi_certain(x int);
+INSERT INTO evi_certain VALUES (1);
+SELECT add_provenance('evi_certain');
+DO $$ BEGIN PERFORM set_prob(provenance(), 1) FROM evi_certain; END $$;
+CREATE TABLE evi_ind(g int, v int);
+INSERT INTO evi_ind VALUES (1,1), (1,2), (1,5), (1,7);
+SELECT add_provenance('evi_ind');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.1 * v) FROM evi_ind; END $$;
+CREATE TABLE evi_bid(k int, v int, p float);
+INSERT INTO evi_bid VALUES (1,3,0.3), (1,4,0.5), (2,6,0.4), (2,1,0.4), (3,2,0.9);
+SELECT repair_key('evi_bid', 'k');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM evi_bid; END $$;
+CREATE TABLE evi_r_ind AS SELECT count(*) AS c, sum(v) AS s FROM evi_ind GROUP BY g;
+CREATE TABLE evi_r_self AS
+  SELECT sum(a.v + b.v) AS s FROM evi_ind a, evi_ind b WHERE a.v <= b.v;
+CREATE TABLE evi_r_bid AS SELECT count(*) AS c, sum(v) AS s FROM evi_bid;
+SELECT remove_provenance('evi_r_ind');
+SELECT remove_provenance('evi_r_self');
+SELECT remove_provenance('evi_r_bid');
+SET provsql.active = off;
+SELECT provsql AS evi_one FROM evi_certain \gset
+SELECT 'independent' AS shape, agg_row_components(s::uuid) AS components,
+       round(variance(s)::numeric, 6) AS var_sum,
+       round(variance(s)::numeric, 9) = round(variance(s, :'evi_one'::uuid)::numeric, 9) AS same_sum,
+       round(variance(c)::numeric, 9) = round(variance(c, :'evi_one'::uuid)::numeric, 9) AS same_count
+  FROM evi_r_ind
+UNION ALL
+SELECT 'self-join', agg_row_components(s::uuid),
+       round(variance(s)::numeric, 6),
+       round(variance(s)::numeric, 9) = round(variance(s, :'evi_one'::uuid)::numeric, 9),
+       NULL
+  FROM evi_r_self
+UNION ALL
+SELECT 'blocks', agg_row_components(s::uuid),
+       round(variance(s)::numeric, 6),
+       round(variance(s)::numeric, 9) = round(variance(s, :'evi_one'::uuid)::numeric, 9),
+       round(variance(c)::numeric, 9) = round(variance(c, :'evi_one'::uuid)::numeric, 9)
+  FROM evi_r_bid;
+SET provsql.active = on;
+DROP TABLE evi_r_ind, evi_r_self, evi_r_bid;
+SELECT remove_provenance('evi_bid');
+SELECT remove_provenance('evi_ind');
+SELECT remove_provenance('evi_certain');
+DROP TABLE evi_bid, evi_ind, evi_certain;
+
+-- A COUNT of comparisons over random variables, each row with latent
+-- variables of its own: every row is a component, so the variance takes one
+-- probability per row (it took one Monte Carlo estimate per pair).  Rows
+-- sharing a latent share a component.
+SET provsql.monte_carlo_seed = 1;
+CREATE TABLE evi_rows(id int, a float);
+INSERT INTO evi_rows SELECT g, (g % 3) - 1 FROM generate_series(1, 6) g;
+CREATE TABLE evi_shared(b random_variable);
+INSERT INTO evi_shared VALUES (normal(0, 1));
+CREATE TABLE evi_ev AS
+  SELECT r.id, r.a, normal(0, 1) AS x,
+         CASE WHEN r.id <= 2 THEN s.b ELSE normal(0, 1) END AS b
+  FROM evi_rows r, evi_shared s;
+SELECT add_provenance('evi_ev');
+CREATE TABLE evi_cnt AS SELECT count(*) AS c FROM evi_ev WHERE x < a + b;
+SELECT remove_provenance('evi_cnt');
+SELECT agg_row_components(c::uuid) AS components FROM evi_cnt;
+DROP TABLE evi_cnt;
+SELECT remove_provenance('evi_ev');
+DROP TABLE evi_ev, evi_shared, evi_rows;
+RESET provsql.monte_carlo_seed;

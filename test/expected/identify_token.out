@@ -21,3 +21,13 @@ identify_token
 (identify_null,3)
 (identify_null,3)
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+table_name|nb_columns
+identify_elsewhere.hidden|1
+(1 row)
+NOTICE:  drop cascades to table identify_elsewhere.hidden

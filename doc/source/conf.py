@@ -113,6 +113,7 @@ _SQL_FUNC_MAP = {
     'cmp_surviving_factors':    '/doxygen-sql/html/group__semiring__operations.html#ga14e2ecafb7ca244ed577a2df01b3b6be',
     'agg_collapsed_moment':     '/doxygen-sql/html/group__probability.html#ga6ef6a60b91000efb00b326c7f11cd750',
     'agg_collapsed_moments':    '/doxygen-sql/html/group__probability.html#ga504c8402babaae2096dcf17b90b64fbf',
+    'agg_row_components':       '/doxygen-sql/html/group__probability.html#ga89260cc350547477f897039418eecbf8',
     'add_provenance':           '/doxygen-sql/html/group__table__management.html#ga00f0d0b04b2b693c974e72aaf095cb3b',
     'migrate_table_info':       '/doxygen-sql/html/group__table__management.html#gad13065fdc8c0b28b7e2c4ae0ba5a4a93',
     'check_store':              '/doxygen-sql/html/group__gate__manipulation.html#ga2a0791e0da60c65cc1427535bd4c0b7e',
