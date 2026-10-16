@@ -374,7 +374,7 @@ _C_FUNC_MAP = {
     'MethodCatalog':               '/doxygen-c/html/classprovsql_1_1MethodCatalog.html',
     'MethodCatalog::registerMethod': '/doxygen-c/html/classprovsql_1_1MethodCatalog.html#aa7671ed28fd09070a78978625d0ede79',
     'ProbabilityMethod':           '/doxygen-c/html/classprovsql_1_1ProbabilityMethod.html',
-    'createGenericCircuit':        '/doxygen-c/html/classMMappedCircuit.html#a95be2b3f443227f27f1db03470bbc961',
+    'createGenericCircuit':        '/doxygen-c/html/classMMappedCircuit.html#af708d32350a7db0c5695cd3efced74e3',
     'insert_agg_token_casts':    '/doxygen-c/html/provsql_8c.html#a539df516de849eb54876a4f98a748861',
     'rewrite_agg_cases':         '/doxygen-c/html/provsql_8c.html#acb952a34bae5cdcdc6287f5ac375c06a',
     'cast_agg_token_mutator':    '/doxygen-c/html/provsql_8c.html#a8b46060e30212f0f364e4a5b0eb00057',
