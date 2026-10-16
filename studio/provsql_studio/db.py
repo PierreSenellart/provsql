@@ -598,13 +598,19 @@ def make_pool(dsn: str | None) -> ConnectionPool:
 
     Both settings are PGC_SUSET so they only stick for superusers; a
     non-superuser session still sees the cluster defaults (no harm done,
-    we just lose the noise filter)."""
+    we just lose the noise filter).
+
+    `check` tests each connection as it is handed out (one empty round-trip)
+    and replaces a dead one, so after a PostgreSQL restart the next request
+    runs on a fresh connection instead of failing with "terminating
+    connection due to administrator command"."""
     return ConnectionPool(
         conninfo=dsn or "",
         min_size=1,
         max_size=8,
         open=True,
         configure=configure_connection,
+        check=ConnectionPool.check_connection,
     )
 
 

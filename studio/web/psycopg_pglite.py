@@ -496,6 +496,12 @@ class ConnectionPool:
     def connection(self, *a, **k):
         return _Conn()
 
+    # make_pool passes check=ConnectionPool.check_connection; the in-page
+    # PGlite connection cannot go stale, so the check is a no-op.
+    @staticmethod
+    def check_connection(conn):
+        pass
+
     # The in-process PGlite is always reachable: a connection is always
     # available, so app.get_pool() never probes it.
     def get_stats(self):

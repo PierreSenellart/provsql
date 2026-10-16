@@ -3,6 +3,8 @@ status / error handling. The wrapping is exercised against the personnel
 table set up by conftest."""
 from __future__ import annotations
 
+import psycopg
+
 
 def post_exec(client, sql, mode="where"):
     resp = client.post("/api/exec", json={"sql": sql, "mode": mode})
@@ -552,3 +554,21 @@ def test_where_mode_order_by_limit(client):
     final = payload["blocks"][-1]
     assert final["kind"] == "rows", final
     assert payload["wrapped"] is True
+
+
+def test_exec_survives_terminated_pool_backends(client, test_dsn):
+    """After a PostgreSQL restart the pool's idle connections are dead; the
+    pool tests each one as it hands it out, so the next request runs on a
+    fresh connection instead of failing with SQLSTATE 57P01."""
+    def backend_pid():
+        resp = client.post("/api/exec",
+                           json={"sql": "SELECT pg_backend_pid()", "mode": "circuit"})
+        assert resp.status_code == 200
+        final = resp.get_json()["blocks"][-1]
+        assert final["kind"] == "rows", final
+        return final["rows"][0][0]
+
+    pid = backend_pid()
+    with psycopg.connect(test_dsn, autocommit=True) as conn:
+        conn.execute("SELECT pg_terminate_backend(%s)", (int(pid),))
+    assert backend_pid() != pid
