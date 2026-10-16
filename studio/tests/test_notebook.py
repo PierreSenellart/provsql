@@ -8,6 +8,8 @@ the state.
 """
 from __future__ import annotations
 
+import psycopg
+
 
 def _new_session(client):
     resp = client.post("/api/nb/session")
@@ -52,7 +54,41 @@ def test_exec_on_unknown_session_flags_kernel_dead(client):
     resp = client.post("/api/nb/exec",
                        json={"session_id": "nope", "sql": "SELECT 1"})
     assert resp.status_code == 404
-    assert resp.get_json()["kernel_dead"] is True
+    out = resp.get_json()
+    assert out["kernel_dead"] is True
+    # Nothing ran, so the front-end may rerun the cell on a new kernel;
+    # session_lost carries the reason it quotes.
+    assert "idle for more than" in out["session_lost"]
+    assert "session has ended" in out["error"]
+
+
+def test_exec_after_backend_terminated_is_session_lost(client, test_dsn):
+    """A backend gone between cells (PostgreSQL restart, terminated
+    backend) is only noticed on the next cell's BEGIN: nothing ran, so it
+    is reported as a lost session, which the front-end reruns."""
+    sid = _new_session(client)
+    pid = client.get(f"/api/nb/session/{sid}/status").get_json()["pid"]
+    with psycopg.connect(test_dsn, autocommit=True) as conn:
+        conn.execute("SELECT pg_terminate_backend(%s)", (pid,))
+    resp = client.post("/api/nb/exec",
+                       json={"session_id": sid, "sql": "SELECT 1"})
+    assert resp.status_code == 409
+    out = resp.get_json()
+    assert out["kernel_dead"] is True
+    assert "PostgreSQL restarted" in out["session_lost"]
+    assert client.get(f"/api/nb/session/{sid}/status").status_code == 404
+
+
+def test_backend_dying_mid_cell_is_not_session_lost(client):
+    """A cell whose statements already started is not rerun: the death is
+    reported as the cell's own error."""
+    sid = _new_session(client)
+    resp = client.post("/api/nb/exec", json={
+        "session_id": sid,
+        "sql": "SELECT pg_terminate_backend(pg_backend_pid())"})
+    out = resp.get_json()
+    assert out["kernel_dead"] is True
+    assert "session_lost" not in out
 
 
 def test_kernel_cap(client, app):

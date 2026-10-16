@@ -99,6 +99,36 @@ def test_state_persists_across_cells_and_restart_clears_it(
         "nb_e2e", timeout=8000)
 
 
+def test_lost_session_reruns_cell_on_new_kernel(
+        page: Page, studio_url: str) -> None:
+    """A cell sent to a session that has ended (idle timeout, page left,
+    Studio restart) reruns once on a new kernel instead of failing, and
+    says that earlier session state is gone."""
+    _goto_notebook(page, studio_url)
+    sessions = []
+    page.on("request", lambda r: sessions.append(r.post_data_json["session_id"])
+            if r.url.endswith("/api/nb/exec") else None)
+    ta = _sql_cell_ta(page)
+    ta.fill("SELECT 42 AS answer;")
+    ta.focus()
+    _run_focused(page)
+    cell = page.locator(".nb-cell--sql").first
+    expect(cell.locator(".nb-cell__count")).to_have_text("[1]", timeout=8000)
+
+    # End the session behind the notebook's back, as the idle GC would.
+    assert page.request.post(
+        f"{studio_url}/api/nb/session/{sessions[0]}/close").status == 204
+    ta.focus()
+    _run_focused(page)
+    expect(cell.locator(".nb-out")).to_contain_text(
+        "ran on a new database session", timeout=8000)
+    expect(cell.locator(".nb-out tbody td").first).to_have_text("42")
+    expect(cell.locator(".nb-out .wp-error")).to_have_count(0)
+    expect(page.locator("#nb-kernel-chip")).to_have_class(
+        "nb__kernel nb__kernel--alive")
+    assert len(sessions) == 3 and sessions[2] != sessions[0]
+
+
 def test_error_cell_shows_banner_kernel_survives(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
     ta = _sql_cell_ta(page)

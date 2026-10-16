@@ -750,18 +750,31 @@ def create_app(
         kernels = _kernels()
         with kernels["lock"]:
             entry = kernels["by_id"].get(session_id)
+        # Both failures below happen before any statement runs, so the
+        # front-end may safely rerun the cell on a fresh kernel; it keys
+        # that on `session_lost`, which carries the likely reason (a kernel
+        # dying mid-cell is not retried).
         if entry is None:
+            minutes = round(float(app.config["KERNEL_IDLE_TIMEOUT"]) / 60)
+            reason = (f"it was idle for more than {minutes} minutes, the "
+                      "notebook page was left, or Studio was restarted")
             return jsonify({
-                "error": "unknown or expired notebook session",
+                "error": f"this notebook's database session has ended: {reason}",
                 "kernel_dead": True,
+                "session_lost": reason,
             }), 404
+        def connection_lost():
+            reason = "PostgreSQL restarted, or the connection was closed"
+            return jsonify({
+                "error": "this notebook's database connection was lost: "
+                         f"{reason}",
+                "kernel_dead": True,
+                "session_lost": reason,
+            }), 409
+
         if entry["conn"].closed or entry["conn"].broken:
             _delete_kernel(session_id)
-            return jsonify({
-                "error": "the kernel's connection is gone "
-                         "(server restart?); restart the kernel",
-                "kernel_dead": True,
-            }), 409
+            return connection_lost()
 
         statements = _split_statements(sql_text)
         if not statements:
@@ -817,6 +830,10 @@ def create_app(
         if dead:
             with kernels["lock"]:
                 kernels["by_id"].pop(session_id, None)
+        # A connection found dead only now (on the cell's BEGIN, the first
+        # use since a PostgreSQL restart): nothing ran either.
+        if meta.get("session_lost"):
+            return connection_lost()
 
         blocks = [r.to_dict() for r in intermediate]
         if final is not None:

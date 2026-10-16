@@ -2934,10 +2934,17 @@ def exec_kernel_cell(
     restart; the connection is closed here and the caller must
     discard the kernel. A COMMIT-time SQL failure on a healthy
     connection (e.g. a deferred constraint firing) is *not* death:
-    the transaction rolled back and the kernel lives on."""
+    the transaction rolled back and the kernel lives on.
+
+    When the connection is found dead on the cell's opening BEGIN (the
+    first use since a PostgreSQL restart or a terminated backend: psycopg
+    only notices then), no statement ran, and `meta["session_lost"]` is
+    set so the caller can rerun the cell on a fresh kernel."""
     result = None
+    begun = False
     try:
         with conn.transaction():
+            begun = True
             result = exec_batch_on(
                 conn,
                 statements,
@@ -2973,6 +2980,8 @@ def exec_kernel_cell(
         else:
             intermediate, final = [], None
             meta = {"wrapped": False, "notices": []}
+        if dead and not begun:
+            meta["session_lost"] = True
         # Keep the cell's own error block when there is one (the
         # commit failure is its consequence, not the story); surface
         # the boundary error otherwise.
@@ -2984,6 +2993,15 @@ def exec_kernel_cell(
             final = _user_error_result(e, meta, statement_timeout)
         return intermediate, final, meta, dead
     intermediate, final, meta = result
+    # A backend lost mid-cell surfaces as the statement's own error block,
+    # and leaving the transaction does not raise on the broken connection:
+    # check it, so the kernel is not reported alive.
+    if conn.closed or conn.broken:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return intermediate, final, meta, True
     return intermediate, final, meta, False
 
 

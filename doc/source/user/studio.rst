@@ -792,9 +792,12 @@ shows the backend pid and database. :fa:`play` :guilabel:`Run` runs the
 selected cell; :fa:`forward` :guilabel:`Run all` executes the
 cells top to bottom; :fa:`times-circle` :guilabel:`Interrupt` cancels the statement in
 flight; :fa:`redo` :guilabel:`Restart kernel` discards the session (temporary
-tables and session ``SET`` s are lost, counters reset). Idle kernels
-are dropped after a timeout, and a connection switch drops them all;
-a fresh kernel starts on the next run.
+tables and session ``SET`` s are lost, counters reset). A kernel also
+ends when it has been idle for 30 minutes, when the notebook page is left,
+on a connection switch, or when Studio or PostgreSQL restarts. A cell sent
+to an ended kernel then runs on a fresh one, with a note in its output:
+the earlier cells' temporary tables and session settings did not carry
+over, so rerun those the cell depends on.
 
 The toolbar also appends fresh cells (:fa:`plus` :guilabel:`SQL` /
 :fa:`plus` :guilabel:`Markdown`) and, as in Circuit mode, expands

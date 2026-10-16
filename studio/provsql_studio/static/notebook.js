@@ -1933,27 +1933,21 @@
     byId('nb-interrupt').hidden = !on;
   }
 
-  async function runCell(cell) {
-    if (cell.type !== 'sql' || running) return;
+  // One /api/nb/exec round-trip on the current kernel (started if
+  // needed). Failures come back shaped as an error block, so the cell
+  // renders them in place; `kernel_failed` marks a kernel that could not
+  // even be started.
+  async function execOnKernel(cell, requestId) {
     let k;
     try {
       k = await ensureKernel();
     } catch (e) {
       // Surface the failure in the cell too -- the kernel chip alone is
       // easy to miss when the eye is on the cell that "did nothing".
-      cell.outputs = { blocks: [{ kind: 'error',
-        message: `Could not start a kernel: ${e.message}` }], notices: [] };
-      renderOutputs(cell);
-      return;
+      return { blocks: [{ kind: 'error',
+        message: `Could not start a kernel: ${e.message}` }], notices: [],
+        kernel_failed: true };
     }
-    const requestId = (window.crypto && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    running = { cellId: cell.id, requestId };
-    updateGutter(cell);
-    setRunningUi(true);
-    const t0 = performance.now();
-    let payload = null;
     try {
       const resp = await fetch('/api/nb/exec', {
         method: 'POST',
@@ -1967,23 +1961,66 @@
           request_id: requestId,
         }),
       });
-      payload = await resp.json().catch(() => null);
+      let payload = await resp.json().catch(() => null);
       if (!payload) payload = { blocks: [], notices: [] };
       if (!resp.ok && payload.error) {
         // Session-level failure (expired / busy / dead kernel): shape it
         // like an error block so the cell renders it in place.
         payload.blocks = [{ kind: 'error', message: payload.error }];
       }
+      return payload;
     } catch (e) {
-      payload = { blocks: [{ kind: 'error', message: `Network error: ${e.message}` }],
-                  notices: [] };
+      return { blocks: [{ kind: 'error', message: `Network error: ${e.message}` }],
+               notices: [] };
+    }
+  }
+
+  // A new kernel holds none of the earlier cells' state: reset every
+  // execution counter to "not run on this kernel", as a restart does.
+  function markCellsStale() {
+    execCounter = 0;
+    for (const c of cells) { c.count = null; }
+    for (const c of cells) updateGutter(c);
+  }
+
+  async function runCell(cell) {
+    if (cell.type !== 'sql' || running) return;
+    const requestId = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    running = { cellId: cell.id, requestId };
+    updateGutter(cell);
+    setRunningUi(true);
+    const t0 = performance.now();
+    let payload = null;
+    let lost = null;
+    try {
+      payload = await execOnKernel(cell, requestId);
+      // The session ended before the cell ran (idle timeout, page left,
+      // Studio or PostgreSQL restarted): nothing executed, so rerun once
+      // on a fresh kernel, like Jupyter reconnecting, and say so in the
+      // cell -- the earlier cells' session state did not carry over.
+      if (payload.session_lost && !payload.kernel_failed) {
+        lost = payload.session_lost;
+        kernelGone();
+        markCellsStale();
+        payload = await execOnKernel(cell, requestId);
+      }
     } finally {
       running = null;
       setRunningUi(false);
     }
+    if (lost && !payload.kernel_failed) {
+      payload.notices = [{ severity: 'INFO', message:
+        'This cell ran on a new database session, as the previous one '
+        + `had ended (${lost}). Temporary tables and session settings `
+        + '(SET) from earlier cells are gone; rerun those cells if this '
+        + 'one depends on them.' },
+        ...(payload.notices || [])];
+    }
     payload.elapsed_ms = Math.round(performance.now() - t0);
     cell.outputs = payload;
-    cell.count = ++execCounter;
+    cell.count = payload.kernel_failed ? null : ++execCounter;
     if (payload.kernel_dead) {
       kernelGone('kernel died – restart it');
       cell.count = null;
