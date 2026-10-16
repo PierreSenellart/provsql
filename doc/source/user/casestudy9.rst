@@ -130,19 +130,26 @@ uncertain, present only in the worlds where some deal is made in North,
 with probability ``probability_evaluate(provenance())`` = 0.9930, and
 155.59 × 0.9930 = 154.50.
 
-A dashboard counts a region where no deal is made as 0. The view below
-gives each region its revenue that way, for the steps that read it:
-starting from ``region`` with a ``LEFT JOIN`` keeps a row for every region,
-even in the worlds where no deal is made in it, and ``coalesce`` counts its
-revenue as 0 there.
+A dashboard counts a region, or a quarter, where no deal is made as 0. The
+two views below give the revenue that way, for the steps that read it. ``quarter_revenue`` starts from every pair of a region and a
+quarter (``region`` crossed with the list of quarters) with a ``LEFT
+JOIN``, which keeps a row for each pair even in the worlds where no deal is
+made in it, and ``coalesce`` counts its revenue as 0 there.
+``region_revenue`` adds up the two quarters of each region.
 
 .. code-block:: postgresql
 
-    CREATE VIEW region_revenue AS
-      SELECT r.name AS region, r.target,
+    CREATE VIEW quarter_revenue AS
+      SELECT r.name AS region, r.target, q.quarter,
              coalesce(sum(d.amount), 0) AS revenue
-      FROM region r LEFT JOIN deal d ON d.region = r.name
-      GROUP BY r.name;
+      FROM region r CROSS JOIN (VALUES ('Q1'), ('Q2')) AS q(quarter)
+           LEFT JOIN deal d ON d.region = r.name AND d.quarter = q.quarter
+      GROUP BY r.name, q.quarter;
+
+    CREATE VIEW region_revenue AS
+      SELECT region, target, sum(revenue) AS revenue
+      FROM quarter_revenue
+      GROUP BY region, target;
 
 ``round(avg(amount), 1)`` rounds the average in every world: the rounding
 is carried with the aggregate, not applied to its value on the data as it
@@ -155,8 +162,8 @@ Step 3: Subtotals with ``ROLLUP``
 .. code-block:: postgresql
 
     SELECT region, quarter,
-           round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast
-    FROM deal
+           round(expected(sum(revenue))::numeric, 2) AS forecast
+    FROM quarter_revenue
     GROUP BY ROLLUP (region, quarter)
     ORDER BY region, quarter;
 
@@ -275,17 +282,17 @@ where no deal is made in North included.
 Step 8: Quarter-over-Quarter Growth
 -----------------------------------
 
-Aggregates combine with each other, within a group and in its ``HAVING``:
+The growth of a region compares two rows of ``quarter_revenue``, its two
+quarters:
 
 .. code-block:: postgresql
 
-    SELECT region,
-           round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
-                          - coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
-                         )::numeric, 2) AS growth
-    FROM deal
-    GROUP BY region
-    ORDER BY region;
+    SELECT q1.region,
+           round(expected(q2.revenue - q1.revenue)::numeric, 2) AS growth
+    FROM quarter_revenue q1
+         JOIN quarter_revenue q2 ON q2.region = q1.region
+    WHERE q1.quarter = 'Q1' AND q2.quarter = 'Q2'
+    ORDER BY q1.region;
 
 The difference is taken in every world, so its expectation is the
 difference of the two forecasts: North shrinks by 34.50 on average
@@ -296,18 +303,17 @@ The regions whose Q2 revenue beats their Q1 revenue:
 
 .. code-block:: postgresql
 
-    SELECT region,
+    SELECT q1.region,
            round(probability_evaluate(provenance())::numeric, 4) AS p_growth
-    FROM deal
-    GROUP BY region
-    HAVING coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
-         > coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
-    ORDER BY region;
+    FROM quarter_revenue q1
+         JOIN quarter_revenue q2 ON q2.region = q1.region
+    WHERE q1.quarter = 'Q1' AND q2.quarter = 'Q2'
+      AND q2.revenue > q1.revenue
+    ORDER BY q1.region;
 
-The ``HAVING`` keeps a region in the worlds where its Q2 revenue beats its
-Q1 revenue, a quarter with no deal counting as 0: West with probability
-0.4400, although its expected growth is zero, and South, the likeliest to
-grow, with 0.5080.
+The comparison keeps a region in the worlds where its Q2 revenue beats its
+Q1 revenue: West with probability 0.4400, although its expected growth is
+zero, and South, the likeliest to grow, with 0.5080.
 
 
 Step 9: The Share of Big Deals

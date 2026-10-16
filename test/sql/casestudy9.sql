@@ -35,19 +35,26 @@ CREATE TABLE cs9_r AS
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
--- The revenue of each region, a region where no deal is made counting 0: a
--- LEFT JOIN from the untracked, certain regions, and COALESCE.  Steps 5, 6,
--- 7 and 11 read it.
+-- The revenue of each region and quarter, a pair where no deal is made
+-- counting 0: a LEFT JOIN from the untracked, certain pairs, and COALESCE
+-- (Steps 3 and 8 read it); and of each region, the sum of its quarters, an
+-- aggregate of aggregate results (Steps 5, 6, 7 and 11 read it).
+CREATE VIEW cs9_quarter_revenue AS
+  SELECT r.name AS region, r.target, q.quarter,
+         coalesce(sum(d.amount), 0) AS revenue
+  FROM cs9_region r CROSS JOIN (VALUES ('Q1'), ('Q2')) AS q(quarter)
+       LEFT JOIN cs9_deal d ON d.region = r.name AND d.quarter = q.quarter
+  GROUP BY r.name, q.quarter;
 CREATE VIEW cs9_region_revenue AS
-  SELECT r.name AS region, r.target, coalesce(sum(d.amount), 0) AS revenue
-  FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
-  GROUP BY r.name;
+  SELECT region, target, sum(revenue) AS revenue
+  FROM cs9_quarter_revenue
+  GROUP BY region, target;
 
 -- Step 3: ROLLUP subtotals add up (94.50 + 60.00 = 154.50; total 405.00).
 CREATE TABLE cs9_r AS
   SELECT region, quarter,
-         round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast
-  FROM cs9_deal GROUP BY ROLLUP (region, quarter);
+         round(expected(sum(revenue))::numeric, 2) AS forecast
+  FROM cs9_quarter_revenue GROUP BY ROLLUP (region, quarter);
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region, quarter;
 DROP TABLE cs9_r;
@@ -119,26 +126,27 @@ SELECT region, coalesce(on_target::text, 'unknown') AS on_target, p
 FROM cs9_r ORDER BY region, on_target;
 DROP TABLE cs9_r;
 
--- Step 8: growth from Q1 to Q2, a difference of two aggregates (North
--- (36 + 24) - (72 + 22.5) = -34.50, South -4.50, West 0.00), and the regions
--- whose Q2 beats their Q1 in a HAVING, a quarter closing nothing counting 0
--- (North 0.3010 = 0.2580 with both quarters closing something, plus Q1 closing
--- nothing, 0.1 x 0.5, while Q2 closes something, 1 - 0.7 x 0.2; South 0.5080,
--- West 0.4400).
+-- Step 8: growth from Q1 to Q2, a difference of two rows of the quarterly
+-- view (North (36 + 24) - (72 + 22.5) = -34.50, South -4.50, West 0.00), and
+-- the regions whose Q2 beats their Q1, a comparison of the two in a WHERE, a
+-- quarter where no deal is made counting 0 (North 0.3010 = 0.2580 with a deal
+-- made in both quarters, plus none in Q1, 0.1 x 0.5, while some in Q2,
+-- 1 - 0.7 x 0.2; South 0.5080, West 0.4400).
 CREATE TABLE cs9_r AS
-  SELECT region,
-         round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
-                        - coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
-                       )::numeric, 2) AS growth
-  FROM cs9_deal GROUP BY region;
+  SELECT q1.region,
+         round(expected(q2.revenue - q1.revenue)::numeric, 2) AS growth
+  FROM cs9_quarter_revenue q1
+       JOIN cs9_quarter_revenue q2 ON q2.region = q1.region
+  WHERE q1.quarter = 'Q1' AND q2.quarter = 'Q2';
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
-  SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_growth
-  FROM cs9_deal GROUP BY region
-  HAVING coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
-       > coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0);
+  SELECT q1.region,
+         round(probability_evaluate(provenance())::numeric, 4) AS p_growth
+  FROM cs9_quarter_revenue q1
+       JOIN cs9_quarter_revenue q2 ON q2.region = q1.region
+  WHERE q1.quarter = 'Q1' AND q2.quarter = 'Q2' AND q2.revenue > q1.revenue;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
@@ -274,6 +282,7 @@ DROP TABLE cs9_r, cs9_deal_consent, cs9_consent;
 DROP TYPE cs9_purpose;
 
 DROP VIEW cs9_region_revenue;
+DROP VIEW cs9_quarter_revenue;
 SELECT remove_provenance('cs9_deal');
 DROP TABLE cs9_deal;
 DROP TABLE cs9_region;
