@@ -58,6 +58,9 @@ and load it into a fresh PostgreSQL database:
 
     psql -d mydb -f setup.sql
 
+The setup script calls :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -78,14 +81,6 @@ Familiarise yourself with the data. The ``study_type`` column uses a PostgreSQL
 ``no_evidence < case_report < observational < rct < meta_analysis < perfect_evidence``,
 where ``no_evidence`` is the semiring 𝟘 (no derivation possible) and
 ``perfect_evidence`` is the semiring 𝟙 (neutral for ⊗ = MIN).
-
-.. nb:omit-begin
-
-The setup script has called :sqlfunc:`setup_search_path`, which adds
-``provsql`` to the database's ``search_path``: every new session calls
-ProvSQL's functions without the ``provsql.`` prefix.
-
-.. nb:omit-end
 
 Step 2: Enable Provenance and Join with Lookup Tables
 ------------------------------------------------------

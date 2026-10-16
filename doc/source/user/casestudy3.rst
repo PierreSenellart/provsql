@@ -84,6 +84,9 @@ couple of minutes. This creates four tables:
 
 The script also adds provenance tracking to ``trips`` and ``stops``, and
 normalises their wheelchair columns to 1 (accessible) or 0.
+It also calls :sqlfunc:`setup_search_path`, which adds ``provsql`` to the
+database's ``search_path``: every new session calls ProvSQL's functions
+without the ``provsql.`` prefix.
 
 .. note::
 
@@ -94,10 +97,6 @@ normalises their wheelchair columns to 1 (accessible) or 0.
 
 Step 1: Explore the Database
 -----------------------------
-
-The setup script has called :sqlfunc:`setup_search_path`, which adds
-``provsql`` to the database's ``search_path``: every new session calls
-ProvSQL's functions without the ``provsql.`` prefix.
 
 Inspect the four tables:
 

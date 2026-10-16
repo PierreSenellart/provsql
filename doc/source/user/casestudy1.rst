@@ -58,6 +58,9 @@ and load it into a fresh PostgreSQL database:
 
     psql -d mydb -f setup.sql
 
+The setup script calls :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
@@ -74,14 +77,6 @@ This creates:
 
 Step 1: Explore the Database
 -----------------------------
-
-.. nb:omit-begin
-
-The setup script has called :sqlfunc:`setup_search_path`, which adds
-``provsql`` to the database's ``search_path``: every new session calls
-ProvSQL's functions without the ``provsql.`` prefix.
-
-.. nb:omit-end
 
 Inspect the ``personnel`` table:
 

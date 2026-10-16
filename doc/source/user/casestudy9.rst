@@ -59,12 +59,15 @@ and load it into a fresh PostgreSQL database:
 
     psql -d mydb -f setup.sql
 
+The setup script calls :sqlfunc:`setup_search_path`, which adds
+``provsql`` to the database's ``search_path``: every new session calls
+ProvSQL's functions without the ``provsql.`` prefix.
 
 .. nb:omit-end
 
 .. nb:setup: ../../casestudy9/setup.sql
 
-This creates two tables:
+This creates three tables:
 
 * ``region`` -- the three regions (North, South, West) and each one's
   revenue target, in thousands of euros
@@ -77,13 +80,7 @@ This creates two tables:
 Step 1: The Pipeline
 --------------------
 
-.. nb:omit-begin
-
-The setup script has called :sqlfunc:`setup_search_path`, which adds
-``provsql`` to the database's ``search_path``: every new session calls
-ProvSQL's functions without the ``provsql.`` prefix.
-
-.. nb:omit-end
+Look at the regions and the deals:
 
 .. code-block:: postgresql
 

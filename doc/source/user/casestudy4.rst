@@ -86,7 +86,7 @@ Point Studio at the database and pick :guilabel:`Temporal` from the mode switche
 
 .. code-block:: bash
 
-    provsql-studio --dsn "dbname=mydb" --search-path "public, provsql"
+    provsql-studio --dsn "dbname=mydb"
 
 Two controls drive every view that follows:
 
