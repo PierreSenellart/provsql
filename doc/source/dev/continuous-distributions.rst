@@ -770,8 +770,9 @@ before the generic MC fallback and exposed as SQL:
   COUNT / SUM by a Poisson-binomial 1-D quadrature over the shared
   latent, with the closed-form per-row CDF given it. It returns
   ``std::nullopt`` / SQL ``NULL`` when the circuit does not match
-  the shared-latent shape, so the caller falls back to the exact
-  :math:`n^k` enumeration. :sqlfunc:`variance` uses the paired
+  the shared-latent shape, so the caller falls back to the
+  independence components of :sqlfunc:`agg_row_components`, or to the
+  exact :math:`n^k` enumeration (see :doc:`aggregation`). :sqlfunc:`variance` uses the paired
   form so a mean-plus-variance readout traverses the circuit once.
 - :cfunc:`collapsedConditionalMoment` computes the **exact
   posterior** raw moment :math:`E[R^k \mid Y = C]` of a latent

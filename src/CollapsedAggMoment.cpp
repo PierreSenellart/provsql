@@ -55,6 +55,10 @@ extern "C" {
 }
 
 #include <cmath>
+#include <functional>
+#include <map>
+#include <set>
+#include <vector>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -678,6 +682,91 @@ Datum agg_collapsed_moments(PG_FUNCTION_ARGS)
   } catch (...) {
     provsql_cancel_if_interrupted();
     provsql_error("agg_collapsed_moments: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(agg_row_components);
+
+/**
+ * @brief SQL: agg_row_components(token uuid) -> integer[]
+ *
+ * For each contribution of the aggregate gate @p token, in the order of its
+ * children, the number of its independence component: two contributions
+ * share a component when their tokens reach a common source of randomness,
+ * directly or through others -- an input or update gate, a multivalued
+ * input (whose block key, its first wire, the other alternatives of the
+ * block reach too), or a random-variable leaf (with the parameters of a
+ * latent one).  Contributions of different components are independent, so
+ * the probability of a conjunction of them is the product of theirs, which
+ * is what lets @c agg_raw_moment compute a variance from one probability
+ * per row instead of one per pair.  @c NULL for a gate that is not an
+ * aggregation.
+ */
+Datum agg_row_components(PG_FUNCTION_ARGS)
+{
+  try {
+    provsql_interrupt_scope interrupt_scope;
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    auto gc = getGenericCircuit(*token);
+    gate_t root = gc.getGate(uuid2string(*token));
+    if (gc.getGateType(root) != gate_agg)
+      PG_RETURN_NULL();
+    const auto &rows = gc.getWires(root);
+    const size_t n = rows.size();
+
+    /* Union-find over the rows, joined through the sources they reach */
+    std::vector<size_t> parent(n);
+    for (size_t i = 0; i < n; ++i) parent[i] = i;
+    std::function<size_t(size_t)> find = [&](size_t x) {
+      while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    };
+    std::map<gate_t, size_t> owner;   /* a source -> a row reaching it */
+    for (size_t i = 0; i < n; ++i) {
+      gate_t row = rows[i];
+      /* A semimod contribution: [token, value]; the value is a constant */
+      gate_t tok = (gc.getGateType(row) == gate_semimod &&
+                    !gc.getWires(row).empty())
+                   ? gc.getWires(row)[0] : row;
+      std::set<gate_t> seen;
+      std::vector<gate_t> stack{tok};
+      while (!stack.empty()) {
+        gate_t g = stack.back(); stack.pop_back();
+        if (!seen.insert(g).second) continue;
+        const auto t = gc.getGateType(g);
+        if (t == gate_input || t == gate_update || t == gate_mulinput ||
+            t == gate_rv) {
+          auto it = owner.find(g);
+          if (it == owner.end())
+            owner.emplace(g, i);
+          else
+            parent[find(i)] = find(it->second);
+        }
+        for (gate_t c : gc.getWires(g))
+          stack.push_back(c);
+      }
+    }
+
+    /* Components numbered from 1 in the order of their first row */
+    std::map<size_t, int32> number;
+    std::vector<Datum> elems(n);
+    for (size_t i = 0; i < n; ++i) {
+      size_t r = find(i);
+      auto it = number.find(r);
+      if (it == number.end())
+        it = number.emplace(r, static_cast<int32>(number.size() + 1)).first;
+      elems[i] = Int32GetDatum(it->second);
+    }
+    ArrayType *arr = construct_array(elems.data(), static_cast<int>(n),
+                                     INT4OID, sizeof(int32), true, 'i');
+    PG_RETURN_ARRAYTYPE_P(arr);
+  } catch (const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("agg_row_components: %s", e.what());
+  } catch (...) {
+    provsql_cancel_if_interrupted();
+    provsql_error("agg_row_components: unknown exception");
   }
   PG_RETURN_NULL();
 }
