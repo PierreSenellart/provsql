@@ -685,6 +685,15 @@ remove_provenance
 p
 0.250000
 (1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks agg_dt
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: operator
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+span
+364
+(1 row)
 remove_provenance
 
 (1 row)

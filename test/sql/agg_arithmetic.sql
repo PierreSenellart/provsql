@@ -982,5 +982,13 @@ CREATE TABLE agg_dt_r AS
 SELECT remove_provenance('agg_dt_r');
 SELECT * FROM agg_dt_r;
 DROP TABLE agg_dt_r;
+-- The same difference read through a subquery: its columns are agg_tokens
+-- already, whose values are dates, which the agg_token operators cannot
+-- compute on.  Computed on the values, with a warning, rather than failing.
+CREATE TABLE agg_dt_r AS
+  SELECT hi - lo AS span FROM (SELECT MAX(d) AS hi, MIN(d) AS lo FROM agg_dt) s;
+SELECT remove_provenance('agg_dt_r');
+SELECT * FROM agg_dt_r;
+DROP TABLE agg_dt_r;
 SELECT remove_provenance('agg_dt');
 DROP TABLE agg_dt;

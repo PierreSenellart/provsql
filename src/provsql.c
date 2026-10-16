@@ -11632,15 +11632,21 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   /* An aggregate read as a value that is no number: the agg_token operators
    * compute in numeric, so it stays as the query wrote it, on the values, as
    * an operation whose result is no number does.  (The difference of two
-   * dates is read in numbers before, by distribute_epoch_mutator.) */
-  if ((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN &&
-       exprType(l) != constants->OID_TYPE_AGG_TOKEN &&
-       TypeCategory(exprType(l)) != TYPCATEGORY_NUMERIC) ||
-      (exprType(rp) == constants->OID_TYPE_AGG_TOKEN &&
-       exprType(r) != constants->OID_TYPE_AGG_TOKEN &&
-       TypeCategory(exprType(r)) != TYPCATEGORY_NUMERIC)) {
-    pfree(opname);
-    return NULL;
+   * dates is read in numbers before, by distribute_epoch_mutator.)  The type
+   * is the one the operator was resolved on: an aggregate column of a
+   * subquery already reads as an agg_token here, whatever it aggregates. */
+  {
+    Oid ltype = InvalidOid, rtype = InvalidOid;
+    op_input_types(op->opno, &ltype, &rtype);
+    if ((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN &&
+         OidIsValid(ltype) && ltype != constants->OID_TYPE_AGG_TOKEN &&
+         TypeCategory(ltype) != TYPCATEGORY_NUMERIC) ||
+        (exprType(rp) == constants->OID_TYPE_AGG_TOKEN &&
+         OidIsValid(rtype) && rtype != constants->OID_TYPE_AGG_TOKEN &&
+         TypeCategory(rtype) != TYPCATEGORY_NUMERIC)) {
+      pfree(opname);
+      return NULL;
+    }
   }
 
   /* Feed make_op the peeled (uncast) operand wherever it exposes an
