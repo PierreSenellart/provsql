@@ -197,7 +197,7 @@ Supported SQL constructs
    "``CREATE MATERIALIZED VIEW``", "", "", "", "", "", "", "", "", "", ""
    "Provenance-bearing view", "", "", "✓", "", "✓", "", "", "", "", ""
    "``INSERT … SELECT`` (provenance propagation)", "", "", "", "", "", "✓", "", "", "", ""
-   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", "", ""
+   "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", "", "✓"
    "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", "", ""
    "``IN`` / ``NOT IN`` subquery", "", "", "", "", "", "✓", "", "", "", ""
    "Quantified comparison (``= ANY`` / ``ALL``)", "", "", "", "", "", "✓", "", "", "", ""

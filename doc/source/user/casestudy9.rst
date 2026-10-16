@@ -246,20 +246,27 @@ North's expected rank, 1.7398, is the best of the three.
 Step 7: On Target?
 ------------------
 
+Does each region meet its revenue target? Compare its revenue with the
+target in ``region``:
+
 .. code-block:: postgresql
 
-    SELECT d.region, sum(d.amount) >= r.target AS on_target,
+    SELECT r.name AS region,
+           coalesce(sum(d.amount), 0) >= r.target AS on_target,
            round(probability_evaluate(provenance())::numeric, 4) AS p
-    FROM deal d JOIN region r ON r.name = d.region
-    GROUP BY d.region, r.target
-    ORDER BY d.region, on_target;
+    FROM region r LEFT JOIN deal d ON d.region = r.name
+    GROUP BY r.name
+    ORDER BY r.name, on_target;
 
 The comparison has one truth value per world, so each region comes out
 once per truth value, with its probability: North meets its target of 150
-with probability 0.5490 and misses it with probability 0.4440. The two do
-not add up to 1: in the remaining worlds, North closes nothing and has no
-row. A ``NULL`` target would make the comparison unknown, in a row of its
-own; the targets are declared ``NOT NULL``, so there is none.
+with probability 0.5490 and misses it with probability 0.4510. The
+``LEFT JOIN`` keeps every region, even in the worlds where it closes no
+deal, and ``coalesce`` counts its revenue as 0 there, so the two
+probabilities add up to 1. With an inner join from ``deal``, North would
+have no row in those worlds, and its two probabilities would add up to
+0.9930 only. A ``NULL`` target would make the comparison unknown, in a row
+of its own; the targets are declared ``NOT NULL``, so there is none.
 
 
 Step 8: Quarter-over-Quarter Growth

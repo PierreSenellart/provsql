@@ -93,14 +93,18 @@ SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 7: on target, compared with the region's target, a grouping column
--- (North true 0.5490, false 0.4440).  The target and the amounts are NOT
--- NULL, so the comparison is never unknown, and there is no unknown row.
+-- Step 7: on target, compared with the region's target, fixed by its key.
+-- The LEFT JOIN from the untracked, certain regions keeps every region in
+-- every world, and COALESCE counts the one closing nothing as 0, so the two
+-- truths add up to 1 (North true 0.5490, false 0.4510 = 0.4440 + 0.0070, the
+-- world closing nothing).  The target is NOT NULL and COALESCE gives the sum
+-- a value, so the comparison is never unknown, and there is no unknown row.
 CREATE TABLE cs9_r AS
-  SELECT d.region, sum(d.amount) >= r.target AS on_target,
+  SELECT r.name AS region,
+         coalesce(sum(d.amount), 0) >= r.target AS on_target,
          round(probability_evaluate(provenance())::numeric, 4) AS p
-  FROM cs9_deal d JOIN cs9_region r ON r.name = d.region
-  GROUP BY d.region, r.target;
+  FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
+  GROUP BY r.name;
 SELECT remove_provenance('cs9_r');
 SELECT region, coalesce(on_target::text, 'unknown') AS on_target, p
 FROM cs9_r ORDER BY region, on_target;
