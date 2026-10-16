@@ -106,3 +106,49 @@ replication and PITR.
   a transaction that ran before tracking was enabled, and `query` still
   comes from `pg_stat_activity` (the outer call inside a function or a
   prepared statement).
+
+## Locking clauses
+
+`FOR UPDATE`, `FOR NO KEY UPDATE` and `FOR SHARE` over tracked relations
+are refused (`provsql-reason: locking-clause; scope: out-of-scope`);
+`FOR KEY SHARE` is let through, as PostgreSQL's foreign-key checks take it
+in queries planned through the hook, at commit too for a deferred
+constraint. Before the refusal, a lock on one side of an outer join lost
+the range-table entry it names, and one in a `NOT IN` subquery met the
+`HAVING` its decorrelation adds; the simplest shapes worked by accident.
+Whether there is a semantics to give them instead splits three ways.
+
+- **A plain lock leaves the answer unchanged.** Alone, or under
+  `SERIALIZABLE`, `FOR UPDATE` / `FOR SHARE` return the rows of the query
+  without them, in every world, so that query's answer and provenance are
+  a clear reading. What is open is which rows to lock. PostgreSQL locks
+  the rows of the named relations that are in the actual answer; the
+  rewritten query returns the candidates of every world (the rank filter
+  of a `LIMIT`, the padded rows of an outer join) and reads some inputs
+  several times. Locking the base rows in the provenance of the answer –
+  what it depends on – is defensible, is not what PostgreSQL locks, and
+  is not what the rewritten query can say: PostgreSQL locks a row as a
+  scan returns it, not by its token. This is the step that could be taken
+  first: accept a lock without `SKIP LOCKED` or `NOWAIT`, read the answer
+  as the query's without it, and settle which rows are locked.
+- **`SKIP LOCKED`, `NOWAIT` and `READ COMMITTED`'s re-check make the
+  answer depend on other transactions.** `SKIP LOCKED` filters out the
+  rows another session locked, `NOWAIT` turns the same situation into an
+  error, and under `READ COMMITTED` a locked row that a concurrent
+  transaction updated is re-evaluated in its new version. Possible worlds
+  are subsets of one database state, so none of this has a reading in
+  them; at most it is a physical filter of the actual world, as
+  `LIMIT plain(k)` is a cut of the actual answer.
+- **A lock names what a transaction read in order to write.** Data
+  modification records `times(transaction, statement)` over a row's
+  previous token: what was written, not what was read. The pattern
+  `SELECT … FOR UPDATE` then an `UPDATE` decided on what was read is the
+  one place where SQL itself names the read set a transaction acts on,
+  which is the dependency transaction-level provenance (GProM-style
+  reenactment) is about. One semantics would condition the transaction's
+  gate on the provenance of the rows it locked, so that `undo` of a
+  statement that produced a locked row also invalidates the transaction's
+  later writes. It is a design choice rather than a reading of the SQL:
+  open are a lock followed by no write, a lock on rows present in some
+  worlds only, whether `FOR SHARE` counts, and what `undo` at statement
+  granularity then means for the transaction's other statements.

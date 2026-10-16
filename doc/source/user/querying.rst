@@ -76,7 +76,7 @@ The scope is ``deliberate`` when the construct has no provenance to give
 (``EXCEPT ALL``, a ``LIMIT`` without ``ORDER BY``), ``gap`` when ProvSQL
 does not compute it yet, and ``out-of-scope`` for what lies outside the
 supported query fragment (random variables, where-provenance,
-conditioning).
+conditioning, row locks).
 
 * Subqueries outside ``FROM`` whose body uses an outer join or
   ``LIMIT`` / ``OFFSET``; a scalar subquery nested in a larger expression
@@ -97,6 +97,9 @@ conditioning).
   a warning, the window value untracked
 * A data-modifying ``WITH`` (``INSERT`` / ``UPDATE`` / ``DELETE …
   RETURNING``), which runs once, untracked
+* A locking clause (``FOR UPDATE``, ``FOR SHARE``, ``FOR NO KEY
+  UPDATE``) anywhere in a query over tracked relations; ``FOR KEY
+  SHARE``, which foreign-key checks take, is let through
 * ``x IN (…)`` used as a value rather than as a condition, and an ordering
   row comparison against a subquery (``(a, b) < ANY (…)``)
 * ``FILTER`` on ``array_agg(DISTINCT …)`` and on the ``json_agg`` family

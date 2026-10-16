@@ -35799,6 +35799,34 @@ static void refuse_handmade_provsql(void) {
     PROVSQL_COLUMN_NAME);
 }
 
+/**
+ * @brief Walker: whether a query of the statement, at any level, takes row
+ *        locks (@c FOR @c UPDATE, @c FOR @c SHARE, ...).
+ *
+ * A locking clause says which rows the statement locks, which no possible
+ * world reads; and the rewriting moves the entries it names (the lowering of
+ * an outer join) or adds the grouping PostgreSQL refuses it with (the
+ * decorrelation of @c NOT @c IN).
+ *
+ * @c FOR @c KEY @c SHARE is left alone: it is what PostgreSQL's own
+ * foreign-key checks take, in queries it plans through this hook over the
+ * referenced table, at commit too for a deferred constraint.
+ */
+static bool query_takes_row_locks(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    ListCell *lc;
+    foreach (lc, ((Query *)node)->rowMarks) {
+      RowMarkClause *rc = (RowMarkClause *)lfirst(lc);
+      if (rc->strength != LCS_FORKEYSHARE)
+        return true;
+    }
+    return query_tree_walker((Query *)node, query_takes_row_locks, cx, 0);
+  }
+  return expression_tree_walker(node, query_takes_row_locks, cx);
+}
+
 /** @brief Context for @c crosstab_reads_tracked_walker. */
 typedef struct {
   const constants_t *constants;
@@ -36665,6 +36693,12 @@ static PlannedStmt *provsql_planner(Query *q,
           !matview_fill &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
         refuse_handmade_provsql();
+
+      if (provsql_active && query_takes_row_locks((Node *)q, NULL))
+        provsql_unsupported_hint(
+          PROVSQL_OUT_OF_SCOPE, "locking-clause",
+          "Take the locks with provsql.active off.",
+          "FOR UPDATE / FOR SHARE over a tracked relation");
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
