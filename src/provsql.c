@@ -8639,6 +8639,155 @@ static void lift_min_max_functions(const constants_t *constants, Query *q) {
                                                (void *)constants);
 }
 
+static bool is_supported_bool_agg(Oid aggfnoid);
+
+/** @brief The Boolean aggregate of this level that @p n is -- @c bool_or,
+ *  @c bool_and, @c every --, else @c NULL. */
+static Aggref *bool_aggref_of(Node *n) {
+  Aggref *ar;
+
+  while (n != NULL && IsA(n, RelabelType))
+    n = (Node *)((RelabelType *)n)->arg;
+  if (n == NULL || !IsA(n, Aggref))
+    return NULL;
+  ar = (Aggref *)n;
+  return ar->agglevelsup == 0 && ar->aggtype == BOOLOID &&
+         is_supported_bool_agg(ar->aggfnoid) ? ar : NULL;
+}
+
+/** @brief The Boolean that @p n casts to an integer, when @p n is a cast the
+ *  query wrote (@c "x::int"), else @c NULL. */
+static Node *bool_int_cast_arg(Node *n) {
+  FuncExpr *f;
+
+  if (n == NULL || !IsA(n, FuncExpr))
+    return NULL;
+  f = (FuncExpr *)n;
+  if (f->funcformat == COERCE_IMPLICIT_CAST || list_length(f->args) != 1 ||
+      !(f->funcresulttype == INT2OID || f->funcresulttype == INT4OID ||
+        f->funcresulttype == INT8OID) ||
+      exprType((Node *)linitial(f->args)) != BOOLOID)
+    return NULL;
+  return (Node *)linitial(f->args);
+}
+
+/** @brief @c "CASE WHEN agg = true THEN 1 WHEN agg = false THEN 0 ELSE dflt
+ *  END", of type @p type: the indicator of a Boolean aggregate, @p dflt where
+ *  it has no value.  @c NULL where an arm does not take that type. */
+static Node *bool_agg_indicator_case(Aggref *agg, Node *dflt, Oid type) {
+  CaseExpr *ce = makeNode(CaseExpr);
+  List *whens = NIL;
+  int i;
+
+  for (i = 0; i < 2; ++i) {
+    OpExpr *eq = makeNode(OpExpr);
+    CaseWhen *cw = makeNode(CaseWhen);
+    Node *arm = (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                                  Int32GetDatum(i == 0 ? 1 : 0), false, true);
+
+    eq->opno = BooleanEqualOperator;
+    eq->opfuncid = get_opcode(BooleanEqualOperator);
+    eq->opresulttype = BOOLOID;
+    eq->opretset = false;
+    eq->opcollid = InvalidOid;
+    eq->inputcollid = InvalidOid;
+    eq->args = list_make2(copyObject(agg), makeBoolConst(i == 0, false));
+    eq->location = -1;
+    if (type != INT4OID) {
+      arm = coerce_to_target_type(NULL, arm, INT4OID, type, -1,
+                                  COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                  -1);
+      if (arm == NULL)
+        return NULL;
+    }
+    cw->expr = (Expr *)eq;
+    cw->result = (Expr *)arm;
+    cw->location = -1;
+    whens = lappend(whens, cw);
+  }
+  ce->casetype = type;
+  ce->casecollid = InvalidOid;
+  ce->arg = NULL;
+  ce->args = whens;
+  ce->defresult = (Expr *)dflt;
+  ce->location = -1;
+  return (Node *)ce;
+}
+
+/**
+ * @brief Mutator: a Boolean aggregate given a default by @c COALESCE and read
+ *        as an integer, as the indicator @c CASE it means.
+ *
+ * @c "COALESCE(bool_or(x), false)::int" is 1 where some row satisfies @c x,
+ * and 0 elsewhere, the worlds where the group has no row included; so is
+ * @c "COALESCE(bool_or(x)::int, 0)":
+ * @code
+ *   CASE WHEN bool_or(x) = true THEN 1 WHEN bool_or(x) = false THEN 0
+ *        ELSE 0 END
+ * @endcode
+ * which @c rewrite_agg_cases lowers as it does any @c CASE over aggregates,
+ * the default lifted into a value gate.  Read in that order instead, the
+ * cast is carried first (@c bool_agg_to_int_case) and the @c COALESCE then
+ * finds no aggregate it can read the @c NULL of, nor a number in
+ * @c "COALESCE(bool_or(x), false)", whose value is Boolean: both were read as
+ * plain values.  The default must hold no aggregate.
+ */
+static Node *bool_agg_coalesce_mutator(Node *n, void *cx) {
+  if (n == NULL || IsA(n, Query))
+    return n;
+  if (IsA(n, CoalesceExpr) && list_length(((CoalesceExpr *)n)->args) == 2) {
+    /* COALESCE(bool_agg::int, k) */
+    CoalesceExpr *co = (CoalesceExpr *)n;
+    Node *first = (Node *)linitial(co->args);
+    Aggref *agg;
+    Node *d = (Node *)lsecond(co->args);
+
+    /* The integer cast the type of the default adds around it (int8 for a
+     * bigint default) */
+    while (IsA(first, FuncExpr) &&
+           ((FuncExpr *)first)->funcformat == COERCE_IMPLICIT_CAST &&
+           list_length(((FuncExpr *)first)->args) == 1)
+      first = (Node *)linitial(((FuncExpr *)first)->args);
+    agg = bool_aggref_of(bool_int_cast_arg(first));
+
+    if (agg != NULL && !contain_aggs_of_level(d, 0) &&
+        !contain_volatile_functions(d)) {
+      Node *ce = bool_agg_indicator_case(agg, copyObject(d), co->coalescetype);
+      if (ce != NULL)
+        return ce;
+    }
+  }
+  {
+    /* COALESCE(bool_agg, true / false)::int */
+    Node *b = bool_int_cast_arg(n);
+
+    if (b != NULL && IsA(b, CoalesceExpr) &&
+        list_length(((CoalesceExpr *)b)->args) == 2) {
+      CoalesceExpr *co = (CoalesceExpr *)b;
+      Aggref *agg = bool_aggref_of((Node *)linitial(co->args));
+      Node *d = (Node *)lsecond(co->args);
+
+      if (agg != NULL && IsA(d, Const) && !((Const *)d)->constisnull) {
+        Oid type = ((FuncExpr *)n)->funcresulttype;
+        Node *dflt = (Node *)makeConst(
+          INT4OID, -1, InvalidOid, sizeof(int32),
+          Int32GetDatum(DatumGetBool(((Const *)d)->constvalue) ? 1 : 0), false,
+          true);
+        Node *ce;
+
+        if (type != INT4OID)
+          dflt = coerce_to_target_type(NULL, dflt, INT4OID, type, -1,
+                                       COERCION_ASSIGNMENT,
+                                       COERCE_IMPLICIT_CAST, -1);
+        ce = dflt != NULL ? bool_agg_indicator_case(agg, dflt, type) : NULL;
+        if (ce != NULL)
+          return ce;
+      }
+    }
+  }
+  return expression_tree_mutator(n, bool_agg_coalesce_mutator, cx);
+}
+
 /**
  * @brief Read every @c stddev / @c variance of @p q as the arithmetic over
  *        @c sum, @c sum of squares and @c count that defines it.
@@ -34833,6 +34982,10 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
         /* A function of a min or a max, as the choose() of that function of
          * the values, which the pass below carries. */
         lift_min_max_functions(constants, q);
+        /* COALESCE(bool_or(x), false)::int and COALESCE(bool_or(x)::int, 0),
+         * as the indicator CASE they mean, which rewrite_agg_cases lowers. */
+        q->targetList = (List *)bool_agg_coalesce_mutator(
+          (Node *)q->targetList, NULL);
         // Compute aggregation expressions
         replace_aggregations_by_provenance_aggregate(
           constants, q, prov_atts,

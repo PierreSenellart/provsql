@@ -236,6 +236,12 @@ g|ok|p
 remove_provenance
 
 (1 row)
+or_alone|or_false|or_int_0|or_int_5|or_bigint_5|and_alone|and_true
+0.666667|0.500000|0.500000|1.750000|1.750000|0.333333|0.500000
+(1 row)
+remove_provenance
+
+(1 row)
 agg_case_done
 ok
 (1 row)

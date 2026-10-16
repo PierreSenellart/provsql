@@ -110,7 +110,9 @@ aggregate, reads the plain value:
 
 A Boolean aggregate cast to an integer (``bool_or(flag)::int``) is tracked
 as an indicator: 1 in the worlds where some row of the group satisfies the
-condition, 0 where none does.
+condition, 0 where none does. In the worlds where the group has no row, it
+has no value; ``COALESCE(bool_or(flag), false)::int``, or
+``COALESCE(bool_or(flag)::int, 0)``, gives it 0 there instead.
 
 ``ORDER BY`` on such a tracked expression sorts on the value shown, with a
 warning, since other worlds may order the values differently.

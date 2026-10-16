@@ -480,6 +480,33 @@ SELECT remove_provenance('ce_j');
 SELECT * FROM ce_j ORDER BY 1, 2;
 DROP TABLE ce_j;
 DROP TABLE ce_k;
+
+-- A Boolean aggregate given a default by COALESCE and read as an integer is
+-- the indicator CASE it means, the default answering where the group has no
+-- row.  Over the same group (10 and 20, one half each): bool_or(v >= 15) holds
+-- where the row of 20 is, 1/2, which read alone is conditional on the group
+-- existing, 1/2 / 3/4 = 2/3; with false as the default it is 1/2, in either
+-- spelling, and with the default 5 it is 1/2 + 5 x 1/4 = 1.75, a bigint
+-- default making the indicator a bigint.  bool_and(v <
+-- 15) with true as the default holds in the empty world and in the one of the
+-- row of 10 alone, 1/2, against 1/4 / 3/4 = 1/3 read alone.
+CREATE TABLE ce_b AS
+SELECT round(expected(bool_or(v >= 15)::int)::numeric, 6) AS or_alone,
+       round(expected(coalesce(bool_or(v >= 15), false)::int)::numeric, 6)
+         AS or_false,
+       round(expected(coalesce(bool_or(v >= 15)::int, 0))::numeric, 6)
+         AS or_int_0,
+       round(expected(coalesce(bool_or(v >= 15)::int, 5))::numeric, 6)
+         AS or_int_5,
+       round(expected(coalesce(bool_or(v >= 15)::int, 5::bigint))::numeric, 6)
+         AS or_bigint_5,
+       round(expected(bool_and(v < 15)::int)::numeric, 6) AS and_alone,
+       round(expected(coalesce(bool_and(v < 15), true)::int)::numeric, 6)
+         AS and_true
+  FROM ce GROUP BY g;
+SELECT remove_provenance('ce_b');
+SELECT * FROM ce_b;
+DROP TABLE ce_b;
 SELECT remove_provenance('ce');
 DROP TABLE ce;
 
