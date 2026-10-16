@@ -211,6 +211,22 @@ no ``ORDER BY``, or one ProvSQL cannot read in every world, is also kept
 as the truncation of the actual result, with a ``WARNING`` unless it is
 written with ``plain()``.
 
+The truncation is of the tracked result, which may hold rows that are
+answers only in other worlds (a row a condition on an aggregate value
+rejects in the actual data, a null-padded row): such rows take places
+among the ``k`` kept. To truncate only among the rows of the actual data,
+filter on :sqlfunc:`present` in the ``WHERE``, at the cost of evaluating
+the provenance of every row:
+
+.. code-block:: postgresql
+
+    SELECT name, salary
+    FROM employees
+    WHERE salary > (SELECT avg(salary) FROM employees)
+      AND present(provenance())
+    ORDER BY salary DESC
+    LIMIT plain(3);
+
 .. _plain-sql:
 
 Parts Whose Provenance Is Not Tracked
