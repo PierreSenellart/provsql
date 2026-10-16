@@ -512,9 +512,11 @@ This works for ``count``, ``sum``, ``avg``, ``min``, ``max`` and
 :sqlfunc:`choose`, with or without ``GROUP BY``, and for such an aggregate
 given a default by ``COALESCE(aggregate, constant)``, which has a value
 wherever its row is there, so that only a ``NULL`` on the other side of the
-comparison makes it unknown. A comparison between two
-aggregates, one over an aggregate whose ``NULL`` does not mean "no value"
-(``stddev``), and one in a query that also computes a window function are
+comparison makes it unknown. A comparison between two of these aggregates,
+without ``COALESCE`` (``sum(x) FILTER (WHERE …) > sum(x) FILTER (WHERE
+…)``), explodes the same way, its unknown row holding where either has no
+value. One over an aggregate whose ``NULL`` does not mean "no value"
+(``stddev``), and one in a query that also computes a window function, are
 read as plain values, with a warning. A ``HAVING`` condition is not
 exploded: it is already the provenance of the group.
 
