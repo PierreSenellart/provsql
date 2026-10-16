@@ -8342,12 +8342,12 @@ CREATE OR REPLACE FUNCTION agg_collapsed_moments(token uuid)
  *        (non-NULL) in the world".
  *
  * Backs the conditional-on-defined convention of the aggregate moment
- * readouts: @c sum / @c count (and constants) have a value in every
- * world -- the empty group is the real value @c 0 -- so their defined
- * event is @c gate_one(); @c min / @c max / @c avg (and any other
- * aggregate) are @c NULL on an empty group, so their defined event is
- * "some contributing row is present", the OR of the semimod children's
- * row tokens; a @c case gate's value is defined iff its first-match
+ * readouts: a scalar @c count (no @c GROUP BY) and constants have a value
+ * in every world -- a scalar count over no row is the real value @c 0 --
+ * so their defined event is @c gate_one(); every other aggregate (a
+ * @c sum over no row is SQL @c NULL, a grouped one has no row at all) is
+ * defined only where "some contributing row is present", the OR of the
+ * semimod children's row tokens; a @c case gate's value is defined iff its first-match
  * selected branch's value is (the same region walk as the moment
  * evaluator, conjoined per branch).  Anything else (an @c arith
  * composite, whose agg_token running value is total) counts as always

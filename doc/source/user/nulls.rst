@@ -188,6 +188,8 @@ conventions in worlds where a group has no contributing row:
 * The moment readouts (:sqlfunc:`expected` and friends) over
   aggregate-valued arguments are **conditional on the aggregate being
   defined**, returning NULL only when the aggregate is defined with
-  probability 0. ``sum`` and ``count`` are defined in every world (an
-  empty group's sum is the real value 0 there); ``min``/``max``/``avg``
-  are defined exactly when some contributing row is present.
+  probability 0. ``sum``, ``avg``, ``min``, ``max``, and a ``count``
+  under ``GROUP BY`` are defined exactly when some contributing row is
+  present; a ``count`` without ``GROUP BY`` is defined in every world, 0
+  where no row is present. Wrap the aggregate in ``coalesce`` to count an
+  empty group as 0 instead, e.g., ``expected(coalesce(sum(a), 0))``.

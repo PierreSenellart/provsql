@@ -678,12 +678,12 @@ the conditional-on-defined possible-worlds identity
 \sum_i \Pr(R_i \wedge d_i)` over the
 first-match regions :math:`R_i` (built with ``provenance_times`` /
 ``provenance_not``), each conjoined with the branch's *defined* event
-:math:`d_i` (``agg_defined_event``: ``gate_one`` for ``sum`` / ``count`` /
-constants, whose empty group is the real value 0; "some contributing row
-present" -- the OR of the semimod children's row tokens -- for ``min`` /
-``max`` / ``avg``, which are ``NULL`` on an empty group; recursive for a
-nested ``CASE``). The moment therefore conditions on the ``CASE``'s value
-being defined, matching the bare MIN / MAX convention, and returns ``NULL``
+:math:`d_i` (``agg_defined_event``: ``gate_one`` for a scalar ``count``
+and for constants, a scalar ``count`` over no row being the real value 0;
+"some contributing row present" -- the OR of the semimod children's row
+tokens -- for every other aggregate, which has no value on an empty
+group; recursive for a nested ``CASE``). The moment therefore conditions on the ``CASE``'s value
+being defined, matching the convention of a bare aggregate, and returns ``NULL``
 only when the defined mass is zero; when every branch is defined
 everywhere the defined mass equals :math:`\Pr(\text{prov})` and the
 formula reduces to the plain region-weighted sum. Both factors reuse

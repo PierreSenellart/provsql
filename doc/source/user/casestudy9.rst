@@ -117,13 +117,19 @@ Step 2: Expected Revenue per Region
 for North. The marker ``(*)`` says it is an aggregate result, whose value
 depends on the world.
 
-The two expectations answer two questions. A region that closes no deal has
-no row in a ``GROUP BY``, so ``expected(sum(amount))`` is the expected
-revenue *given that the region closes something*: 155.59 for North. Written
-with ``coalesce``, the sum is 0 in the worlds where the region closes
-nothing, and ``expected`` averages over every world: the forecast, 154.50
-for North, which is ``80 × 0.9 + 45 × 0.5 + 120 × 0.3 + 30 × 0.8``, each
+The two expectations answer two questions. In a world where a region closes
+no deal, its group is empty and ``sum(amount)`` is NULL, as SQL's ``sum``
+over no rows. :sqlfunc:`expected` averages over the worlds where its
+argument has a value, so ``expected(sum(amount))`` is the expected revenue
+*given that the region closes something*: 155.59 for North. ``coalesce``
+turns that NULL into 0, and ``expected`` then averages over every world:
+the forecast, 154.50 for North, which is
+``80 × 0.9 + 45 × 0.5 + 120 × 0.3 + 30 × 0.8``, each
 amount times the probability of its deal closing.
+The two agree: North's row is itself uncertain, present only in the worlds
+where North closes something, with probability
+``probability_evaluate(provenance())`` = 0.9930, and
+155.59 × 0.9930 = 154.50.
 
 ``round(avg(amount), 1)`` rounds the average in every world: the rounding
 is carried with the aggregate, not applied to its value on the data as it
