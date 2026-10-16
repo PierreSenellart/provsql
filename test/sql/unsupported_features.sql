@@ -105,3 +105,23 @@ ORDER BY city;
 SET provsql.active = on;
 DROP TABLE ct_plain;
 DROP EXTENSION tablefunc;
+
+-- A locking clause (FOR UPDATE, FOR SHARE, SKIP LOCKED), at any level of a
+-- statement over a tracked relation, is outside the semantics: refused.
+SELECT id FROM personnel FOR UPDATE;
+SELECT p.id FROM personnel p LEFT JOIN personnel q ON q.id = p.id + 1
+  WHERE q.id IS NULL FOR UPDATE OF p SKIP LOCKED;
+SELECT id FROM personnel WHERE id NOT IN
+  (SELECT id FROM personnel WHERE city = 'Paris' FOR SHARE);
+-- FOR KEY SHARE is let through: PostgreSQL's foreign-key checks take it over
+-- the referenced table, at commit too for a deferred constraint.
+CREATE TABLE lk_parent(id int PRIMARY KEY);
+CREATE TABLE lk_child(pid int REFERENCES lk_parent DEFERRABLE INITIALLY DEFERRED);
+INSERT INTO lk_parent VALUES (1);
+SELECT add_provenance('lk_parent');
+BEGIN;
+INSERT INTO lk_child VALUES (1);
+COMMIT;
+INSERT INTO lk_child VALUES (2);
+SELECT pid FROM lk_child;
+DROP TABLE lk_child, lk_parent;

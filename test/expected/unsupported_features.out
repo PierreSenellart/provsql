@@ -66,3 +66,20 @@ Berlin|2|
 New York||
 Paris||1
 (3 rows)
+ERROR:  ProvSQL: FOR UPDATE / FOR SHARE over a tracked relation
+DETAIL:  provsql-reason: locking-clause; scope: out-of-scope
+HINT:  Take the locks with provsql.active off.
+ERROR:  ProvSQL: FOR UPDATE / FOR SHARE over a tracked relation
+DETAIL:  provsql-reason: locking-clause; scope: out-of-scope
+HINT:  Take the locks with provsql.active off.
+ERROR:  ProvSQL: FOR UPDATE / FOR SHARE over a tracked relation
+DETAIL:  provsql-reason: locking-clause; scope: out-of-scope
+HINT:  Take the locks with provsql.active off.
+add_provenance
+
+(1 row)
+ERROR:  insert or update on table "lk_child" violates foreign key constraint "lk_child_pid_fkey"
+DETAIL:  Key (pid)=(2) is not present in table "lk_parent".
+pid
+1
+(1 row)
