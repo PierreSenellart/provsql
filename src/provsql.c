@@ -4065,7 +4065,7 @@ typedef enum {
 
 /**
  * @brief Wrap @p toExpr in a @c provenance_eq gate if @p fromOpExpr is an
- *        equality between two tracked columns.
+ *        equality (a mergejoinable operator) between two tracked columns.
  *
  * Used for where-provenance: each equijoin condition (and some WHERE
  * equalities) introduces an @c eq gate that records which attribute positions
@@ -4096,6 +4096,13 @@ static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
   Const *c2;
   Var *v1;
   Var *v2;
+
+  /* Only an equality copies a value from one column to the other: an
+   * inequality or an order comparison merges no where-provenance. */
+  if (list_length(fromOpExpr->args) != 2 ||
+      !op_mergejoinable(fromOpExpr->opno,
+                        exprType((Node *) linitial(fromOpExpr->args))))
+    return toExpr;
 
   if (my_lnext(fromOpExpr->args, list_head(fromOpExpr->args))) {
     /* Sometimes Var is nested within a RelabelType */

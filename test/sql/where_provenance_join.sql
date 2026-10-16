@@ -76,6 +76,31 @@ DROP TABLE wpn_result;
 DROP TABLE wpn;
 DROP TABLE wpn_other;
 
+/* Only an equality join condition merges the where-provenance of its two
+ * columns: an inequality or an order comparison copies no value, so the
+ * projected b keeps its own row's cell alone.  The bug this guards
+ * against: an eq gate was added for any comparison between two columns,
+ * so the b of one row was also traced to the other row's (different) b.
+ * The equality a = a merges as before. */
+CREATE TABLE wpc (a int, b int);
+INSERT INTO wpc VALUES (1,10),(1,20);
+SELECT add_provenance('wpc');
+
+CREATE TABLE wpc_result AS
+  SELECT 'a=a, b<>b' AS cond, x.a, x.b,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g') AS wprov
+  FROM wpc x, wpc y WHERE x.a = y.a AND x.b <> y.b
+  UNION ALL
+  SELECT 'b<b', x.a, x.b,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g')
+  FROM wpc x JOIN wpc y ON x.b < y.b;
+
+SELECT remove_provenance('wpc_result');
+SELECT * FROM wpc_result ORDER BY cond, b;
+DROP TABLE wpc_result;
+
+DROP TABLE wpc;
+
 /* An input gate that belongs to no provenance-tracked relation (e.g. a
  * table that was dropped, or one outside the search_path) must yield a
  * clear error rather than the opaque "construction from null". */

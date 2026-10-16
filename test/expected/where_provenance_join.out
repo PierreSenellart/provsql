@@ -27,6 +27,17 @@ a|v|wprov
 2|two|{[wpn::1;wpn_other::1],[wpn_other::2],[]}
 3|three|{[wpn::1;wpn_other::1],[wpn_other::2],[]}
 (3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+cond|a|b|wprov
+a=a, b<>b|1|10|{[],[wpc::1;wpc::1],[wpc::2],[]}
+a=a, b<>b|1|20|{[],[wpc::1;wpc::1],[wpc::2],[]}
+b<b|1|10|{[],[wpc::1],[wpc::2],[]}
+(3 rows)
 create_gate
 
 (1 row)
