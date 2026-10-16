@@ -30,6 +30,7 @@
 #include "catalog/pg_class.h"           /* RELKIND_VIEW */
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
+#include "utils/date.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
@@ -8484,10 +8485,49 @@ static bool plain_min_max(Aggref *a, bool *is_max) {
  * seconds are the difference of their seconds: the two are equal.  Read so,
  * each side is a function of one aggregate, which
  * @c lift_min_max_functions carries.  Only where a side holds an aggregate.
+ *
+ * The difference of two dates, an integer of days, likewise: @c a @c - @c b
+ * is @c (a @c - @c e) @c - @c (b @c - @c e) for a fixed date @c e, a
+ * difference of two integers each a function of one aggregate
+ * (@c "max(d) @c - @c min(d)", GitHub #106).  Only where both sides hold an
+ * aggregate: with one, the whole is a function of it already.
  */
 static Node *distribute_epoch_mutator(Node *n, void *cx) {
   if (n == NULL)
     return NULL;
+  if (IsA(n, OpExpr) && list_length(((OpExpr *)n)->args) == 2 &&
+      ((OpExpr *)n)->opresulttype == INT4OID) {
+    OpExpr *minus = (OpExpr *)n;
+    Node *a = (Node *)linitial(minus->args), *b = (Node *)lsecond(minus->args);
+    if (exprType(a) == DATEOID && exprType(b) == DATEOID &&
+        contain_aggs_of_level(a, 0) && contain_aggs_of_level(b, 0)) {
+      char *oname = get_opname(minus->opno);
+      if (oname != NULL && strcmp(oname, "-") == 0 &&
+          get_opcode(minus->opno) == F_DATE_MI) {
+        /* 2000-01-01, PostgreSQL's own origin of dates */
+        Const *e = makeConst(DATEOID, -1, InvalidOid, sizeof(DateADT),
+                             DateADTGetDatum(0), false, true);
+        OpExpr *da = (OpExpr *)copyObject(minus);
+        OpExpr *db = (OpExpr *)copyObject(minus);
+        OpExpr *d = makeNode(OpExpr);
+        da->args = list_make2(distribute_epoch_mutator(a, cx), e);
+        db->args = list_make2(distribute_epoch_mutator(b, cx), copyObject(e));
+        d->opno = OpernameGetOprid(list_make1(makeString("-")), INT4OID,
+                                   INT4OID);
+        d->opfuncid = get_opcode(d->opno);
+        d->opresulttype = INT4OID;
+        d->opretset = false;
+        d->opcollid = InvalidOid;
+        d->inputcollid = InvalidOid;
+        d->args = list_make2(da, db);
+        d->location = minus->location;
+        pfree(oname);
+        return (Node *)d;
+      }
+      if (oname != NULL)
+        pfree(oname);
+    }
+  }
   if (IsA(n, FuncExpr) && list_length(((FuncExpr *)n)->args) == 2) {
     FuncExpr *fe = (FuncExpr *)n;
     Node *field = (Node *)linitial(fe->args);
@@ -11550,6 +11590,19 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
 
   if (!((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN) ||
         exprType(rp) == constants->OID_TYPE_AGG_TOKEN)) {
+    pfree(opname);
+    return NULL;
+  }
+  /* An aggregate read as a value that is no number: the agg_token operators
+   * compute in numeric, so it stays as the query wrote it, on the values, as
+   * an operation whose result is no number does.  (The difference of two
+   * dates is read in numbers before, by distribute_epoch_mutator.) */
+  if ((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN &&
+       exprType(l) != constants->OID_TYPE_AGG_TOKEN &&
+       TypeCategory(exprType(l)) != TYPCATEGORY_NUMERIC) ||
+      (exprType(rp) == constants->OID_TYPE_AGG_TOKEN &&
+       exprType(r) != constants->OID_TYPE_AGG_TOKEN &&
+       TypeCategory(exprType(r)) != TYPCATEGORY_NUMERIC)) {
     pfree(opname);
     return NULL;
   }

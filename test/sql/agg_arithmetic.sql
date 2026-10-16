@@ -958,3 +958,29 @@ SELECT * FROM agg_ng_r ORDER BY g;
 DROP TABLE agg_ng_r;
 SELECT remove_provenance('agg_ng');
 DROP TABLE agg_ng;
+
+-- max(d) - min(d) over dates is an integer of days (GitHub #106): read as
+-- (max(d) - e) - (min(d) - e) for a fixed date e, a difference of two
+-- integers, it is tracked.  Each row at one half: the span is 364 where both
+-- rows are present (0.25) and 0 where one is; its expected value over the
+-- three worlds where it has one is 364 / 3.
+CREATE TABLE agg_dt(d date);
+INSERT INTO agg_dt VALUES ('2005-01-01'), ('2005-12-31');
+SELECT add_provenance('agg_dt');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM agg_dt;
+END $$;
+CREATE TABLE agg_dt_r AS
+  SELECT span, round(expected(span)::numeric, 6) AS e FROM
+    (SELECT MAX(d) - MIN(d) AS span FROM agg_dt) x;
+SELECT remove_provenance('agg_dt_r');
+SELECT * FROM agg_dt_r;
+DROP TABLE agg_dt_r;
+CREATE TABLE agg_dt_r AS
+  SELECT round(probability_evaluate(provenance())::numeric, 6) AS p FROM
+    (SELECT MAX(d) - MIN(d) AS span FROM agg_dt) x WHERE span > 100;
+SELECT remove_provenance('agg_dt_r');
+SELECT * FROM agg_dt_r;
+DROP TABLE agg_dt_r;
+SELECT remove_provenance('agg_dt');
+DROP TABLE agg_dt;

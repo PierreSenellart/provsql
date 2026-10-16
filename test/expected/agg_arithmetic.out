@@ -670,3 +670,21 @@ g|p_gt3
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+span|e
+364 (*)|121.333333
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.250000
+(1 row)
+remove_provenance
+
+(1 row)
