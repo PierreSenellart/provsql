@@ -6390,13 +6390,18 @@ BEGIN
                                      AND nspname<>'provsql'
                                      AND attname='provsql'
   LOOP
-    -- Qualified by its schema, which need not be on the search_path; and a
+    -- Qualified by its schema, which need not be on the search_path.  A
     -- table another session drops, or removes the provenance of, between the
-    -- catalog read and the query is skipped rather than failing the lookup.
+    -- catalog read and the query is skipped rather than failing the lookup;
+    -- so is one another session holds exclusively (a DROP, an ALTER under
+    -- way): waiting for it, while holding the tables read so far, could
+    -- deadlock with a statement dropping several of them.
     BEGIN
+      EXECUTE format('LOCK TABLE %I.%I IN ACCESS SHARE MODE NOWAIT',
+                     t.nspname, t.relname);
       EXECUTE format('SELECT provsql FROM %I.%I WHERE provsql=%L LIMIT 1',
                      t.nspname, t.relname, token) INTO found;
-    EXCEPTION WHEN undefined_table OR undefined_column THEN
+    EXCEPTION WHEN undefined_table OR undefined_column OR lock_not_available THEN
       CONTINUE;
     END;
     IF found IS NOT NULL THEN
@@ -6431,9 +6436,11 @@ BEGIN
       AND ns.nspname <> 'provsql'
       AND a.attnum > 0
   LOOP
-    -- A table another session drops, or removes the provenance of, between
-    -- the catalog read and the query is skipped (see identify_token).
+    -- A table another session drops, removes the provenance of, or holds
+    -- exclusively is skipped (see identify_token).
     BEGIN
+      EXECUTE format('LOCK TABLE %I.%I IN ACCESS SHARE MODE NOWAIT',
+                     t.nspname, t.relname);
       FOR rd, ign IN
         EXECUTE format(
           'SELECT to_jsonb(t) - ''provsql'', t.provsql FROM %I.%I AS t WHERE provsql = $1',
@@ -6444,12 +6451,12 @@ BEGIN
         row_data := rd;
         RETURN NEXT;
       END LOOP;
-    EXCEPTION WHEN undefined_table OR undefined_column THEN
+    EXCEPTION WHEN undefined_table OR undefined_column OR lock_not_available THEN
       CONTINUE;
     END;
   END LOOP;
 END
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql VOLATILE;
 
 /* Volatility and parallel safety (1.13): a function that may sample (a Monte
  * Carlo fallback) or draws a fresh random variable is VOLATILE; one that
