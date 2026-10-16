@@ -19584,17 +19584,44 @@ static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup)
 }
 
 /**
+ * @brief Whether the range-table entry @p rtindex sits, in the join tree
+ *        @p n, on a side that an outer join pads with @c NULLs (@p padded:
+ *        whether @p n itself does).
+ */
+static bool rtindex_null_padded(Node *n, Index rtindex, bool padded)
+{
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef))
+    return padded && ((RangeTblRef *)n)->rtindex == (int)rtindex;
+  if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)n)->fromlist)
+      if (rtindex_null_padded((Node *)lfirst(lc), rtindex, padded))
+        return true;
+    return false;
+  }
+  if (IsA(n, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *)n;
+    bool lpad = padded || j->jointype == JOIN_RIGHT || j->jointype == JOIN_FULL;
+    bool rpad = padded || j->jointype == JOIN_LEFT || j->jointype == JOIN_FULL;
+    return rtindex_null_padded(j->larg, rtindex, lpad) ||
+           rtindex_null_padded(j->rarg, rtindex, rpad);
+  }
+  return true;
+}
+
+/**
  * @brief Whether output column @p attno of subquery @p sub can never be NULL.
  *
  * Conservative: @p sub is a plain @c SELECT (no set operation, no grouping
- * sets) whose FROM is a list of relations and subqueries without any join
- * node, so that no outer join can pad the column, and the column is a
- * constant, a column declared @c NOT @c NULL, or such a column of a nested
- * subquery of the same kind.
+ * sets), and the column is a constant, a column declared @c NOT @c NULL, or
+ * such a column of a nested subquery of the same kind, read from a relation
+ * that no outer join of @p sub pads with @c NULLs (the preserved side of a
+ * @c LEFT @c JOIN is not padded).
  */
 static bool output_provably_not_null(const Query *sub, AttrNumber attno)
 {
-  ListCell *lc;
   TargetEntry *te;
   Node *e;
 
@@ -19602,9 +19629,6 @@ static bool output_provably_not_null(const Query *sub, AttrNumber attno)
       sub->jointree == NULL || attno <= 0 ||
       attno > list_length(sub->targetList))
     return false;
-  foreach (lc, sub->jointree->fromlist)
-    if (!IsA(lfirst(lc), RangeTblRef))
-      return false;
 
   te = (TargetEntry *)list_nth(sub->targetList, attno - 1);
   e = (Node *)te->expr;
@@ -19615,6 +19639,8 @@ static bool output_provably_not_null(const Query *sub, AttrNumber attno)
     if (v->varlevelsup == 0 && v->varno > 0 &&
         (int)v->varno <= list_length(sub->rtable)) {
       RangeTblEntry *rte = rt_fetch(v->varno, sub->rtable);
+      if (rtindex_null_padded((Node *)sub->jointree, v->varno, false))
+        return false;
       if (rte->rtekind == RTE_SUBQUERY && !rte->lateral)
         return output_provably_not_null(rte->subquery, v->varattno);
     }
@@ -27330,6 +27356,265 @@ static Query *rewrite_explode_scalar_agg_cmp_truth(
   return union_all_of_arms(q, arms);
 }
 
+/** @brief The subquery output column that @p e reads, through implicit
+ *  coercions, else @c NULL (@p sub_out, @p te_out: its subquery and entry). */
+static Var *subquery_column_of(Query *q, Node *e, Query **sub_out,
+                               TargetEntry **te_out) {
+  Var *v;
+  RangeTblEntry *rte;
+  TargetEntry *te;
+
+  e = peel_agg_casts(e);
+  if (e == NULL || !IsA(e, Var))
+    return NULL;
+  v = (Var *)e;
+  if (v->varlevelsup != 0 || v->varattno <= 0 || v->varno <= 0 ||
+      (int)v->varno > list_length(q->rtable))
+    return NULL;
+  rte = rt_fetch(v->varno, q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return NULL;
+  te = get_tle_by_resno(rte->subquery->targetList, v->varattno);
+  if (te == NULL)
+    return NULL;
+  if (sub_out != NULL)
+    *sub_out = rte->subquery;
+  if (te_out != NULL)
+    *te_out = te;
+  return v;
+}
+
+/**
+ * @brief Whether the aggregate column @p v of the grouped subquery @p sub can
+ *        be @c NULL in a row of it: a @c count never is, a @c COALESCE onto a
+ *        constant neither, and a @c sum / @c avg / @c min / @c max without
+ *        @c FILTER over a column declared @c NOT @c NULL has a value in every
+ *        group that has a row.
+ */
+static bool subquery_agg_column_nullable(Query *sub, TargetEntry *te) {
+  Node *e = peel_agg_casts((Node *)te->expr);
+
+  if (e != NULL && IsA(e, CoalesceExpr) &&
+      list_length(((CoalesceExpr *)e)->args) == 2) {
+    Node *d = peel_agg_casts((Node *)lsecond(((CoalesceExpr *)e)->args));
+    if (d != NULL && IsA(d, Const) && !((Const *)d)->constisnull)
+      return false;
+  }
+  if (e != NULL && IsA(e, Aggref)) {
+    Aggref *ar = (Aggref *)e;
+    char *name = get_func_name(ar->aggfnoid);
+    bool nullable = true;
+
+    if (name != NULL) {
+      if (strcmp(name, "count") == 0)
+        nullable = false;
+      else if ((strcmp(name, "sum") == 0 || strcmp(name, "avg") == 0 ||
+                strcmp(name, "min") == 0 || strcmp(name, "max") == 0) &&
+               sub->groupClause != NIL && ar->aggfilter == NULL &&
+               list_length(ar->args) == 1 &&
+               expr_provably_not_null(
+                 (Node *)((TargetEntry *)linitial(ar->args))->expr, sub, 0) &&
+               !rtindex_null_padded(
+                 (Node *)sub->jointree,
+                 IsA(((TargetEntry *)linitial(ar->args))->expr, Var)
+                   ? ((Var *)((TargetEntry *)linitial(ar->args))->expr)->varno
+                   : 0,
+                 false))
+        nullable = false;
+      pfree(name);
+    }
+    return nullable;
+  }
+  return true;
+}
+
+/** @brief Whether @p e, a side of a comparison read at the level of @p q,
+ *  can be @c NULL there. */
+static bool cmp_side_nullable(Query *q, Node *e, bool outer) {
+  Query *sub;
+  TargetEntry *te;
+  Var *v = subquery_column_of(q, e, &sub, &te);
+
+  if (!contain_vars_of_level(e, 0)) {
+    /* A constant: NULL only if it is the NULL constant; anything else built
+     * of constants could be NULL too. */
+    Node *c = peel_agg_casts(e);
+    return !(c != NULL && IsA(c, Const) && !((Const *)c)->constisnull);
+  }
+  if (outer && v == NULL)
+    return true;
+  if (v != NULL) {
+    if (outer && rtindex_null_padded((Node *)q->jointree, v->varno, false))
+      return true;
+    if (sub->hasAggs && contain_aggs_of_level((Node *)te->expr, 0))
+      return subquery_agg_column_nullable(sub, te);
+    return !output_provably_not_null(sub, v->varattno);
+  }
+  return !expr_provably_not_null(e, q, 0);
+}
+
+/** @brief Context of the search for a comparison over a subquery's aggregate
+ *  column in a select list. */
+typedef struct sub_agg_cmp_ctx {
+  const constants_t *constants;
+  Query *q;
+  OpExpr *found;  /**< The comparison, once found. */
+} sub_agg_cmp_ctx;
+
+/** @brief Walker: the first comparison whose sides are a subquery's aggregate
+ *  column and either another or an expression the same in every world. */
+static bool sub_agg_cmp_walker(Node *n, sub_agg_cmp_ctx *ctx) {
+  if (n == NULL || ctx->found != NULL || IsA(n, Query))
+    return false;
+  if (IsA(n, FuncExpr) &&
+      ((FuncExpr *)n)->funcid == ctx->constants->OID_FUNCTION_PLAIN)
+    return false;
+  /* A numeric CASE over aggregate results is lowered to an agg_case
+   * (rewrite_agg_cases), its guards read per world there, as in
+   * agg_cmp_truth_walker. */
+  if (IsA(n, CaseExpr) &&
+      TypeCategory(((CaseExpr *)n)->casetype) == TYPCATEGORY_NUMERIC)
+    return false;
+  if (IsA(n, OpExpr) && exprType(n) == BOOLOID &&
+      list_length(((OpExpr *)n)->args) == 2 &&
+      is_comparison_opno(((OpExpr *)n)->opno)) {
+    Node *l = (Node *)linitial(((OpExpr *)n)->args);
+    Node *r = (Node *)lsecond(((OpExpr *)n)->args);
+    bool la = subquery_column_of(ctx->q, l, NULL, NULL) != NULL &&
+              expr_is_aggregate_result(ctx->constants, ctx->q, l);
+    bool ra = subquery_column_of(ctx->q, r, NULL, NULL) != NULL &&
+              expr_is_aggregate_result(ctx->constants, ctx->q, r);
+    Node *other = la ? r : l;
+
+    if ((la || ra) &&
+        ((la && ra) ||
+         (!expr_is_aggregate_result(ctx->constants, ctx->q, other) &&
+          !contain_aggs_of_level(other, 0) &&
+          !checkExprHasSubLink(other) &&
+          !contain_volatile_functions(other) &&
+          !varies_in_group_walker(other, NULL)))) {
+      ctx->found = (OpExpr *)n;
+      return true;
+    }
+  }
+  return expression_tree_walker(n, sub_agg_cmp_walker, (void *)ctx);
+}
+
+/**
+ * @brief Explode the truth of a comparison over an aggregate column of a
+ *        subquery, read in the select list of a query that does not
+ *        aggregate, into one row per truth.
+ *
+ * The comparison of a grouped query's own aggregate is exploded by
+ * @c rewrite_explode_agg_cmp_truth; read one level up -- from a view of the
+ * totals, @c "SELECT region, revenue >= target FROM region_revenue" -- it was
+ * the value on the data as it is, frozen, every region on target in every
+ * world.  The same comparison in a @c WHERE is read per world (it moves to the
+ * aggregation's @c HAVING), so the query is copied once per truth, the
+ * comparison replaced by that truth and required, or its negation, in the
+ * copy's @c WHERE, and the copies are united:
+ *
+ *   SELECT region, revenue >= target AS ok FROM v
+ *     -->
+ *   SELECT region, true AS ok FROM v WHERE revenue >= target
+ *   UNION ALL SELECT region, false FROM v WHERE NOT (revenue >= target)
+ *
+ * with a third copy, @c NULL where a side has no value, when one can have
+ * none (@c subquery_agg_column_nullable, @c cmp_side_nullable).
+ *
+ * @return  The rewritten query, or @c NULL when no comparison of that shape is
+ *          read in the select list.
+ */
+static Query *rewrite_explode_subquery_agg_cmp_truth(
+  Query *q, const constants_t *constants) {
+  sub_agg_cmp_ctx ctx;
+  List *arms = NIL;
+  ListCell *lc;
+  Node *cmp, *l, *r, *unknown = NULL;
+  bool outer;
+  int i;
+
+  if (q->commandType != CMD_SELECT || q->hasAggs || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->setOperations != NULL ||
+      q->distinctClause != NIL || q->hasWindowFuncs || q->hasDistinctOn ||
+      q->hasTargetSRFs || q->jointree == NULL)
+    return NULL;
+
+  ctx.constants = constants;
+  ctx.q = q;
+  ctx.found = NULL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (sub_agg_cmp_walker((Node *)te->expr, &ctx))
+      break;
+  }
+  if (ctx.found == NULL)
+    return NULL;
+  cmp = (Node *)ctx.found;
+  l = (Node *)linitial(ctx.found->args);
+  r = (Node *)lsecond(ctx.found->args);
+  outer = has_outer_join_walker((Node *)q->jointree->fromlist, NULL);
+
+  /* The unknown copy: a side without a value. */
+  {
+    List *nulls = NIL;
+    Node *sides[2];
+    int k;
+    sides[0] = l;
+    sides[1] = r;
+    for (k = 0; k < 2; ++k)
+      if (cmp_side_nullable(q, sides[k], outer)) {
+        NullTest *nt = makeNode(NullTest);
+        nt->arg = (Expr *)copyObject(sides[k]);
+        nt->nulltesttype = IS_NULL;
+        nt->argisrow = false;
+        nt->location = -1;
+        nulls = lappend(nulls, nt);
+      }
+    if (nulls != NIL)
+      unknown = list_length(nulls) == 1
+        ? (Node *)linitial(nulls)
+        : (Node *)makeBoolExpr(OR_EXPR, nulls, -1);
+  }
+
+  for (i = 0; i < (unknown != NULL ? 3 : 2); ++i) {
+    Query *arm = copyObject(q);
+    agg_cmp_subst_ctx subst;
+    Node *cond;
+    ListCell *lct;
+
+    if (i == 0) {
+      subst.truth = (Node *)makeBoolConst(true, false);
+      cond = (Node *)copyObject(cmp);
+    } else if (i == 1) {
+      subst.truth = (Node *)makeBoolConst(false, false);
+      cond = (Node *)makeBoolExpr(NOT_EXPR, list_make1(copyObject(cmp)), -1);
+    } else {
+      subst.truth = (Node *)makeBoolConst(false, true);
+      cond = (Node *)copyObject(unknown);
+    }
+    subst.found = cmp;
+    foreach (lct, arm->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lct);
+      te->expr = (Expr *)agg_cmp_subst_mutator((Node *)te->expr, &subst);
+      te->resjunk = false;
+      te->ressortgroupref = 0;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+    }
+    arm->sortClause = NIL;
+    arm->limitCount = arm->limitOffset = NULL;
+    arm->jointree->quals = arm->jointree->quals == NULL
+      ? cond
+      : (Node *)makeBoolExpr(AND_EXPR, list_make2(arm->jointree->quals, cond),
+                             -1);
+    arms = lappend(arms, arm);
+  }
+  return union_all_of_arms(q, arms);
+}
+
 /**
  * @brief The text of an exploded value cast to the type of the aggregate.
  *
@@ -34738,6 +35023,8 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
       Query *rewritten = rewrite_explode_agg_cmp_truth(q, constants);
       if (rewritten == NULL)
         rewritten = rewrite_explode_scalar_agg_cmp_truth(q, constants);
+      if (rewritten == NULL)
+        rewritten = rewrite_explode_subquery_agg_cmp_truth(q, constants);
       if (rewritten)
         return rewrite_restart("rewrite_explode_scalar_agg_cmp_truth"), process_query(constants, rewritten, removed, wrap_root,
                              top_level, in_boolean_rewrite, inv_ctx);

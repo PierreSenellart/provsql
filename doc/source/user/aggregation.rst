@@ -506,9 +506,18 @@ truth values it takes:
 
 Each city gives a row where the comparison holds and a row where it does
 not, each annotated with the provenance of that truth value, and, where the
-aggregate can have no value, a third row for SQL's *unknown*. ``IS NULL``
-and ``IS NOT NULL`` of an expression over aggregates give two rows the same
-way (a division is refused there).
+aggregate can have no value, a third row for SQL's *unknown*. The same holds
+one level up, for an aggregate column of a subquery or of a view, read in a
+query that does not aggregate itself:
+
+.. code-block:: postgresql
+
+    CREATE VIEW city_size AS
+      SELECT city, count(*) AS n FROM employees GROUP BY city;
+    SELECT city, n > 5 AS crowded FROM city_size;
+
+``IS NULL`` and ``IS NOT NULL`` of an expression over aggregates give two
+rows the same way (a division is refused there).
 
 This works for ``count``, ``sum``, ``avg``, ``min``, ``max`` and
 :sqlfunc:`choose`, with or without ``GROUP BY``, and for such an aggregate

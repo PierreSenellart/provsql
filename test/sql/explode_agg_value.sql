@@ -420,6 +420,37 @@ SELECT remove_provenance('ect_col');
 SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
 FROM ect_col ORDER BY g, f;
 DROP TABLE ect_col;
+-- The same comparison one level up, over the aggregate column of a subquery
+-- or of a view of the totals: the query does not aggregate, and the
+-- comparison was read on the data as it is.  It is exploded the same way,
+-- each copy requiring its truth in a WHERE, which reads the aggregate per
+-- world: the rows of ect_s again (g = 1: true 0.5, false 0.25; g = 2:
+-- unknown 0.75; g = 3: true 0.5).
+CREATE TABLE ect_sub AS
+  SELECT g, s > 4 AS f, probability(provenance()) AS p
+  FROM (SELECT g, sum(v) AS s FROM ect GROUP BY g) t;
+SELECT remove_provenance('ect_sub');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_sub WHERE p > 0 ORDER BY g, f;
+DROP TABLE ect_sub;
+-- Through a view that counts a group with no row as 0, from an untracked
+-- table of the groups (a LEFT JOIN, so a group of its own for g = 4, which
+-- has no row in ect): the column is never NULL, so there is no unknown row,
+-- and each group's two truths add up to 1 (g = 1: true 0.5, false 0.5, the
+-- empty world included; g = 2 and g = 4: false 1; g = 3: true 0.5, false 0.5).
+CREATE TABLE ect_k(g int NOT NULL);
+INSERT INTO ect_k VALUES (1), (2), (3), (4);
+CREATE VIEW ect_v AS
+  SELECT k.g, coalesce(sum(ect.v), 0) AS s
+  FROM ect_k k LEFT JOIN ect ON ect.g = k.g GROUP BY k.g;
+CREATE TABLE ect_view AS
+  SELECT g, s > 4 AS f, probability(provenance()) AS p FROM ect_v;
+SELECT remove_provenance('ect_view');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_view WHERE p > 0 ORDER BY g, f;
+DROP TABLE ect_view;
+DROP VIEW ect_v;
+DROP TABLE ect_k;
 -- A scalar aggregation, whose single row exists in every world -- including
 -- the one where no row of the table is -- cannot take the truth as a grouping
 -- key, which would lose that world's row: it is exploded into one copy of the

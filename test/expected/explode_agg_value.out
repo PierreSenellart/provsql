@@ -274,6 +274,26 @@ g|f|p
 remove_provenance
 
 (1 row)
+g|f|p
+1|false|0.250000
+1|true|0.500000
+2|unknown|0.750000
+3|true|0.500000
+(4 rows)
+remove_provenance
+
+(1 row)
+g|f|p
+1|false|0.500000
+1|true|0.500000
+2|false|1.000000
+3|false|0.500000
+3|true|0.500000
+4|false|1.000000
+(6 rows)
+remove_provenance
+
+(1 row)
 f|p
 f|0.500000
 t|0.500000
