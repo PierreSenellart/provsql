@@ -290,7 +290,12 @@ Between this step and the next, :cfunc:`lower_outer_joins`
 structurally lowers a supported outer join (``LEFT`` / ``RIGHT`` /
 ``FULL``) into the ``UNION ALL`` of its matched arm and null-padded
 antijoin arm(s), so the non-monotone provenance of the 0-match world
-is captured.  It is a no-op on every other shape, and it runs before
+is captured.  An arm that reads no tracked relation (an untracked table, a
+``VALUES`` list, a set-returning function) is first wrapped by
+``oj_wrap_certain_arm`` as a subquery giving each of its rows the
+provenance one, a base table taking its permission entry along, so that
+the outer join of a certain relation with a tracked one is lowered as one
+of two tracked arms.  It is a no-op on every other shape, and it runs before
 provenance discovery and set-operation handling so that the
 constructed ``UNION`` / ``EXCEPT`` subqueries are processed by the
 recursive passes.

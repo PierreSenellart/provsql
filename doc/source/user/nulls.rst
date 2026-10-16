@@ -95,6 +95,9 @@ rows but none with a value. For a comparison over such an expression, see
 
 **Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked relations gives
 its NULL-padded rows the provenance of the absence of a match (a monus).
+An untracked relation joined to a tracked one counts as certain, each of
+its rows present in every world: ``region LEFT JOIN deal`` keeps every
+region, padded with NULLs in the worlds where none of its deals is present.
 An outer join whose null-padded side is entirely *untracked* is also
 fine. An outer join with a tracked relation on a null-padded side is
 refused in a query with a ``LATERAL`` item, or when a column merged by

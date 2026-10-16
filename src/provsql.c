@@ -17905,9 +17905,10 @@ static bool oj_syscol_walker(Node *node, void *cx) {
  * -- the calendar a report fills -- is the same in every world, so each of
  * its rows has provenance one, and the outer join is then one of two arms
  * the lowering reads.  Its columns keep their numbers, the provenance column
- * coming after them.  Only a function, a @c VALUES list or a subquery, and
- * none reading the query around it: a relation of the database would take
- * its permissions along.
+ * coming after them.  A function, a @c VALUES list, a subquery or a relation
+ * of the database (a table of targets, untracked because it is certain),
+ * none reading the query around it; a relation takes its permission entry
+ * into the subquery, so reading it is still checked.
  *
  * @return  Whether the arm was wrapped.
  */
@@ -17947,7 +17948,7 @@ static bool oj_wrap_certain_arm(const constants_t *constants, Query *q,
   }
   if (!OidIsValid(constants->OID_FUNCTION_GATE_ONE) || arm->lateral ||
       !(arm->rtekind == RTE_FUNCTION || arm->rtekind == RTE_VALUES ||
-        arm->rtekind == RTE_SUBQUERY))
+        arm->rtekind == RTE_SUBQUERY || arm->rtekind == RTE_RELATION))
     return false;
   if (arm->rtekind == RTE_SUBQUERY &&
       (arm->subquery == NULL || reads_outside_walker((Node *)arm->subquery, 0)))
@@ -17985,6 +17986,13 @@ static bool oj_wrap_certain_arm(const constants_t *constants, Query *q,
   sub = makeNode(Query);
   sub->commandType = CMD_SELECT;
   sub->canSetTag = true;
+#if PG_VERSION_NUM >= 160000
+  if (arm->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(q->rteperminfos, arm);
+    sub->rteperminfos = list_make1(copyObject(pi));
+    arm->perminfoindex = 1;
+  }
+#endif
   sub->rtable = list_make1(arm);
   rtr = makeNode(RangeTblRef);
   rtr->rtindex = 1;

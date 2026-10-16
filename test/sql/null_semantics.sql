@@ -309,11 +309,12 @@ SELECT remove_provenance('ns_lj');
 SELECT * FROM ns_lj ORDER BY ga NULLS LAST, sa NULLS LAST;
 DROP TABLE ns_lj;
 
--- Outer joins outside the lowered shape: allowed when the null-padded side
--- is untracked (its padding is deterministic and rows keep the tracked
--- arm's tokens), refused with an explicit error when a tracked relation
--- sits on the null-padded side (it would be silently treated as an inner
--- join).
+-- Outer joins between a tracked and an untracked relation: allowed when
+-- the null-padded side is untracked (its padding is deterministic and rows
+-- keep the tracked arm's tokens); when the tracked relation sits on the
+-- null-padded side, the untracked one is read as certain (provenance one)
+-- and the join is lowered, the padded row holding where no match is
+-- present.
 CREATE TABLE ns_u1(a int, b int);
 INSERT INTO ns_u1 VALUES (1, 2);
 CREATE TABLE ns_lu AS
@@ -323,12 +324,30 @@ CREATE TABLE ns_lu AS
 SELECT remove_provenance('ns_lu');
 SELECT * FROM ns_lu ORDER BY ga NULLS LAST;
 DROP TABLE ns_lu;
-SELECT ns_u1.b FROM ns_u1 LEFT JOIN ns_gr ON ns_u1.a = ns_gr.a;
+CREATE TABLE ns_ul AS
+  SELECT ns_u1.b, ns_gr.name,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_u1 LEFT JOIN ns_gr ON ns_u1.a = ns_gr.a;
+SELECT remove_provenance('ns_ul');
+SELECT * FROM ns_ul ORDER BY name NULLS LAST;
+DROP TABLE ns_ul;
 
--- RIGHT and FULL variants of the refusal: the null-padded side is the
--- left arm (RIGHT) or both arms (FULL), and ns_gr is tracked.
-SELECT ns_gr.a FROM ns_gr RIGHT JOIN ns_u1 ON ns_gr.a = ns_u1.a;
-SELECT ns_gr.a FROM ns_gr FULL JOIN ns_u1 ON ns_gr.a = ns_u1.a;
+-- RIGHT and FULL variants: the null-padded side is the left arm (RIGHT) or
+-- both arms (FULL), and ns_gr is tracked.
+CREATE TABLE ns_ur AS
+  SELECT ns_gr.a, ns_gr.name,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr RIGHT JOIN ns_u1 ON ns_gr.a = ns_u1.a;
+SELECT remove_provenance('ns_ur');
+SELECT * FROM ns_ur ORDER BY name NULLS LAST;
+DROP TABLE ns_ur;
+CREATE TABLE ns_uf AS
+  SELECT ns_gr.a, ns_gr.name, ns_u1.b,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr FULL JOIN ns_u1 ON ns_gr.a = ns_u1.a;
+SELECT remove_provenance('ns_uf');
+SELECT * FROM ns_uf ORDER BY name NULLS LAST, b NULLS LAST;
+DROP TABLE ns_uf;
 
 -- Allowed padded-side shapes: a VALUES list, and a nested join of
 -- untracked relations; rows keep the tracked arm's tokens.
@@ -352,15 +371,27 @@ SELECT * FROM ns_ln ORDER BY ga NULLS LAST;
 DROP TABLE ns_ln;
 
 -- A tracked relation inside a nested join on the null-padded side is
--- refused like a direct one.
-SELECT ns_u1.b FROM ns_u1
+-- lowered like a direct one.
+CREATE TABLE ns_un AS
+  SELECT ns_u1.b, ns_gr.name,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_u1
   LEFT JOIN (ns_u2 JOIN ns_gr ON ns_u2.a = ns_gr.a) ON ns_u1.a = ns_u2.a;
+SELECT remove_provenance('ns_un');
+SELECT * FROM ns_un ORDER BY name NULLS LAST;
+DROP TABLE ns_un;
 
 -- A CTE over a tracked relation exposes its provsql column, so it counts
--- as tracked on the padded side and is refused; an untracked function RTE
--- there is allowed.
-WITH w AS (SELECT * FROM ns_gr)
-SELECT ns_u1.b FROM ns_u1 LEFT JOIN w ON ns_u1.a = w.a;
+-- as tracked on the padded side, and the join is lowered; an untracked
+-- function RTE there is allowed.
+CREATE TABLE ns_uw AS
+  WITH w AS (SELECT * FROM ns_gr)
+  SELECT ns_u1.b, w.name,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_u1 LEFT JOIN w ON ns_u1.a = w.a;
+SELECT remove_provenance('ns_uw');
+SELECT * FROM ns_uw ORDER BY name NULLS LAST;
+DROP TABLE ns_uw;
 CREATE TABLE ns_lf AS
   SELECT ns_gr.a AS ga, g.k,
          round(probability_evaluate(provenance())::numeric,4) AS p
