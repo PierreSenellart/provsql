@@ -65,3 +65,28 @@ remove_provenance
 rname|cname|p
 r1|c1|0.093750
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+viterbi|formula
+0|r1 ⊗ (𝟙 ⊖ q)
+0|r2 ⊗ (𝟙 ⊖ q)
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

@@ -5,3 +5,27 @@ remove_provenance
 sr_minmax
 unclassified
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|p
+count GROUP BY ()|1.0000
+constant GROUP BY ()|1.0000
+constant GROUP BY (), no row|1.0000
+HAVING true|1.0000
+HAVING true, no row|1.0000
+ROLLUP grand total|1.0000
+UNION of no column|0.7500
+(7 rows)
+having_false_rows|provsql
+0 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

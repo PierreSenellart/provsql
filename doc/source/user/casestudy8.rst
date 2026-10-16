@@ -168,14 +168,14 @@ token of a query's rows -- so the same number comes from one cell:
 The question we actually care about is `conditional <https://en.wikipedia.org/wiki/Conditional_probability>`_: given a positive
 test, how likely is the disease? ProvSQL writes "``A`` given ``B``" as
 ``A | B``. We name both events -- diseased and positive -- and ask for the
-two conditionals (``GROUP BY ()`` collapses each event's worlds into a
-single token, just as ``DISTINCT`` did above):
+two conditionals (grouping on the column the ``WHERE`` fixes collapses each
+event's worlds into a single token, just as ``DISTINCT`` did above):
 
 .. code-block:: postgresql
 
     WITH e AS (
-      SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY ()) AS d,
-             (SELECT provenance() FROM screening WHERE positive GROUP BY ()) AS pos)
+      SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY disease)  AS d,
+             (SELECT provenance() FROM screening WHERE positive GROUP BY positive) AS pos)
     SELECT probability_evaluate(pos | d) AS pos_given_disease,
            probability_evaluate(d | pos) AS disease_given_pos
     FROM e;
@@ -237,7 +237,8 @@ tokens (a :sqlfunc:`provenance_times`, formed for you). Its probability:
 0.3 (that is :math:`0.5 \cdot 0.6`). **Hypertension** is the same query with
 ``high_salt`` in place of ``insulin_resistance`` -- 0.35. Now "diabetes
 *or* hypertension": match a patient who is obese and has *either* trigger,
-and fold the two matches into one event with ``GROUP BY ()``. The provenance
+and fold the two matches into one event by grouping on ``o.factor``, which is
+``obesity`` in both. The provenance
 of a set of alternatives is their *sum* (a :sqlfunc:`provenance_plus`), so
 this single query *is* the "at least one condition" event. We do not even
 need to select anything in particular -- the provsql token rides along in
@@ -249,7 +250,7 @@ every result row, so a constant label is enough to read:
     FROM risk o, risk x
     WHERE o.factor = 'obesity'
       AND x.factor IN ('insulin_resistance', 'high_salt')
-    GROUP BY ();
+    GROUP BY o.factor;
 
 **Click the token to see its circuit.** ``obesity`` appears as a *single*
 gate feeding both branches: the shared cause is the same node everywhere,
@@ -331,7 +332,7 @@ token to bring the circuit back up:
     FROM risk o, risk x
     WHERE o.factor = 'obesity'
       AND x.factor IN ('insulin_resistance', 'high_salt')
-    GROUP BY ();
+    GROUP BY o.factor;
 
 Press :fa:`bolt` :guilabel:`Evaluate`, leave the method on ``exact``, and
 :fa:`play` :guilabel:`Run`: 0.44, and the strip notes *via possible-worlds* -- the

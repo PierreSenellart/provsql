@@ -1,4 +1,6 @@
 \set ECHO none
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -7,3 +9,22 @@ Berlin|Field agent (*)|choose(Ellen*Field agent,Susan*Analyst)
 New York|Director (*)|choose(John*Director,Paul*Janitor)
 Paris|Analyst (*)|choose(Dave*Analyst,Magdalen*Double agent,Nancy*HR)
 (3 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
+-- no warning: ordered by a key, values that agree, a tie broken
+remove_provenance
+
+(1 row)
+id|v
+1|10 (*)
+(1 row)
+remove_provenance
+
+(1 row)

@@ -427,8 +427,11 @@ Before proceeding, the function checks for:
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.
-- ``GROUPING SETS`` / ``CUBE`` / ``ROLLUP``: not supported (except
-  the trivial ``GROUP BY ()``).
+- ``GROUPING SETS`` / ``CUBE`` / ``ROLLUP``: rewritten into the
+  ``UNION ALL`` of one ``GROUP BY`` per set.  The empty set, a lone
+  ``GROUP BY ()`` and a ``HAVING`` with neither an aggregate nor a
+  ``GROUP BY`` are the aggregation without ``GROUP BY``: one row in every
+  world, annotated ``gate_one``.
 
 Step 7: Build Column Map
 ^^^^^^^^^^^^^^^^^^^^^^^^^

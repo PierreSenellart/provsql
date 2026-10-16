@@ -62,8 +62,8 @@ either a provenance token,
 
     -- P(disease | positive) over a shared screening model
     SELECT probability_evaluate(disease | positive)
-    FROM (SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY ()) AS disease,
-                 (SELECT provenance() FROM screening WHERE positive GROUP BY ()) AS positive) e;
+    FROM (SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY disease)  AS disease,
+                 (SELECT provenance() FROM screening WHERE positive GROUP BY positive) AS positive) e;
 
 or a **Boolean predicate** built from ``random_variable`` / ``agg_token``
 comparisons:
@@ -195,19 +195,19 @@ under ``times`` / ``plus``; ``!`` refuses a conditioned (terminal) token.
 
 Its main use with conditioning is a **denial constraint**: restricting a
 query to the worlds where some forbidden pattern *does not* occur. The
-violation event ``W`` is an ordinary query aggregated to a single token
-with ``provenance() ... GROUP BY ()``, and the query is conditioned on its
-negation, ``Q | !W``:
+violation event ``W`` is an ordinary query collapsed to a single row, whose
+token is the event, by a ``SELECT DISTINCT`` on a constant, and the query is
+conditioned on its negation, ``Q | !W``:
 
 .. code-block:: postgresql
 
     -- P(booking 1 is present | no two overlapping bookings of the same room)
     WITH w AS (
       SELECT provenance() AS violation        -- W = "some overlapping pair exists"
-      FROM bookings a JOIN bookings b
-        ON a.id < b.id AND a.room = b.room
-           AND a.lo < b.hi AND b.lo < a.hi
-      GROUP BY ())
+      FROM (SELECT DISTINCT true AS violated
+            FROM bookings a JOIN bookings b
+              ON a.id < b.id AND a.room = b.room
+                 AND a.lo < b.hi AND b.lo < a.hi) v)
     SELECT probability_evaluate(
              (SELECT provenance() FROM bookings WHERE id = 1) | !w.violation)
     FROM w;
@@ -233,8 +233,8 @@ one token on another yields a conditional probability:
 
     -- base-rate fallacy: a positive screening test, P(disease | positive)
     SELECT probability_evaluate(disease | positive) AS disease_given_pos
-    FROM (SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY ()) AS disease,
-                 (SELECT provenance() FROM screening WHERE positive GROUP BY ()) AS positive) e;
+    FROM (SELECT (SELECT provenance() FROM screening WHERE disease  GROUP BY disease)  AS disease,
+                 (SELECT provenance() FROM screening WHERE positive GROUP BY positive) AS positive) e;
     --  ≈ 0.1538
 
 Random variables

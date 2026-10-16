@@ -117,6 +117,8 @@ distinct gates|t|t|t
 q|count_all|count_filter|sum_filter|string_agg_f|array_all|array_filter|json_all
 children|1 1 1|0 1 1|6 7|q|<null> p q|p q|<null> p q
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)

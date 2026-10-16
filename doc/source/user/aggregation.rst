@@ -68,11 +68,13 @@ over an exact argument (an integer, a ``numeric``), as the arithmetic over
 sums and counts that defines them. Over a floating-point argument, they are
 read as a plain value, with a warning.
 
-``array_agg``, ``string_agg``, the ``json_agg`` family and ``xmlagg`` read
-their rows in order. Where the query does not determine that order (no
-``ORDER BY``, or rows tying on it with different values, in any world), a
-``WARNING`` says so, and the order of the database as it is is read in
-every world.
+``array_agg``, ``string_agg``, the ``json_agg`` family, ``xmlagg`` and
+:sqlfunc:`choose` read their rows in order. Where the query does not
+determine that order (no ``ORDER BY``, or rows tying on it with different
+values, in any world), a ``WARNING`` says so, and the order of the database
+as it is is read in every world. This covers the :sqlfunc:`choose` a
+scalar subquery or a ``LATERAL`` join with ``ORDER BY … LIMIT 1`` is read
+as, when rows tie on its ``ORDER BY``.
 
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -235,13 +237,17 @@ input order), and :sqlfunc:`choose` with a constant, using ``=`` or
     HAVING choose(position ORDER BY name) = 'Analyst';
 
 :sqlfunc:`choose` is *PICKFIRST*: in each possible world its value is the
-first present occurrence of the group, so write ``choose(col ORDER BY
-key)`` to make the result deterministic; otherwise the physical scan
-order decides. The group's elements need not be mutually exclusive.
+first present non-NULL occurrence of the group, so write ``choose(col
+ORDER BY key)`` to make the result deterministic; otherwise the physical
+scan order decides, with a warning where the values differ. The group's
+elements need not be mutually exclusive.
 
-Comparing any other aggregate with a text constant raises an error, and a
-comparison of two aggregate results that none of these cases covers is
-refused when its probability is asked for.
+Comparing any other aggregate with a text constant raises an error. Two
+numeric aggregate results compare by any comparison, read in each possible
+world over the rows they depend on (up to :ref:`provsql.max_worlds
+<provsql-max-worlds>` of them); two ``array_agg`` only with ``=`` or
+``<>``, and an aggregate ProvSQL has no evaluator for (``string_agg``…) not
+at all, when its probability is asked for.
 
 CASE over aggregates
 --------------------

@@ -40,7 +40,9 @@ SELECT abs(probability_evaluate(provenance_times(current_setting('n.t1')::uuid,
 
 -- Denial constraint: P(booking 1 present | no two overlapping same-room
 -- bookings).  The violation event W is built by provenance aggregation over the
--- join (each joined row's provenance is a ⊗ b; GROUP BY () ORs them) -- no
+-- join (each joined row's provenance is a ⊗ b; SELECT DISTINCT on a constant
+-- ORs them into one row, absent where no pair overlaps; GROUP BY () would be
+-- the scalar aggregation, whose row is there in every world) -- no
 -- hand-rolled gates -- captured into a GUC, then conditioned on its negation via
 -- "| !".  Only pair (1,2) overlaps, so W = b1∧b2 (P=0.3) and the posterior is
 -- 0.6·0.5/0.7 = 0.428571.
@@ -53,9 +55,9 @@ DO $$
 DECLARE wtok uuid;
 BEGIN
   SELECT provenance() INTO wtok
-  FROM bookings a JOIN bookings b
-    ON a.id<b.id AND a.room=b.room AND a.lo<b.hi AND b.lo<a.hi
-  GROUP BY ();
+  FROM (SELECT DISTINCT true AS violated
+        FROM bookings a JOIN bookings b
+          ON a.id<b.id AND a.room=b.room AND a.lo<b.hi AND b.lo<a.hi) v;
   PERFORM set_config('n.w', wtok::text, false);
 END $$;
 

@@ -20,15 +20,23 @@ sum > 0|0.500
 pred|p
 sum >= 5|0.500
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 pred|p
 choose < 5|0.500
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 pred|p
 choose <= 0|0.500
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 pred|p
 choose = 0|0.500
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 pred|p
 choose >= 5|0.500
 (1 row)

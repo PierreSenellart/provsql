@@ -125,5 +125,38 @@ SELECT remove_provenance('na_r');
 SELECT rname, cname, round(p::numeric, 6) AS p FROM na_r ORDER BY rname, cname;
 DROP TABLE na_r;
 DROP TABLE ncr, ncc, ncs, ncl;
+-- Outside the Booleans, each row of the answer is annotated as the
+-- decorrelated query reads it: its own annotation times the complement of its
+-- bad pairs, r ⊗ (𝟙 ⊖ q), not r ⊗ (𝟙 ⊖ (r ⊗ q)).  In the Viterbi semiring an
+-- R row at 0.5 with one bad pair of weight 1 is then 0, not 0.5; and two equal
+-- R rows are kept apart, each with its own token.
+CREATE TABLE ndr(a int, w float8);
+CREATE TABLE ndp(a int, p int, w float8, name text);
+CREATE TABLE ndc(p int);
+INSERT INTO ndr VALUES (1, 0.5), (1, 0.5);
+INSERT INTO ndp VALUES (1, 10, 1.0, 'q');
+SELECT add_provenance('ndr');
+SELECT add_provenance('ndp');
+SELECT add_provenance('ndc');
+SET provsql.active = off;
+CREATE TABLE ndw AS SELECT w AS value, provsql AS provenance FROM ndr
+  UNION ALL SELECT w, provsql FROM ndp;
+CREATE TABLE ndn AS
+  SELECT 'r' || row_number() OVER () AS value, provsql AS provenance FROM ndr
+  UNION ALL SELECT name, provsql FROM ndp;
+SET provsql.active = on;
+CREATE TABLE na_d AS
+  SELECT sr_viterbi(provenance(), 'ndw') AS viterbi,
+         sr_formula(provenance(), 'ndn') AS formula
+  FROM ndr
+  WHERE NOT EXISTS (SELECT 1 FROM ndp WHERE ndp.a = ndr.a
+                     AND NOT EXISTS (SELECT 1 FROM ndc WHERE ndc.p = ndp.p));
+SELECT remove_provenance('na_d');
+SELECT viterbi, formula FROM na_d ORDER BY formula;
+DROP TABLE na_d, ndw, ndn;
+SELECT remove_provenance('ndr');
+SELECT remove_provenance('ndp');
+SELECT remove_provenance('ndc');
+DROP TABLE ndr, ndp, ndc;
 DROP TABLE nau, nap, nac, nbu, nbp, nbc;
 DROP SCHEMA nested_antijoin_test CASCADE;

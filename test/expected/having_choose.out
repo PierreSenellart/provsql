@@ -2,6 +2,8 @@
 add_provenance
 
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -9,6 +11,8 @@ q|g|p
 choose bool|A|0.5000
 choose bool|B|0.5000
 (2 rows)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -19,6 +23,8 @@ choose date|B|0.5000
 add_provenance
 
 (1 row)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -26,6 +32,8 @@ q|g|p
 choose = max|A|0.5000
 choose = max|B|0.5000
 (2 rows)
+WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
+DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
 remove_provenance
 
 (1 row)

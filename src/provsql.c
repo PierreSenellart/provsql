@@ -186,6 +186,13 @@ extern void _PG_fini(void);
  */
 #define PROVSQL_DISTINCT_ALIAS "provsql_distinct"
 
+/** @brief Alias prefix of a relation read again for its values, inside a
+ *  block that the query multiplies by that relation's own annotation anyway
+ *  (the pair block of a nested antijoin, @c rewrite_nested_antijoin): its
+ *  provenance there is implied, as that of a @c PROVSQL_DISTINCT_ALIAS group,
+ *  and left out where another relation of the block has rows. */
+#define PROVSQL_IMPLIED_ALIAS "provsql_implied"
+
 /** @brief Alias of the lateral column an aggregate value is exploded into:
  *  one row per value the aggregate takes over the possible worlds
  *  (@c rewrite_explode_agg_value). */
@@ -3713,9 +3720,16 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
 
         if (!strcmp(v, PROVSQL_COLUMN_NAME) &&
             get_atttype(r->relid, attid) == constants->OID_TYPE_UUID) {
-          prov_atts =
-            lappend(prov_atts,
-                    make_provenance_attribute(constants, q, r, rteid, attid));
+          if (r->eref->aliasname != NULL &&
+              strncmp(r->eref->aliasname, PROVSQL_IMPLIED_ALIAS,
+                      strlen(PROVSQL_IMPLIED_ALIAS)) == 0)
+            implied_atts =
+              lappend(implied_atts,
+                      make_provenance_attribute(constants, q, r, rteid, attid));
+          else
+            prov_atts =
+              lappend(prov_atts,
+                      make_provenance_attribute(constants, q, r, rteid, attid));
         }
 
         ++attid;
@@ -4775,12 +4789,18 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
   return expr_s;
 }
 
-/** @brief Whether @p aggfnoid is one of PostgreSQL's aggregates whose
- *  result depends on the order it reads its rows in. */
-static bool aggregate_order_dependent(Oid aggfnoid) {
+/** @brief Whether @p aggfnoid is an aggregate whose result depends on the
+ *  order it reads its rows in: one of PostgreSQL's, or @c choose(), which is
+ *  the first value it reads -- defined where its @c ORDER @c BY leaves no two
+ *  different values tied, or without one, where the values it reads agree. */
+static bool aggregate_order_dependent(const constants_t *constants,
+                                      Oid aggfnoid) {
   char *name;
   bool dep;
 
+  if (OidIsValid(constants->OID_FUNCTION_CHOOSE) &&
+      aggfnoid == constants->OID_FUNCTION_CHOOSE)
+    return true;
   if (aggfnoid >= FirstNormalObjectId)
     return false;
   name = get_func_name(aggfnoid);
@@ -4813,9 +4833,12 @@ static Expr *make_order_check(const constants_t *constants, Aggref *agg_ref) {
   int nvals = 0;
   AttrNumber resno = 1;
 
+  bool is_choose = OidIsValid(constants->OID_FUNCTION_CHOOSE) &&
+                   agg_ref->aggfnoid == constants->OID_FUNCTION_CHOOSE;
+
   if (!OidIsValid(constants->OID_FUNCTION_ORDER_DETERMINED) ||
       !OidIsValid(constants->OID_FUNCTION_ORDER_CHECKED) ||
-      !aggregate_order_dependent(agg_ref->aggfnoid))
+      !aggregate_order_dependent(constants, agg_ref->aggfnoid))
     return NULL;
   foreach (lc, agg_ref->args) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
@@ -4853,6 +4876,19 @@ static Expr *make_order_check(const constants_t *constants, Aggref *agg_ref) {
   chk->args = args;
   chk->aggorder = (List *)copyObject(agg_ref->aggorder);
   chk->aggfilter = (Expr *)copyObject(agg_ref->aggfilter);
+  /* choose() skips a NULL value: it is no value it may pick (the null-padded
+   * row of an outer join, among others). */
+  if (is_choose && agg_ref->args != NIL) {
+    NullTest *nt = makeNode(NullTest);
+    nt->arg = (Expr *)copyObject(
+      ((TargetEntry *)linitial(agg_ref->args))->expr);
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    chk->aggfilter = chk->aggfilter == NULL
+      ? (Expr *)nt
+      : makeBoolExpr(AND_EXPR, list_make2(chk->aggfilter, nt), -1);
+  }
   chk->inputcollid = agg_ref->inputcollid;
   chk->aggkind = AGGKIND_NORMAL;
   chk->aggsplit = AGGSPLIT_SIMPLE;
@@ -12984,7 +13020,7 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
       c->untracked = true;
       return window_order_check(c->constants, c->q, wf);
     }
-    if (wf->winagg && aggregate_order_dependent(wf->winfnoid))
+    if (wf->winagg && aggregate_order_dependent(c->constants, wf->winfnoid))
       e = window_aggregate_order_check(c->constants, c->q, wf, e);
     return (Node *)e;
   }
@@ -14231,11 +14267,18 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
       new_query->groupClause = lappend(new_query->groupClause, sgc);
     }
   } else {
-    GroupingSet *gs = makeNode(GroupingSet);
-    gs->kind = GROUPING_SET_EMPTY;
-    gs->content = 0;
-    gs->location = -1;
-    new_query->groupingSets = list_make1(gs);
+    /* No column: the deduplication keeps one row where some arm has one,
+     * which is a GROUP BY, on a constant -- not GROUP BY (), the scalar
+     * aggregation, whose row is there in every world. */
+    TargetEntry *te = makeTargetEntry(
+      (Expr *)makeBoolConst(true, false), 1, NULL, true);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+
+    sgc->tleSortGroupRef = te->ressortgroupref = 1;
+    get_sort_group_operators(BOOLOID, false, true, false, &sgc->sortop,
+                             &sgc->eqop, NULL, &sgc->hashable);
+    new_query->targetList = list_make1(te);
+    new_query->groupClause = list_make1(sgc);
   }
 
   return new_query;
@@ -18557,6 +18600,39 @@ static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
 }
 
 /**
+ * @brief @c choose(val @c ORDER @c BY @c val): the value of a scalar
+ *        subquery, which a gate keeps to at most one row, or one value, in
+ *        every world where it is read.
+ *
+ * Ordered by the value itself, two rows that tie have the same value, which
+ * is what @c choose() is defined on (@c make_order_check): a gate the
+ * aggregate does not see -- a @c HAVING @c count(*) @c <= @c 1, a
+ * @c count(DISTINCT v) @c <= @c 1 a level up -- then leaves no warning on
+ * the rows it gates out.  Where the type has no ordering, a plain
+ * @c choose(val).
+ */
+static Aggref *oj_make_single_choose(const constants_t *constants, Expr *val) {
+  Oid type = exprType((Node *)val);
+  Aggref *agg = oj_make_aggref(constants->OID_FUNCTION_CHOOSE, type, type, val);
+  Oid sortop, eqop;
+  bool hashable;
+
+  get_sort_group_operators(type, false, false, false, &sortop, &eqop, NULL,
+                           &hashable);
+  if (OidIsValid(sortop)) {
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+    ((TargetEntry *)linitial(agg->args))->ressortgroupref = 1;
+    sgc->tleSortGroupRef = 1;
+    sgc->sortop = sortop;
+    sgc->eqop = eqop;
+    sgc->nulls_first = false;
+    sgc->hashable = hashable;
+    agg->aggorder = list_make1(sgc);
+  }
+  return agg;
+}
+
+/**
  * @brief Build @c "count(Q.key) <op> n" over the decorrelated LEFT-JOIN group.
  *
  * @p found_var is some Q column from the correlation (NULL on the null-padded
@@ -20389,6 +20465,22 @@ static Query *na_except_to_nested(const constants_t *constants, Query *sub) {
   return A;
 }
 
+/** @brief The columns that identify a row of a table: the table it is in
+ *  (a child of the one named, with inheritance) and its place there. */
+static const AttrNumber na_identity_att[2] = {TableOidAttributeNumber,
+                                               SelfItemPointerAttributeNumber};
+/** @brief Their types. */
+static const Oid na_identity_type[2] = {OIDOID, TIDOID};
+
+/** @brief Whether the rows of @p rte, a relation of the query a nested
+ *  antijoin is rewritten in, have an identity of their own (@c tableoid,
+ *  @c ctid): a table or a materialized view, and their children. */
+static bool na_has_row_identity(RangeTblEntry *rte) {
+  return rte->rtekind == RTE_RELATION &&
+         (rte->relkind == RELKIND_RELATION || rte->relkind == RELKIND_MATVIEW ||
+          rte->relkind == RELKIND_PARTITIONED_TABLE);
+}
+
 /**
  * @brief Read a nested antijoin as the antijoin of the query's own rows against
  *        the projection of its bad pairs (see the block comment above).
@@ -20505,9 +20597,20 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   pair = makeNode(Query);
   pair->commandType = CMD_SELECT;
   pair->canSetTag = true;
-  for (k = 1; k <= nrel; ++k)
-    pair->rtable =
-      lappend(pair->rtable, na_copy_rel(pair, q, rt_fetch(k, q->rtable)));
+  /* The query's relations are read again here for their values only: each
+   * row of the answer is multiplied by its own annotation outside, so here
+   * it is implied (PROVSQL_IMPLIED_ALIAS), and the bad pairs of a row are
+   * annotated by the body alone -- the decorrelated reading, r ⊗ (𝟙 ⊖ ⊕ …),
+   * not r ⊗ (𝟙 ⊖ (r ⊗ …)). */
+  for (k = 1; k <= nrel; ++k) {
+    RangeTblEntry *copy = na_copy_rel(pair, q, rt_fetch(k, q->rtable));
+    if (copy->rtekind == RTE_RELATION) {
+      char *alias = psprintf(PROVSQL_IMPLIED_ALIAS "%d", k);
+      copy->eref = makeAlias(alias, copyObject(copy->eref->colnames));
+      copy->alias = makeAlias(alias, NIL);
+    }
+    pair->rtable = lappend(pair->rtable, copy);
+  }
   pair->rtable = lappend(pair->rtable, na_copy_rel(pair, pbody, p_rte));
   pc.p_new = nrel + 1;
 
@@ -20544,8 +20647,24 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
             -1));
   }
   pair->hasSubLinks = true;
+  /* Projected on the identity of each row of a relation -- its table and its
+   * place in it, so that two equal rows are not one -- or, for a source with
+   * no such identity, on its columns. */
   for (k = 0; k < nrel; ++k) {
     oj_cols *rc = (oj_cols *)list_nth(outer_cols, k);
+    if (na_has_row_identity(rt_fetch(k + 1, q->rtable))) {
+      for (i = 0; i < 2; ++i) {
+        Var *v = makeVar(k + 1, na_identity_att[i], na_identity_type[i], -1,
+                         InvalidOid, 0);
+        char *nm = psprintf("c%d_%s", k + 1, i == 0 ? "tableoid" : "ctid");
+        pair->targetList =
+          lappend(pair->targetList,
+                  makeTargetEntry((Expr *)v, list_length(pair->targetList) + 1,
+                                  nm, false));
+        colnames = lappend(colnames, makeString(pstrdup(nm)));
+      }
+      continue;
+    }
     for (i = 0; i < rc->n; ++i) {
       Var *v = makeVar(k + 1, rc->attno[i], rc->type[i], rc->typmod[i],
                        rc->coll[i], 0);
@@ -20578,6 +20697,19 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
     int pos = 0;
     for (k = 0; k < nrel; ++k) {
       oj_cols *rc = (oj_cols *)list_nth(outer_cols, k);
+      if (na_has_row_identity(rt_fetch(k + 1, q->rtable))) {
+        for (i = 0; i < 2; ++i) {
+          Node *eq = na_not_distinct(
+            (Expr *)makeVar(1, pos + 1, na_identity_type[i], -1, InvalidOid, 0),
+            (Expr *)makeVar(k + 1, na_identity_att[i], na_identity_type[i], -1,
+                            InvalidOid, 1));
+          if (eq == NULL)
+            return false;
+          corr = lappend(corr, eq);
+          ++pos;
+        }
+        continue;
+      }
       for (i = 0; i < rc->n; ++i) {
         Node *eq = na_not_distinct(
           (Expr *)makeVar(1, pos + 1, rc->type[i], rc->typmod[i], rc->coll[i],
@@ -21946,9 +22078,7 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
       return NULL;
     D = (Query *)copyObject(body);
     vte = (TargetEntry *)linitial(D->targetList);
-    vte->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                                       exprType((Node *)vte->expr),
-                                       exprType((Node *)vte->expr), vte->expr);
+    vte->expr = (Expr *)oj_make_single_choose(constants, vte->expr);
     D->hasAggs = true;
 
     cnt = makeNode(Aggref);
@@ -22138,10 +22268,7 @@ static bool move_uncorrelated_where_predicates(const constants_t *constants,
            * matching SQL's NULL-valued scalar subquery); the >1-row world (a SQL
            * runtime error) is gated out by count(*) <= 1. */
           Expr *bodyval = ((TargetEntry *)linitial(sub->targetList))->expr;
-          Aggref *ch = oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                                      exprType((Node *)bodyval),
-                                      exprType((Node *)bodyval),
-                                      (Expr *)copyObject((Node *)bodyval));
+          Aggref *ch = oj_make_single_choose(constants, (Expr *)copyObject((Node *)bodyval));
           OpExpr *cmp = (OpExpr *)copyObject((Node *)op);
           Oid leo = OpernameGetOprid(list_make1(makeString("<=")), INT8OID,
                                      INT8OID);
@@ -23298,9 +23425,7 @@ static Query *oj_lateral_body(const constants_t *constants, Query *sub) {
         (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
                           Int64GetDatum(1), false, FLOAT8PASSBYVAL));
     L->targetList = list_make1(makeTargetEntry(
-      (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                             exprType((Node *)val), exprType((Node *)val),
-                             val),
+      (Expr *)oj_make_single_choose(constants, val),
       1, vte->resname, false));
     L->havingQual = atmost;
     L->distinctClause = NIL;
@@ -24145,9 +24270,7 @@ join:
 #endif
     repl_expr = (Expr *)agg;
   } else {
-    repl_expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                                       exprType((Node *)valexpr),
-                                       exprType((Node *)valexpr), valexpr);
+    repl_expr = (Expr *)oj_make_single_choose(constants, valexpr);
   }
   if (coalesce) {
     /* Each coalesced sublink gets its own choose() over the shared group: remap
@@ -24163,9 +24286,7 @@ join:
           (Node *)((TargetEntry *)linitial(((Query *)sli->subselect)->targetList))
             ->expr),
         &dctx);
-      tei->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                                         exprType((Node *)vi),
-                                         exprType((Node *)vi), vi);
+      tei->expr = (Expr *)oj_make_single_choose(constants, vi);
     }
   } else if (nested_in_tl) {
     /* Swap just the SubLink node inside the target expression for choose(),
@@ -34763,10 +34884,28 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
       return rewrite_restart("distinct_over_windows"), process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
+  /* GROUP BY () alone, and a HAVING with neither an aggregate nor a GROUP BY
+   * ("SELECT 'c' FROM t HAVING true"), are the aggregation without GROUP BY:
+   * one row in every world, even over no input row, which SQL returns and the
+   * scalar aggregation is annotated 1 for.  Read as such, as the empty set of
+   * GROUPING SETS is (rewrite_grouping_sets): marked as aggregating, the
+   * level gets the scalar row's provenance, where it would otherwise get the
+   * plus of the rows of a group (GROUP BY ()), or none at all and read the
+   * provenance of a row its plan does not have (HAVING alone). */
+  if (provsql_active && q->groupClause == NIL &&
+      (q->groupingSets != NIL || (q->havingQual != NULL && !q->hasAggs)) &&
+      has_provenance(constants, q)) {
+    bool only_empty = true;
+    ListCell *lc_gs;
+    foreach (lc_gs, q->groupingSets)
+      if (((GroupingSet *)lfirst(lc_gs))->kind != GROUPING_SET_EMPTY)
+        only_empty = false;
+    if (only_empty) {
+      q->groupingSets = NIL;
+      q->hasAggs = true;
+    }
+  }
   if (provsql_active && q->groupingSets != NIL &&
-      !(q->groupClause == NIL && list_length(q->groupingSets) == 1 &&
-        ((GroupingSet *)linitial(q->groupingSets))->kind ==
-          GROUPING_SET_EMPTY) &&
       has_provenance(constants, q))
     return rewrite_restart("rewrite_grouping_sets"), process_query(constants, rewrite_grouping_sets(q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
