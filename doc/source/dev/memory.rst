@@ -114,6 +114,17 @@ because what a gate records follows from its address: a content-addressed
 gate hashes it, and a gate with a fresh token has no other writer, so
 the write-once rule has nothing to refuse.
 
+Loading a circuit (``g`` for one root, ``j`` for several) is a read
+whose answer can be large: the worker builds the in-memory circuit
+(:cfunc:`createGenericCircuit`), serialises it with Boost and sends its
+size, then the bytes.  The request carries, after the roots, what the
+statement has left of ``provsql.max_memory`` in bytes (0 for no limit);
+the worker checks its own resident memory against it while it builds and
+serialises, and past it answers the size ``PROVSQL_CIRCUIT_OVER_BUDGET``
+and no circuit, which the backend raises as a ``memory-limit`` error.
+The worker gives the memory back (``malloc_trim``) after each such
+answer, so that one large circuit does not stay resident in it.
+
 The worker reads the pipe one ``PIPE_BUF``-sized buffer at a time
 (:cfunc:`provsql_worker_read`) and parses messages from it, so that it
 keeps up with the backends that feed it.

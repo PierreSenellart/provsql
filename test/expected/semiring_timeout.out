@@ -21,6 +21,28 @@ add_provenance
 
 (1 row)
 NOTICE:  ProvSQL: a condition on an aggregate of a group needs more than provsql.max_worlds (100) of its possible worlds enumerated / provsql-reason: world-limit; scope: deliberate / Raise provsql.max_worlds, or set it to 0 for no limit.
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+NOTICE:  ProvSQL: the circuit to evaluate is larger than provsql.max_memory (1 MB) allows / provsql-reason: memory-limit; scope: deliberate / Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or set it to 0 for no limit.
+evaluated
+t
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

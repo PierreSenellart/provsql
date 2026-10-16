@@ -25,11 +25,19 @@
 #include <string>
 
 #include "MMappedCircuit.h"
+#include "process_memory.h"
 #include "GenericCircuit.h"
 #include "Circuit.hpp"
 #include "provsql_utils_cpp.h"
 
 #include <poll.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+#ifndef PROVSQL_INPROCESS_STORE
+#include <boost/iostreams/device/back_inserter.hpp>
+#include <boost/iostreams/stream.hpp>
+#endif
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
@@ -525,15 +533,16 @@ static void cleanupStore(Oid db_oid, Oid db_tablespace,
    copy through the FIFO (which only existed to cross the worker/backend
    process boundary).  This is also what lets the WASM build avoid the
    compiled libboost_serialization dependency. */
-GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token)
+GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token,
+                                              std::size_t budget)
 {
-  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(token);
+  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(token, budget);
 }
 
 GenericCircuit provsql_inproc_joint_circuit(
-  const std::vector<pg_uuid_t> &roots)
+  const std::vector<pg_uuid_t> &roots, std::size_t budget)
 {
-  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(roots);
+  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(roots, budget);
 }
 #endif
 
@@ -543,6 +552,59 @@ extern "C" void provsql_store_flush(void)
     kv.second->flush();
   store_dirty = false;
 }
+
+#ifndef PROVSQL_INPROCESS_STORE
+/**
+ * @brief Answer a @c 'g' / @c 'j' request: the circuit reachable from
+ *        @p roots, serialised, preceded by its size.
+ *
+ * The circuit is serialised straight into the buffer that is sent, without
+ * the copy a @c std::stringstream makes of its content, and is freed before
+ * it is sent.  With a @p budget (bytes, 0 for none: what the requesting
+ * statement has left of @c provsql.max_memory), building and serialising it
+ * may not make this process grow by more; past it, the answer is
+ * @c PROVSQL_CIRCUIT_OVER_BUDGET and no circuit.  The memory is given back
+ * afterwards, so that one large request does not stay resident in the
+ * worker.
+ */
+static void send_circuit(const MMappedCircuit *circuit,
+                         const std::vector<pg_uuid_t> &roots,
+                         unsigned long budget, char message_char)
+{
+  const std::size_t base_rss = budget ? provsql_process_rss(getpid()) : 0;
+  std::vector<char> buf;
+  unsigned long size;
+
+  try {
+    {
+      boost::iostreams::stream<
+        boost::iostreams::back_insert_device<std::vector<char>>> out(buf);
+      boost::archive::binary_oarchive oa(out);
+      oa << circuit->createGenericCircuit(roots, budget);
+      out.flush();
+    }
+    size = buf.size();
+    if(budget) {
+      std::size_t rss = provsql_process_rss(getpid());
+      if(rss > base_rss && rss - base_rss > budget)
+        size = PROVSQL_CIRCUIT_OVER_BUDGET;
+    }
+  } catch(const CircuitBudgetExceeded &) {
+    size = PROVSQL_CIRCUIT_OVER_BUDGET;
+  }
+  if(size == PROVSQL_CIRCUIT_OVER_BUDGET)
+    std::vector<char>().swap(buf);
+
+  if(!WRITEB(&size, unsigned long) ||
+     (size != PROVSQL_CIRCUIT_OVER_BUDGET && !WRITEB_BYTES(buf.data(), size)))
+    provsql_error("Cannot write to pipe (message type %c)", message_char);
+
+  std::vector<char>().swap(buf);
+#ifdef __GLIBC__
+  malloc_trim(0);
+#endif
+}
+#endif
 
 /** @brief The body of @c provsql_mmap_dispatch, which may throw. */
 static void dispatch(char c, Oid db_oid, Oid db_tablespace)
@@ -780,8 +842,9 @@ static void dispatch(char c, Oid db_oid, Oid db_tablespace)
     case 'g':
     {
       pg_uuid_t token;
+      unsigned long budget;
 
-      if(!READM(token, pg_uuid_t))
+      if(!READM(token, pg_uuid_t) || !READM(budget, unsigned long))
         provsql_error("Cannot read from pipe (message type g)");
 
 #ifdef PROVSQL_INPROCESS_STORE
@@ -789,16 +852,7 @@ static void dispatch(char c, Oid db_oid, Oid db_tablespace)
          directly instead of issuing the 'g' message. */
       provsql_error("message type g is not used by the in-process store");
 #else
-      std::stringstream ss;
-      boost::archive::binary_oarchive oa(ss);
-      oa << circuit->createGenericCircuit(token);
-
-      ss.seekg(0, std::ios::end);
-      unsigned long size = ss.tellg();
-      ss.seekg(0, std::ios::beg);
-
-      if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
-        provsql_error("Cannot write to pipe (message type g)");
+      send_circuit(circuit, std::vector<pg_uuid_t>{token}, budget, 'g');
 #endif
       break;
     }
@@ -882,22 +936,16 @@ static void dispatch(char c, Oid db_oid, Oid db_tablespace)
       for(unsigned i=0; i<nb_roots; ++i)
         if(!READM(roots[i], pg_uuid_t))
           provsql_error("Cannot read from pipe (message type j)");
+      unsigned long budget;
+      if(!READM(budget, unsigned long))
+        provsql_error("Cannot read from pipe (message type j)");
 
 #ifdef PROVSQL_INPROCESS_STORE
       /* Unreachable: the backend calls provsql_inproc_joint_circuit
          directly instead of issuing the 'j' message. */
       provsql_error("message type j is not used by the in-process store");
 #else
-      std::stringstream ss;
-      boost::archive::binary_oarchive oa(ss);
-      oa << circuit->createGenericCircuit(roots);
-
-      ss.seekg(0, std::ios::end);
-      unsigned long size = ss.tellg();
-      ss.seekg(0, std::ios::beg);
-
-      if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
-        provsql_error("Cannot write to pipe (message type j)");
+      send_circuit(circuit, roots, budget, 'j');
 #endif
       break;
     }
@@ -1167,14 +1215,21 @@ bool operator<(const pg_uuid_t a, const pg_uuid_t b)
   return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
 }
 
-GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
+GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token,
+                                                    std::size_t budget) const
 {
-  return createGenericCircuit(std::vector<pg_uuid_t>{token});
+  return createGenericCircuit(std::vector<pg_uuid_t>{token}, budget);
 }
 
 GenericCircuit MMappedCircuit::createGenericCircuit(
-    const std::vector<pg_uuid_t> &roots) const
+    const std::vector<pg_uuid_t> &roots, std::size_t budget) const
 {
+  /* The resident memory the building may add, read every few thousand
+   * gates: a circuit of millions of gates is otherwise built, and shipped,
+   * whole before anything checks it (GitHub #104). */
+  const std::size_t base_rss = budget ? provsql_process_rss(getpid()) : 0;
+  unsigned steps = 0;
+
   /* Seed the work list with every root.  std::set deduplicates so a
    * UUID listed twice (or reached as a child of one root and the
    * other's root itself) is processed only once.  Shared subgraphs
@@ -1188,6 +1243,11 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
   GenericCircuit result;
 
   while(!to_process.empty()) {
+    if(budget && ++steps % 4096 == 0) {
+      std::size_t rss = provsql_process_rss(getpid());
+      if(rss > base_rss && rss - base_rss > budget)
+        throw CircuitBudgetExceeded();
+    }
     pg_uuid_t uuid = *to_process.begin();
     to_process.erase(to_process.begin());
     processed.insert(uuid);

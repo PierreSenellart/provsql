@@ -38,7 +38,9 @@
 #define MMAPPED_CIRCUIT_H
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -431,9 +433,13 @@ inline unsigned long getNbGates() const {
  * constructed @c GenericCircuit.
  *
  * @param token  UUID of the root gate.
+ * @param budget Bytes the process's resident memory may grow by while the
+ *               circuit is built, 0 for no limit; past it,
+ *               @c CircuitBudgetExceeded is thrown.
  * @return       An in-memory @c GenericCircuit containing the sub-circuit.
  */
-GenericCircuit createGenericCircuit(pg_uuid_t token) const;
+GenericCircuit createGenericCircuit(pg_uuid_t token,
+                                    std::size_t budget = 0) const;
 
 /**
  * @brief Build an in-memory @c GenericCircuit reachable from any of
@@ -450,12 +456,30 @@ GenericCircuit createGenericCircuit(pg_uuid_t token) const;
  * @param roots  UUIDs whose reachable closure to load.  Order is
  *               irrelevant; identical UUIDs collapse via the
  *               @c std::set deduplication of the work list.
+ * @param budget As for the single-root variant.
  * @return       An in-memory @c GenericCircuit containing every gate
  *               reachable from any root.
  */
 GenericCircuit createGenericCircuit(
-    const std::vector<pg_uuid_t> &roots) const;
+    const std::vector<pg_uuid_t> &roots, std::size_t budget = 0) const;
 };
+
+/**
+ * @brief Thrown by @c MMappedCircuit::createGenericCircuit when the circuit
+ *        it builds takes the process past the memory budget it was given
+ *        (@c provsql.max_memory, what the statement has not used of it).
+ */
+class CircuitBudgetExceeded : public std::exception {
+public:
+  const char *what() const noexcept override {
+    return "the circuit is larger than provsql.max_memory allows";
+  }
+};
+
+/** @brief The size the worker answers a @c 'g' / @c 'j' request with, in
+ *  place of a circuit, when building it went past the budget the request
+ *  carried. */
+constexpr unsigned long PROVSQL_CIRCUIT_OVER_BUDGET = ~0UL;
 
 #ifdef PROVSQL_INPROCESS_STORE
 /**
@@ -466,10 +490,11 @@ GenericCircuit createGenericCircuit(
  * worker/backend boundary to ship a Boost-serialised copy across, so the
  * backend constructs the circuit in place.
  */
-GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token);
+GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token,
+                                              std::size_t budget);
 /** @brief Multi-root variant (single-process replacement for @c 'j'). */
 GenericCircuit provsql_inproc_joint_circuit(
-  const std::vector<pg_uuid_t> &roots);
+  const std::vector<pg_uuid_t> &roots, std::size_t budget);
 #endif
 
 

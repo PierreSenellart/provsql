@@ -189,9 +189,14 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Memory the evaluations of a statement (semiring, probability,
     Shapley values…), external tools included, may add to the backend;
     beyond it, the evaluation stops with a ``program_limit_exceeded``
-    error (SQLSTATE ``54000``, ``provsql-reason: memory-limit``). The
-    check is periodic, so the limit is approximate. Linux, macOS and
-    FreeBSD only. Example: ``SET provsql.max_memory = '1GB'``.
+    error (SQLSTATE ``54000``, ``provsql-reason: memory-limit``). Loading
+    the circuit counts too, as does building it in the background worker
+    that reads the provenance store, a process of its own, which is
+    refused what the statement has not used. The query that builds the
+    circuit (the aggregation over many rows, say) is not an evaluation,
+    and does not count. The check is periodic, so the limit is
+    approximate. Linux, macOS and FreeBSD only. Example:
+    ``SET provsql.max_memory = '1GB'``.
 
     Whatever this setting, a text result over 1 GB, the most PostgreSQL
     holds in a value, stops the evaluation with the same kind of error

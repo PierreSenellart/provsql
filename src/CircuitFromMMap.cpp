@@ -25,6 +25,7 @@
 #include "having_semantics.hpp"
 #include "semiring/BoolExpr.h"
 #include "provsql_utils_cpp.h"
+#include "provsql_interrupt.h"
 
 #include <vector>
 
@@ -33,6 +34,36 @@ extern "C" {
 #include "provsql_shmem.h"
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
+}
+
+/**
+ * @brief What the statement has left of @c provsql.max_memory, in bytes, for
+ *        building a circuit; 0 for no limit.
+ *
+ * The circuit store builds and serialises the circuit in the worker, a
+ * process of its own, which the budget would not see otherwise; the request
+ * carries what is left of it, and the worker refuses past it (GitHub #104).
+ */
+static unsigned long circuit_budget()
+{
+  if(provsql_max_memory <= 0)
+    return 0;
+  const std::size_t max = (std::size_t) provsql_max_memory * 1024 * 1024;
+  const std::size_t used = provsql_memory_used();
+  return used >= max ? 1 : max - used;
+}
+
+/** @brief Stop at @c provsql.max_memory: the circuit to load is larger than
+ *  the statement has left of it. */
+[[noreturn]] static void circuit_over_budget()
+{
+  provsql_limit_exceeded(
+    "memory-limit",
+    ("the circuit to evaluate is larger than provsql.max_memory (" +
+     std::to_string(provsql_max_memory) + " MB) allows").c_str(),
+    "Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or "
+    "set it to 0 for no limit.");
+  throw CircuitBudgetExceeded();   /* not reached */
 }
 
 /**
@@ -45,10 +76,13 @@ extern "C" {
 template<typename C>
 static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {
+  unsigned long budget = circuit_budget();
+
   STARTWRITEM();
   ADDWRITEM(&message_char, char);
   ADDWRITEDB();
   ADDWRITEM(&token, pg_uuid_t);
+  ADDWRITEM(&budget, unsigned long);
 
   provsql_shmem_lock_exclusive();
   if(!SENDWRITEM())
@@ -57,6 +91,10 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   unsigned long size;
   if(!READB(size, unsigned long))
     provsql_error("Cannot read from pipe (message type %c)", message_char);
+  if(size == PROVSQL_CIRCUIT_OVER_BUDGET) {
+    provsql_shmem_unlock();
+    circuit_over_budget();
+  }
 
   char *buf = new char[size];
   if(!READB_BYTES(buf, size)) {
@@ -66,12 +104,19 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   }
   provsql_shmem_unlock();
 
-  boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
-  boost::archive::binary_iarchive ia(stream);
   C c;
-  ia >> c;
+  try {
+    provsql_check_memory();
+    boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
+    boost::archive::binary_iarchive ia(stream);
+    ia >> c;
+  } catch(...) {
+    delete [] buf;
+    throw;
+  }
 
   delete [] buf;
+  provsql_check_memory();
 
   return c;
 }
@@ -205,7 +250,12 @@ void applyProbabilisticSimplification(GenericCircuit &gc)
 GenericCircuit getGenericCircuit(pg_uuid_t token)
 {
 #ifdef PROVSQL_INPROCESS_STORE
-  GenericCircuit gc = provsql_inproc_generic_circuit(token);
+  GenericCircuit gc;
+  try {
+    gc = provsql_inproc_generic_circuit(token, circuit_budget());
+  } catch(const CircuitBudgetExceeded &) {
+    circuit_over_budget();
+  }
 #else
   GenericCircuit gc = getCircuitFromMMap<GenericCircuit>(token, 'g');
 #endif
@@ -240,7 +290,11 @@ static GenericCircuit getJointCircuitFromMMap(
     const std::vector<pg_uuid_t> &tokens)
 {
 #ifdef PROVSQL_INPROCESS_STORE
-  return provsql_inproc_joint_circuit(tokens);
+  try {
+    return provsql_inproc_joint_circuit(tokens, circuit_budget());
+  } catch(const CircuitBudgetExceeded &) {
+    circuit_over_budget();
+  }
 #else
   char message_char = 'j';
   unsigned nb_roots = static_cast<unsigned>(tokens.size());
@@ -250,6 +304,8 @@ static GenericCircuit getJointCircuitFromMMap(
   ADDWRITEM(&nb_roots, unsigned);
   for(const pg_uuid_t &t : tokens)
     ADDWRITEM(&t, pg_uuid_t);
+  unsigned long budget = circuit_budget();
+  ADDWRITEM(&budget, unsigned long);
 
   provsql_shmem_lock_exclusive();
   if(!SENDWRITEM())
@@ -258,6 +314,10 @@ static GenericCircuit getJointCircuitFromMMap(
   unsigned long size;
   if(!READB(size, unsigned long))
     provsql_error("Cannot read from pipe (message type j)");
+  if(size == PROVSQL_CIRCUIT_OVER_BUDGET) {
+    provsql_shmem_unlock();
+    circuit_over_budget();
+  }
 
   char *buf = new char[size];
   if(!READB_BYTES(buf, size)) {
@@ -267,12 +327,19 @@ static GenericCircuit getJointCircuitFromMMap(
   }
   provsql_shmem_unlock();
 
-  boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
-  boost::archive::binary_iarchive ia(stream);
   GenericCircuit c;
-  ia >> c;
+  try {
+    provsql_check_memory();
+    boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
+    boost::archive::binary_iarchive ia(stream);
+    ia >> c;
+  } catch(...) {
+    delete [] buf;
+    throw;
+  }
 
   delete [] buf;
+  provsql_check_memory();
 
   return c;
 #endif /* PROVSQL_INPROCESS_STORE */

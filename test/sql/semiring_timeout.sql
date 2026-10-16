@@ -85,6 +85,34 @@ END $$;
 RESET provsql.max_worlds;
 DROP TABLE st_mw;
 
+-- A circuit too large for what is left of provsql.max_memory is refused
+-- while it is built, before the backend loads it, with the same kind of
+-- error (GitHub #104): the sum over a cross product of 200 x 200 rows has
+-- 40,000 contributions, far past 1 MB.
+CREATE TABLE st_ca AS SELECT i AS id, i::float8 AS v FROM generate_series(1, 200) i;
+CREATE TABLE st_cb AS SELECT i AS id FROM generate_series(1, 200) i;
+SELECT add_provenance('st_ca');
+SELECT add_provenance('st_cb');
+CREATE TABLE st_cs AS SELECT sum(st_ca.v) AS s FROM st_ca, st_cb;
+SELECT remove_provenance('st_cs');
+SELECT create_provenance_mapping('st_ca_map', 'st_ca', 'id');
+SET provsql.max_memory = '1MB';
+DO $$
+DECLARE d text; h text;
+BEGIN
+  PERFORM length(sr_formula(s, 'st_ca_map')) FROM st_cs;
+  RAISE NOTICE 'evaluation finished';
+EXCEPTION WHEN program_limit_exceeded THEN
+  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL, h = PG_EXCEPTION_HINT;
+  RAISE NOTICE '% / % / %', SQLERRM, d, h;
+END $$;
+RESET provsql.max_memory;
+SELECT length(sr_formula(s, 'st_ca_map')) > 0 AS evaluated FROM st_cs;
+DROP TABLE st_ca_map, st_cs;
+SELECT remove_provenance('st_ca');
+SELECT remove_provenance('st_cb');
+DROP TABLE st_ca, st_cb;
+
 DROP TABLE st_r_map;
 SELECT remove_provenance('st_r');
 DROP TABLE st_r;
