@@ -155,6 +155,10 @@ enum class SetProbResult {
 static std::string storePath(Oid db_oid, Oid db_tablespace,
                              const char *filename);
 
+/** @brief Whether the store of @p db_oid in @p db_tablespace still has its
+ *  gates file: false once the database is dropped. */
+static bool storeExists(Oid db_oid, Oid db_tablespace);
+
 /**
  * @brief Outcome of @c setInfos or @c setExtra.
  *

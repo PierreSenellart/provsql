@@ -86,6 +86,12 @@ MMappedCircuit::MMappedCircuit(Oid db_oid, Oid db_tablespace, bool read_only) :
     storePath(db_oid, db_tablespace, EXTRA_FILENAME),
     read_only) {}
 
+bool MMappedCircuit::storeExists(Oid db_oid, Oid db_tablespace)
+{
+  std::string gates = storePath(db_oid, db_tablespace, GATES_FILENAME);
+  return !(access(gates.c_str(), F_OK) != 0 && errno == ENOENT);
+}
+
 void initialize_provsql_mmap()
 {
   /* circuits are opened lazily on first IPC message */
@@ -390,13 +396,46 @@ static void finishInterruptedCleanup(Oid db_oid, Oid db_tablespace)
     unlink(marker.c_str());
 }
 
+/** @brief The tablespace of each open circuit, to find its files again. */
+static std::map<Oid, Oid> circuit_tablespaces;
+
+/**
+ * @brief Close the circuits of the databases dropped since they were opened.
+ *
+ * Dropping a database removes its directory, the circuit files with it, but
+ * not the worker's descriptors and mappings of them: kept, they would hold
+ * the disk space of every dropped database, and four descriptors each, until
+ * opening one more failed for lack of descriptors -- which a test run that
+ * creates and drops a database per test reached after a few hundred.  A
+ * circuit whose gates file is gone belongs to a dropped database (one being
+ * cleaned up keeps it until the swap, and is not open meanwhile).
+ */
+static void closeDroppedCircuits()
+{
+  for(auto it = circuits.begin(); it != circuits.end(); ) {
+    auto ts = circuit_tablespaces.find(it->first);
+    if(!MMappedCircuit::storeExists(
+         it->first,
+         ts == circuit_tablespaces.end() ? InvalidOid : ts->second)) {
+      delete it->second;
+      circuit_tablespaces.erase(it->first);
+      it = circuits.erase(it);
+    } else
+      ++it;
+  }
+}
+
 /** @brief Return (creating lazily if needed) the circuit for @p db_oid. */
 static MMappedCircuit *getCircuit(Oid db_oid, Oid db_tablespace)
 {
   auto it = circuits.find(db_oid);
   if(it == circuits.end()) {
+    /* Opening a database the worker has not seen yet is when the open
+       circuits grow: release those of the dropped databases first. */
+    closeDroppedCircuits();
     finishInterruptedCleanup(db_oid, db_tablespace);
     circuits[db_oid] = new MMappedCircuit(db_oid, db_tablespace);
+    circuit_tablespaces[db_oid] = db_tablespace;
     return circuits[db_oid];
   }
   return it->second;
@@ -457,6 +496,7 @@ static void cleanupStore(Oid db_oid, Oid db_tablespace,
      and the next message reopens the rebuilt files. */
   delete circuit;
   circuits.erase(db_oid);
+  circuit_tablespaces.erase(db_oid);
 
   std::string marker = MMappedCircuit::storePath(db_oid, db_tablespace,
                                                  CLEANUP_MARKER);
@@ -504,7 +544,8 @@ extern "C" void provsql_store_flush(void)
   store_dirty = false;
 }
 
-extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
+/** @brief The body of @c provsql_mmap_dispatch, which may throw. */
+static void dispatch(char c, Oid db_oid, Oid db_tablespace)
 {
     MMappedCircuit *circuit = getCircuit(db_oid, db_tablespace);
 
@@ -864,6 +905,31 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
     default:
       provsql_error("Wrong message type: %c", c);
     }
+}
+
+/**
+ * @brief Serve one message of the store's protocol.
+ *
+ * A C++ exception escaping here -- a file that cannot be opened or mapped,
+ * an allocation that fails -- would reach the C frames of the worker and
+ * terminate it with an abort, which the postmaster answers by resetting
+ * every backend of the cluster.  It is reported as the error it is instead,
+ * as the worker's other failures are: the worker exits and is restarted,
+ * and the other databases keep their sessions.
+ */
+extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
+{
+  std::string what;
+  try {
+    dispatch(c, db_oid, db_tablespace);
+    return;
+  } catch(const std::exception &e) {
+    what = e.what();
+  } catch(...) {
+    what = "unknown exception";
+  }
+  /* Outside the handler: the error does not return. */
+  provsql_error("ProvSQL circuit store: %s", what.c_str());
 }
 
 #ifndef PROVSQL_INPROCESS_STORE
