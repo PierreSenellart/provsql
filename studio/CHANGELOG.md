@@ -55,6 +55,22 @@ Requires extension **>= 1.13.0**.
   offers `subset`, `clearance` and `consent` in its User-enum group, for
   mappings whose value is an enum or an array of one; a consent result
   returned for some purposes but not over the whole database says so.
+- **Paths of a recursion.** The evaluation strip offers *Regular
+  expression*, *Least cost with its paths* and *Least cost with one
+  path* (the extension's `sr_regex`, `sr_tropical_paths` and
+  `sr_best_path`), with a picker for the mapping that labels the
+  tuples. Formula also renders circuits marked absorptive, and names
+  the unknowns of a recursion's equations as the circuit view numbers
+  them.
+- **Evaluations in notebook cells.** A notebook cell evaluates random
+  variables and aggregate results too, with the same distribution
+  profile panel as Circuit mode, and lists the exact method and the
+  guarantees first, as the evaluation strip does.
+- **Surviving a restart.** Pooled connections are checked before use,
+  so Studio carries on after PostgreSQL restarts; a notebook cell whose
+  database session has ended is rerun on a new one, saying why; an
+  unreachable database is reported at once, offering to pick another or
+  edit the connection.
 
 ### Fixes
 
@@ -66,11 +82,22 @@ Requires extension **>= 1.13.0**.
 - Temporal mode offers plain tracked tables in its relation picker.
 - An older `/api/temporal` response no longer overwrites a newer one on
   the timeline.
+- Aggregate names are shown whole in circuit nodes.
+- A random variable that hides the current evaluation falls back to the
+  Distribution profile.
+- Opening the Tools panel keeps the evaluation result; an open popover
+  closes when another opens.
+- The footer shows the commit after Studio's and ProvSQL's versions when
+  they are not on a release tag, on a line of its own.
+- Playground: the browser build's driver reports a lost connection as
+  the server version does.
 
 ### Notebooks
 
 - New example notebook for case study 9 (a sales-forecast dashboard over
-  deals that may not close); case studies 1 and 5 revised.
+  deals that may not close); every other case study revised, case
+  study 3 now following journeys over the whole Île-de-France network
+  with the path semirings.
 
 ## [1.8.0] - 2026-08-07
 
