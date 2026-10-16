@@ -449,6 +449,25 @@ SELECT remove_provenance('ect_view');
 SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
 FROM ect_view WHERE p > 0 ORDER BY g, f;
 DROP TABLE ect_view;
+-- Grouped by, the same COALESCE column is exploded into the values it takes:
+-- those of the sum, and 0 where the group has no row with a value (g = 1:
+-- 0, 1, 5 and 6, a quarter each; g = 2 and g = 4: 0; g = 3: 0 and 7, one
+-- half each).
+CREATE TABLE ect_vg AS
+  SELECT g, s, probability(provenance()) AS p FROM ect_v GROUP BY g, s;
+SELECT remove_provenance('ect_vg');
+SELECT g, s, round(p::numeric, 6) AS p FROM ect_vg WHERE p > 0 ORDER BY g, s;
+DROP TABLE ect_vg;
+-- And ranked by it, which shares the view between the copies the rank reads
+-- (it holds an outer join): 1 + the number of groups above, in every world,
+-- the groups without a row counting 0 (g = 1: 1.5; g = 2 and g = 4: 2.25;
+-- g = 3: 1.375).
+CREATE TABLE ect_vr AS
+  SELECT g, expected(rk) AS e
+  FROM (SELECT g, rank() OVER (ORDER BY s DESC) AS rk FROM ect_v) t;
+SELECT remove_provenance('ect_vr');
+SELECT g, round(e::numeric, 6) AS e FROM ect_vr ORDER BY g;
+DROP TABLE ect_vr;
 DROP VIEW ect_v;
 DROP TABLE ect_k;
 -- A scalar aggregation, whose single row exists in every world -- including

@@ -294,7 +294,7 @@ static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
 static bool query_has_own_sublinks(Query *q);
 static Var *group_key_var(Query *q, TargetEntry *te);
 static Query *split_aggregation_into_subquery(Query *q);
-static bool agg_column_explodable(const constants_t *constants,
+static bool agg_column_explodable(const constants_t *constants, Query *owner,
                                   RangeTblEntry *rte, AttrNumber attno);
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants);
@@ -3385,6 +3385,7 @@ typedef struct shared_cte_entry {
   char *name;             ///< The CTE's name
   AttrNumber provsql;     ///< Its provsql column, 0 before it is rewritten
   Query *body;            ///< Its rewritten body, NULL before
+  Query *orig;            ///< Its body as created, before any rewriting
 } shared_cte_entry;
 
 /** @brief The shared CTEs of the statement being rewritten. */
@@ -3410,6 +3411,18 @@ static Query *shared_cte_body(const char *name) {
     shared_cte_entry *e = (shared_cte_entry *)lfirst(lc);
     if (strcmp(e->name, name) == 0)
       return e->body;
+  }
+  return NULL;
+}
+
+/** @brief The body of the shared CTE @p name as it was created, before the
+ *  rewriting, or NULL. */
+static Query *shared_cte_orig(const char *name) {
+  ListCell *lc;
+  foreach (lc, shared_ctes) {
+    shared_cte_entry *e = (shared_cte_entry *)lfirst(lc);
+    if (strcmp(e->name, name) == 0)
+      return e->orig;
   }
   return NULL;
 }
@@ -17307,6 +17320,7 @@ static CommonTableExpr *oj_make_shared_cte(RangeTblEntry *R) {
   e->name = cte->ctename;
   e->provsql = 0;
   e->body = NULL;
+  e->orig = (Query *)copyObject(cte->ctequery);
   shared_ctes = lappend(shared_ctes, e);
   return cte;
 }
@@ -26515,7 +26529,7 @@ static bool setop_column_explodable(const constants_t *constants, Query *q,
     return false;
   if (IsA(n, RangeTblRef))
     return agg_column_explodable(
-      constants, rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable), attno);
+      constants, q, rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable), attno);
   if (IsA(n, SetOperationStmt))
     return setop_column_explodable(constants, q,
                                    ((SetOperationStmt *)n)->larg, attno) &&
@@ -26552,36 +26566,73 @@ static bool setop_column_has_aggregate(const constants_t *constants, Query *q,
  * to the aggregate it forwards, the explosion being the same wherever the
  * value is read.
  */
-static bool agg_column_explodable(const constants_t *constants,
+static bool agg_column_explodable(const constants_t *constants, Query *owner,
                                   RangeTblEntry *rte, AttrNumber attno) {
   int levels;
+  /* The queries descended through, the one owning @p rte first: a reference
+   * to a WITH query names the level that defines it by how far up it is. */
+  List *chain = owner != NULL ? list_make1(owner) : NIL;
 
   /* A forwarded column, over the few levels a rewriting inserts */
   for (levels = 0; levels < 8; ++levels) {
     TargetEntry *te;
     Var *v;
+    Query *sub = NULL;
 
-    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || attno < 1 ||
-        attno > list_length(rte->subquery->targetList))
+    if (rte->rtekind == RTE_SUBQUERY)
+      sub = rte->subquery;
+    else if (rte->rtekind == RTE_CTE && !rte->self_reference) {
+      /* A WITH query is read as the subquery it is: the input of an outer
+       * join that the lowering shares between its arms (the ranked relation
+       * of a rank over an aggregate, when it holds an outer join) is one,
+       * defined at a level that may be above the queries walked here, whose
+       * body as it was created the registry keeps. */
+      if ((int)rte->ctelevelsup < list_length(chain)) {
+        Query *def = (Query *)list_nth(chain, rte->ctelevelsup);
+        ListCell *lc;
+        foreach (lc, def->cteList) {
+          CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+          if (strcmp(cte->ctename, rte->ctename) == 0 && !cte->cterecursive &&
+              IsA(cte->ctequery, Query))
+            sub = (Query *)cte->ctequery;
+        }
+      }
+      if (sub == NULL && rte_is_shared_cte(rte))
+        sub = shared_cte_orig(rte->ctename);
+    }
+    if (sub == NULL || attno < 1 || attno > list_length(sub->targetList))
       return false;
     /* A set operation reads its column from each of its arms, and its own
      * entry names the first one only: every arm has to explode. */
-    if (rte->subquery->setOperations != NULL)
-      return setop_column_explodable(constants, rte->subquery,
-                                     rte->subquery->setOperations, attno);
-    te = get_tle_by_resno(rte->subquery->targetList, attno);
+    if (sub->setOperations != NULL)
+      return setop_column_explodable(constants, sub, sub->setOperations, attno);
+    te = get_tle_by_resno(sub->targetList, attno);
     if (te == NULL)
       return false;
     if (IsA(te->expr, Aggref))
       return aggref_values_explodable(constants, (Aggref *)te->expr);
+    /* COALESCE(aggregate, constant): the aggregate's values, the constant
+     * where it has none (agg_possible_values reads them off its agg_case
+     * gate) */
+    if (IsA(te->expr, CoalesceExpr) &&
+        list_length(((CoalesceExpr *)te->expr)->args) == 2) {
+      Node *a = strip_agg_cast(
+        (Node *)linitial(((CoalesceExpr *)te->expr)->args));
+      Node *d = strip_implicit_coercions(
+        (Node *)lsecond(((CoalesceExpr *)te->expr)->args));
+      return a != NULL && IsA(a, Aggref) && d != NULL &&
+             aggref_values_explodable(constants, (Aggref *)a) &&
+             IsA(d, Const) && !((Const *)d)->constisnull;
+    }
     if (!IsA(te->expr, Var))
       return false;
     v = (Var *)te->expr;
     if (v->varlevelsup != 0 || v->varno < 1 ||
-        v->varno > (Index)list_length(rte->subquery->rtable))
+        v->varno > (Index)list_length(sub->rtable))
       return false;
-    rte = rt_fetch(v->varno, rte->subquery->rtable);
+    rte = rt_fetch(v->varno, sub->rtable);
     attno = v->varattno;
+    chain = lcons(sub, chain);
   }
   return false;
 }
@@ -26734,7 +26785,7 @@ static List *agg_values_read_as_data(const constants_t *constants, Query *q,
     if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL || r->lateral ||
         v->varattno > list_length(r->subquery->targetList))
       continue;
-    if (!agg_column_explodable(constants, r, v->varattno) ||
+    if (!agg_column_explodable(constants, q, r, v->varattno) ||
         !has_provenance(constants, r->subquery))
       continue;
     if (first == 0)
@@ -32815,7 +32866,7 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
    * explosion: an aggregate whose values are none of its contributions (a
    * sum()) is left to the window machinery, and its value frozen, rather
    * than refused from inside the deduplication. */
-  if (!agg_column_explodable(ctx->constants, ranked,
+  if (!agg_column_explodable(ctx->constants, ctx->q, ranked,
                              ((Var *)key_te->expr)->varattno))
     return NULL;
 
@@ -35601,6 +35652,7 @@ static void rewrite_shared_ctes(const constants_t *constants, Query *q,
       rn.to = psprintf("%s%d", PROVSQL_SHARED_CTE_PREFIX,
                        ++shared_cte_counter);
       rn.depth = 0;
+      e->orig = shared_cte_orig(rn.from);
       shared_cte_rename_walker((Node *)q, &rn);
       cte->ctename = rn.to;
       e->name = rn.to;

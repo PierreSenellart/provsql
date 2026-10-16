@@ -2513,6 +2513,10 @@ DECLARE
   t provsql.provenance_gate;
   p uuid;
   parts uuid[];
+  prev uuid[];
+  ch uuid[];
+  region uuid;
+  arm uuid;
 BEGIN
   t := provsql.get_gate_type(g);
   IF t = 'agg' THEN
@@ -2536,6 +2540,36 @@ BEGIN
   ELSIF t = 'value' THEN
     RETURN CASE WHEN (coalesce(provsql.get_extra(g), '') IN ('', 'NULL')) = want_null
                 THEN provsql.gate_one() ELSE provsql.gate_zero() END;
+  ELSIF t = 'case' THEN
+    /* A guarded selection, [guard_1, value_1, ..., default]: NULL (not NULL)
+     * where the arm it selects is -- the arm's region, its guard and none of
+     * the earlier ones (the default: none of them), times the arm's own
+     * event.  COALESCE(sum(x), 0) selects the sum where it has a value and 0
+     * elsewhere, so is NULL nowhere. */
+    parts := ARRAY[]::uuid[];
+    prev := ARRAY[]::uuid[];
+    ch := provsql.get_children(g);
+    FOR i IN 1 .. coalesce(array_length(ch, 1), 0) BY 2 LOOP
+      IF i = array_length(ch, 1) THEN
+        region := CASE WHEN cardinality(prev) = 0 THEN provsql.gate_one()
+                       ELSE provsql.provenance_monus(provsql.gate_one(),
+                                                     provsql.provenance_plus(prev))
+                  END;
+        arm := ch[i];
+      ELSE
+        region := CASE WHEN cardinality(prev) = 0 THEN ch[i]
+                       ELSE provsql.provenance_times(
+                              ch[i],
+                              provsql.provenance_monus(provsql.gate_one(),
+                                                       provsql.provenance_plus(prev)))
+                  END;
+        arm := ch[i + 1];
+        prev := prev || ch[i];
+      END IF;
+      parts := parts || provsql.provenance_times(
+                          region, provsql.agg_gate_null_event(arm, want_null));
+    END LOOP;
+    RETURN provsql.provenance_plus(parts);
   END IF;
   RAISE EXCEPTION USING
     MESSAGE = 'ProvSQL: IS [NOT] NULL on this expression over aggregates, read '
@@ -2880,6 +2914,7 @@ DECLARE
   sums    numeric[];
   one     numeric;
   scalar_agg boolean;
+  arms    uuid[];
 BEGIN
   /* The planner hands the aggregate result itself (an agg_token), whatever
    * the type the query declares for that column. */
@@ -2890,6 +2925,48 @@ BEGIN
       DETAIL = 'provsql-reason: explode-not-an-aggregate; scope: deliberate';
   END IF;
   token := input::uuid;
+  IF provsql.get_gate_type(token) = 'case' THEN
+    /* A guarded selection -- COALESCE(sum(x), 0), a CASE over aggregates --
+     * takes the values of its arms, [guard_1, value_1, ..., default]: an
+     * aggregate's own, or a constant's.  Each arm is selected where its
+     * aggregate has a value, so an aggregate arm offers no NULL. */
+    arms := provsql.get_children(token);
+    vals := ARRAY[]::text[];
+    FOR i IN 1 .. coalesce(array_length(arms, 1), 0) LOOP
+      CONTINUE WHEN i % 2 = 1 AND i < array_length(arms, 1);
+      CASE provsql.get_gate_type(arms[i])
+        WHEN 'value' THEN
+          /* gate_null(), the value of an aggregate with no contribution at
+           * all, is never selected: its guard, that the aggregate has a value,
+           * holds in no world.  The guarded selections exploded here
+           * (COALESCE onto a constant) are never NULL. */
+          IF coalesce(provsql.get_extra(arms[i]), '') NOT IN ('', 'NULL') THEN
+            vals := vals || provsql.get_extra(arms[i]);
+          END IF;
+        WHEN 'agg', 'case' THEN
+          vals := vals || provsql.agg_possible_values(
+                            provsql.agg_token_make(arms[i], 0));
+        ELSE
+          RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+            MESSAGE = 'ProvSQL: an arithmetic expression over aggregate '
+                      'results cannot be exploded into one row per value it '
+                      'takes over the possible worlds',
+            DETAIL = 'provsql-reason: explode-arithmetic; scope: gap';
+      END CASE;
+    END LOOP;
+    vals := ARRAY(SELECT DISTINCT v FROM unnest(vals) AS v);
+    IF array_length(vals, 1) > max_values THEN
+      RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+        MESSAGE = format('ProvSQL: this expression over aggregate results '
+                         'takes more than %s values over the possible worlds, '
+                         'too many to explode it into one row per value',
+                         max_values),
+        HINT = 'mark it plain() to read its plain value',
+        DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
+    END IF;
+    RETURN ARRAY(SELECT v FROM unnest(vals) AS v
+                 ORDER BY v::numeric NULLS LAST);
+  END IF;
   IF provsql.get_gate_type(token) <> 'agg' THEN
     RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
       MESSAGE = 'ProvSQL: an arithmetic expression over aggregate results '
