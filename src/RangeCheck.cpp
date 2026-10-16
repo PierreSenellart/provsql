@@ -1443,11 +1443,12 @@ namespace {
  * rv_histogram / rv_moment fallbacks, so the cmp decider remains
  * untouched.
  *
- * Empty-group convention (see test/sql/continuous_aggregation §5):
- * COUNT and SUM yield 0; MIN / MAX / AVG yield NaN.  NaN sits
- * outside any real interval, so callers binning samples drop those
- * worlds automatically; the moment averagers in
- * Expectation::mc_raw_moment also skip them.
+ * Empty-group convention (MonteCarloSampler's gate_agg NONE arm): a
+ * group no row of which is present has no value -- SUM / AVG / MIN /
+ * MAX are SQL NULL there, and a grouped COUNT has no row to carry it --
+ * except a scalar COUNT, which is 0.  Worlds without a value are
+ * dropped by the samplers binning samples and skipped by the moment
+ * averagers, so the support only needs to cover the others.
  */
 Interval aggSupportOf(const GenericCircuit &gc, gate_t root,
                       std::unordered_map<gate_t, Interval> &cache)
@@ -1486,24 +1487,44 @@ Interval aggSupportOf(const GenericCircuit &gc, gate_t root,
   const auto inf = std::numeric_limits<double>::infinity();
   switch (op) {
     case AggregationOperator::COUNT:
-      /* [0, n_rows].  Each semimod contributes 0 or 1 to the count. */
-      return Interval{0.0, static_cast<double>(sm_children.size())};
     case AggregationOperator::SUM: {
       /* Per row, contribution is value if k fires, else 0; sum the
        * per-row support intervals.  Always-firing rows contribute
        * their value interval verbatim; possibly-firing rows
-       * contribute [min(0, v.lo), max(0, v.hi)]. */
+       * contribute [min(0, v.lo), max(0, v.hi)].  COUNT is the SUM of
+       * its per-row values: 1, or 0 for a row whose counted column is
+       * NULL.
+       *
+       * The bounds hold over the worlds where the aggregate has a
+       * value.  An empty group (no row fires) has none for SUM, and
+       * none for a grouped COUNT either, there being no row to carry
+       * it; only a scalar COUNT is 0 there (MonteCarloSampler's NONE
+       * arm).  Unless a row always fires or the empty world counts, at
+       * least one row does, so the bound moves in from 0 when every
+       * row's value is on the same side of it. */
+      const bool empty_has_value =
+        op == AggregationOperator::COUNT &&
+        (gc.getInfos(root).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
       double lo = 0.0, hi = 0.0;
+      double min_lo = inf, max_hi = -inf;
+      bool some_always = false;
       for (gate_t sm : sm_children) {
         Interval vi = child_value_iv(sm);
         if (vi.isAll()) return Interval::all();
+        min_lo = std::min(min_lo, vi.lo);
+        max_hi = std::max(max_hi, vi.hi);
         if (child_always_fires(sm)) {
+          some_always = true;
           lo += vi.lo;
           hi += vi.hi;
         } else {
           lo += std::min(0.0, vi.lo);
           hi += std::max(0.0, vi.hi);
         }
+      }
+      if (!sm_children.empty() && !some_always && !empty_has_value) {
+        if (min_lo > 0.0) lo = min_lo;
+        if (max_hi < 0.0) hi = max_hi;
       }
       return Interval{lo, hi};
     }

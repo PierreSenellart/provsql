@@ -9066,11 +9066,17 @@ CREATE OR REPLACE FUNCTION rv_support(
  *   ...) safely falls back to the conservative all-real interval
  *   without raising.  Conditioning on @c prov is not yet supported.
  *
- * - @c agg_token: closed-form per aggregation function:
- *   - @c SUM : @f$[\sum_i \min(0,v_i), \sum_i \max(0,v_i)]@f$
- *     (every row is independently in or out of the included set; the
- *     extreme SUMs are reached by including only positive or only
- *     negative-valued rows).
+ * - @c agg_token: closed-form per aggregation function, over the worlds
+ *   where the aggregate has a value (an empty group has none, except for
+ *   a scalar @c COUNT, which is 0 there):
+ *   - @c SUM and @c COUNT (the sum of per-row 1s, or 0s for @c NULL
+ *     counted columns): @f$[\sum_i \min(0,v_i), \sum_i \max(0,v_i)]@f$,
+ *     with a row always present adding @f$v_i@f$ itself (every other row
+ *     is independently in or out of the included set; the extreme sums
+ *     include only its positive or only its negative values).  Unless a
+ *     row is always present or the empty world counts, a bound moves in
+ *     from 0 to @f$\min_i v_i@f$ when every @f$v_i > 0@f$, and to
+ *     @f$\max_i v_i@f$ when every @f$v_i < 0@f$.
  *   - @c MIN : @f$[\min_i v_i, \max_i v_i]@f$ in the non-empty
  *     subsets, plus @c +Infinity if the empty subset has positive
  *     probability under @c prov.
@@ -9097,6 +9103,9 @@ DECLARE
   child_pairs uuid[];
   values_arr float8[];
   total_probability float8;
+  vmin float8;
+  vmax float8;
+  some_always boolean;
 BEGIN
   IF input IS NULL THEN
     lo := NULL; hi := NULL; RETURN;
@@ -9151,16 +9160,30 @@ BEGIN
     child_pairs := get_children(atok);
 
     IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
-      -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
-      -- support is computed like SUM; count(*) arrives as 'sum'.
-      -- Empty agg_token: SUM is identically 0.
+      -- COUNT is the SUM of its per-row values: 1, or 0 for a row whose
+      -- counted column is NULL.  A row always present adds its value; any
+      -- other adds it or nothing.
       IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
         lo := 0; hi := 0; RETURN;
       END IF;
-      SELECT sum(LEAST(v, 0::float8)), sum(GREATEST(v, 0::float8))
-        INTO lo, hi
-        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+      SELECT sum(CASE WHEN always THEN v ELSE LEAST(v, 0::float8) END),
+             sum(CASE WHEN always THEN v ELSE GREATEST(v, 0::float8) END),
+             min(v), max(v), bool_or(always)
+        INTO lo, hi, vmin, vmax, some_always
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v,
+                     get_gate_type((get_children(c))[1]) = 'one' AS always
               FROM unnest(child_pairs) AS c) sub;
+      -- The support covers the worlds where the aggregate has a value.  An
+      -- empty group has none for SUM, and none for a grouped COUNT either,
+      -- there being no row to carry it; only a scalar COUNT (the top bit of
+      -- info2) is 0 there.  Unless a row is always present or the empty world
+      -- counts, at least one row is, so a bound moves in from 0 when every
+      -- value is on the same side of it.
+      IF NOT some_always
+         AND NOT (aggregation_function = 'count' AND (get_infos(atok)).info2 < 0) THEN
+        IF vmin > 0 THEN lo := vmin; END IF;
+        IF vmax < 0 THEN hi := vmax; END IF;
+      END IF;
     ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
       -- MIN/MAX over the empty input world are NULL, not ±Infinity (matching the
       -- moment surface): the empty world carries no value, so the support is just

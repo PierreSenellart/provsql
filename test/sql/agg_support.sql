@@ -2,16 +2,20 @@
 \pset format unaligned
 
 -- support() over aggregate tokens: the per-aggregate support-interval
--- computation (aggSupportOf) over possibly-present rows.
+-- computation (aggSupportOf) over possibly-present rows, covering the
+-- worlds where the aggregate has a value.  An empty group has none (no
+-- row carries it), except for a scalar count, which is 0.
 --   sum:   per-row contribution is the value if the row fires, else 0,
---          so [Σ min(0, vᵢ), Σ max(0, vᵢ)];
---   count: [0, n];
+--          so [Σ min(0, vᵢ), Σ max(0, vᵢ)]; since some row fires, a bound
+--          moves in from 0 to min vᵢ when every vᵢ > 0 (group 2), to max vᵢ
+--          when every vᵢ < 0 (group 3);
+--   count: the sum of per-row 1s, so [1, n] grouped, [0, n] scalar;
 --   min /
 --   max:   the extremum is one of the firing rows' values, so the union
 --          of the value intervals.
 
 CREATE TABLE sup(g int, v int);
-INSERT INTO sup VALUES (1,10),(1,-3),(1,7);
+INSERT INTO sup VALUES (1,10),(1,-3),(1,7),(2,3),(2,4),(3,-2),(3,-5);
 SELECT add_provenance('sup');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sup; END $$;
 
@@ -23,7 +27,7 @@ CREATE TABLE supr AS
          (support(max(v))).lo   AS max_lo, (support(max(v))).hi   AS max_hi
   FROM sup GROUP BY g;
 SELECT remove_provenance('supr');
-SELECT * FROM supr;
+SELECT * FROM supr ORDER BY g;
 DROP TABLE supr;
 
 -- avg has no world-independent support (the ratio depends on the row
@@ -37,26 +41,35 @@ SELECT (support(a)).lo FROM supa;
 -- (agg_token casts implicitly to the gate's uuid).  avg has no closed
 -- form there either, but the C side answers with the conservative
 -- all-real interval instead of raising.
--- count(*) lowers to a SUM of per-row 0/1 indicators; count(v) keeps the
--- COUNT operator at the gate level, so both arms are exercised.
+-- count(*) and count(v) both record the COUNT operator; a row whose v is
+-- NULL would count 0 in count(v).
 CREATE TABLE supg AS
   SELECT g, sum(v) AS s, count(*) AS c, count(v) AS cv, min(v) AS mn,
          max(v) AS mx, avg(v) AS a
   FROM sup GROUP BY g;
 SELECT remove_provenance('supg');
-SELECT (support(s::uuid)).*  FROM supg;
-SELECT (support(c::uuid)).*  FROM supg;
-SELECT (support(cv::uuid)).* FROM supg;
-SELECT (support(mn::uuid)).* FROM supg;
-SELECT (support(mx::uuid)).* FROM supg;
-SELECT (support(a::uuid)).*  FROM supg;
+SELECT (support(s::uuid)).*  FROM supg ORDER BY g;
+SELECT (support(c::uuid)).*  FROM supg ORDER BY g;
+SELECT (support(cv::uuid)).* FROM supg ORDER BY g;
+SELECT (support(mn::uuid)).* FROM supg ORDER BY g;
+SELECT (support(mx::uuid)).* FROM supg ORDER BY g;
+SELECT (support(a::uuid)).*  FROM supg ORDER BY g;
 
 -- A semimod gate (per-row contribution value . 1_{k fires}) as the support
 -- root: union of {0} and the value's range.
 SELECT get_gate_type(ch) AS t, (support(ch)).lo, (support(ch)).hi
-FROM (SELECT unnest(get_children(s::uuid)) AS ch FROM supg) sub
+FROM (SELECT unnest(get_children(s::uuid)) AS ch FROM supg WHERE g = 1) sub
 ORDER BY lo, hi;
 DROP TABLE supg;
+
+-- A scalar count (no GROUP BY) always returns its row, so an empty input
+-- counts 0 and stays in the support; a scalar sum over it is NULL, so its
+-- support moves in as a grouped one does.
+CREATE TABLE sups AS SELECT count(*) AS c, sum(v) AS s FROM sup WHERE g = 2;
+SELECT remove_provenance('sups');
+SELECT (support(c)).*, (support(c::uuid)).* FROM sups;
+SELECT (support(s)).*, (support(s::uuid)).* FROM sups;
+DROP TABLE sups;
 
 DROP TABLE supa;
 DROP TABLE sup;
