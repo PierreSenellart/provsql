@@ -459,3 +459,24 @@ def test_stems_rendered_for_categorical(
     # by continuous_analytical_curves.sql).
     expect(stems.locator("line")).to_have_count(3)
     expect(stems.locator("circle")).to_have_count(3)
+
+
+def test_rv_target_falls_back_to_distribution_profile(
+    page: Page, studio_url: str
+) -> None:
+    """After a Boolean evaluation (Probability), opening a random variable
+    hides that choice; the strip falls back to Distribution profile, not to
+    Formula, which precedes the Distribution group in the menu."""
+    page.goto(studio_url + "/circuit")
+    expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
+    _run_query_and_wait(
+        page, "SELECT id, reading, provsql FROM sensors WHERE id = 's1';", 1
+    )
+    row = page.locator("#result-body tr").first
+    row.locator("td").last.click()   # the row's Boolean provenance
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+    page.locator("#eval-semiring").select_option(value="probability")
+    row.locator("td").nth(1).click()  # the random variable
+    expect(page.locator("#eval-semiring")).to_have_value(
+        "distribution-profile", timeout=8000
+    )

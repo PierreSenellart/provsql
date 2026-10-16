@@ -2259,11 +2259,19 @@
         ifComp.disabled = ifComp.hidden;
         if (ifComp.hidden && comp.value === 'inversion-free') comp.value = 'd4';
       }
-      // If the active selection just got hidden, fall back to the first
-      // still-visible option so the run button stays meaningful.
+      // If the active selection just got hidden, fall back to a
+      // still-visible option so the run button stays meaningful: the
+      // distribution profile on a value-carrying target (random variable,
+      // aggregate, conditioned value), where it is the natural first look,
+      // otherwise the first visible option. Without the preference a
+      // random variable reached after a Boolean evaluation landed on
+      // Formula, which precedes the Distribution group in the menu.
       const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
       if (firstVisible && (!cur || cur.hidden)) {
-        sel.value = firstVisible;
+        const profile = sel.querySelector('option[value="distribution-profile"]');
+        const preferProfile = (isScalar || aggTarget || condKind === 'moment')
+          && profile && !profile.hidden;
+        sel.value = preferProfile ? 'distribution-profile' : firstVisible;
         return true;
       }
       return false;
