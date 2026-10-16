@@ -357,14 +357,20 @@ custom and “Other” entries below:
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema.
 * **Other**: ``probability`` and ``PROV-XML export``. The
-  probability method picker (see :doc:`probabilities`) groups exact
-  methods (``(default)``, ``independent``, ``possible-worlds``,
+  probability method picker (see :doc:`probabilities`) starts with the
+  three guarantees, for which ProvSQL's cost-based chooser picks the
+  method: ``exact`` (the cheapest exact method), ``relative (1±ε)`` and
+  ``additive (±ε)``; the method actually used is shown next to the
+  result. It then groups the individual methods: exact
+  (``independent``, ``possible-worlds``, ``sieve``, ``d-tree``,
   ``tree-decomposition``, ``compilation``), weighted model counting
-  (``wmc``, with a tool picker), and approximate methods
-  (``monte-carlo``, ``karp-luby``). Two further exact methods appear
-  only when the target's structure admits them: ``inversion-free`` on a
-  root carrying an inversion-free certificate, and ``mobius`` on a
-  Möbius (μ) root. PROV-XML export uses :sqlfunc:`to_provxml`; see
+  (``wmc``, with a tool picker), and approximate (``monte-carlo``,
+  ``karp-luby``, ``stopping-rule``). Further exact methods appear only
+  when the target's structure admits them: ``inversion-free`` on a
+  root carrying an inversion-free certificate, ``mobius`` on a
+  Möbius (μ) root, and ``sq-rewrite``, ``bounded-jw`` or
+  ``reachability`` on a root built by the corresponding planner-time
+  rewrite. PROV-XML export uses :sqlfunc:`to_provxml`; see
   :doc:`export`.
 
 The mapping picker lists only the mappings whose ``value`` type suits
@@ -850,7 +856,9 @@ evaluation strip) preloaded with the token.
 
 For a plain provenance token, the circuit cell offers
 :fa:`bolt` :guilabel:`Evaluate`, which inserts an **evaluation cell**: a compiled
-semiring or probability method, optional free-text arguments and
+semiring or probability method (the same picker as Circuit mode's,
+starting from ``exact``, without the methods that depend on the root's
+structure), optional free-text arguments and
 provenance mapping, run against the cell's token. The invocation and
 its result are saved with the notebook, so a loaded notebook shows its
 evaluations without recomputing them. Aggregate and

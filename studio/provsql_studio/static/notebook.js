@@ -681,8 +681,7 @@
                   `<option value="${v}"${v === (cell.semiring || 'probability') ? ' selected' : ''}>${l}</option>`).join('')}
               </select>
               <select class="nb-eval__method" title="Probability method (the full per-method controls live in Circuit mode)">
-                ${EVAL_METHODS.map((m) =>
-                  `<option value="${m}"${m === (cell.method || '') ? ' selected' : ''}>${m || '(default)'}</option>`).join('')}
+                ${evalMethodOptions(normalizeEvalMethod(cell.method))}
               </select>
               <input type="text" class="nb-eval__args" placeholder="arguments (eps=…, samples=…)"
                      title="Optional method arguments, key=value comma-separated (e.g. eps=0.05,delta=0.01 or a sample count)"
@@ -1409,13 +1408,36 @@
     el.querySelector('.nb-eval__args').hidden = !isProb;
   }
 
-  // '' is the default: the chooser picks the cheapest exact method, so a
-  // separate 'exact' entry would be redundant and is left out.
-  const EVAL_METHODS = [
-    '', 'relative', 'additive', 'independent', 'possible-worlds',
-    'sieve', 'd-tree', 'tree-decomposition', 'compilation', 'wmc',
-    'monte-carlo', 'karp-luby', 'stopping-rule',
+  // Same grouping as Circuit mode's method picker: first the three
+  // guarantees, where the cost chooser picks the mechanism (exact = the
+  // cheapest exact method), then the individual methods. The root-specific
+  // routes (inversion-free / mobius / sq-rewrite / bounded-jw /
+  // reachability) are offered only by Circuit mode, which knows the root;
+  // an eval cell loaded with one keeps it as an extra entry.
+  const EVAL_METHOD_GROUPS = [
+    ['By guarantee', [['exact', 'exact'], ['relative', 'relative (1±ε)'],
+                      ['additive', 'additive (±ε)']]],
+    ['Exact', [['independent'], ['possible-worlds'], ['sieve'], ['d-tree'],
+               ['tree-decomposition'], ['compilation']]],
+    ['Weighted model counting', [['wmc']]],
+    ['Approximate', [['monte-carlo'], ['karp-luby'], ['stopping-rule']]],
   ];
+  const EVAL_METHODS = EVAL_METHOD_GROUPS.flatMap(([, ms]) => ms.map(([v]) => v));
+
+  // Notebooks saved before the 'exact' entry stored the chooser as ''
+  // (or 'default'); read those as 'exact'.
+  function normalizeEvalMethod(m) {
+    return (!m || m === 'default') ? 'exact' : m;
+  }
+
+  function evalMethodOptions(selected) {
+    const opt = (v, l) => `<option value="${env.escapeAttr(v)}"`
+      + `${v === selected ? ' selected' : ''}>${env.escapeHtml(l || v)}</option>`;
+    return (EVAL_METHODS.includes(selected) ? '' : opt(selected))
+      + EVAL_METHOD_GROUPS.map(([label, ms]) =>
+        `<optgroup label="${label}">${ms.map(([v, l]) => opt(v, l)).join('')}</optgroup>`)
+        .join('');
+  }
 
   // Notice variant of the result renderer, ported from circuit.js's
   // renderEvalNotice: the eval strip floors provsql.verbose_level at 5
@@ -2117,7 +2139,7 @@
         const p = c.metadata.provsql;
         cell.token = String(p.token || '');
         cell.semiring = String(p.semiring || 'probability');
-        cell.method = String(p.method || '');
+        cell.method = normalizeEvalMethod(String(p.method || ''));
         cell.args = String(p.arguments || '');
         cell.mapping = String(p.mapping || '');
         cell.assumed = (p.assumed && typeof p.assumed === 'object')

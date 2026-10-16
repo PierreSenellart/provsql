@@ -825,6 +825,9 @@ def test_eval_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None
     _make_circuit_cell(page)
     page.locator(".nb-circ__eval").click()
     ev = page.locator(".nb-cell--eval")
+    # The picker shows the method the cell actually runs: exact (the
+    # cost chooser), not a blank "(default)" entry.
+    expect(ev.locator(".nb-eval__method")).to_have_value("exact")
     ev.locator(".nb-cell__run").click()
     expect(ev.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
 
@@ -849,6 +852,14 @@ def test_eval_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None
     ev2 = page.locator(".nb-cell--eval")
     expect(ev2.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
     expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
+
+    # A notebook saved before the exact entry stored the chooser as an
+    # empty method; it loads as exact.
+    del meta["method"]
+    legacy = dl.path().parent / "legacy-eval.ipynb"
+    legacy.write_text(json.dumps(doc))
+    page.locator("#nb-load-input").set_input_files(str(legacy))
+    expect(page.locator(".nb-cell--eval .nb-eval__method").last).to_have_value("exact", timeout=8000)
 
 
 def test_open_example_menu_and_deep_link(page: Page, studio_url: str) -> None:
