@@ -52,11 +52,18 @@ FROM e;
 -- ---------------------------------------------------------------------
 -- Identity conventions: conditioning on a certain / absent event is inert.
 -- ---------------------------------------------------------------------
+-- Read without the provenance column the rewriting may add (the result row
+-- is certain): only the two identities are the point here.
+CREATE TABLE cond_identity AS
 WITH d AS (
   SELECT (SELECT provenance() FROM world WHERE disease GROUP BY id) AS dtok)
 SELECT (cond(dtok, NULL)        = dtok) AS null_evidence_identity,
        (cond(dtok, gate_one())  = dtok) AS one_evidence_identity
 FROM d;
+SET provsql.active = off;
+SELECT null_evidence_identity, one_evidence_identity FROM cond_identity;
+SET provsql.active = on;
+DROP TABLE cond_identity;
 
 -- ---------------------------------------------------------------------
 -- Folding (sequential Bayesian update): (X|A)|B = X|(A∧B); the gate stays

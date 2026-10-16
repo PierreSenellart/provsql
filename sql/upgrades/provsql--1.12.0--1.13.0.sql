@@ -6299,5 +6299,108 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
+
+/* Volatility and parallel safety (1.13): a function that may sample (a Monte
+ * Carlo fallback) or draws a fresh random variable is VOLATILE; one that
+ * reaches probability_evaluate, or whose SQL / PL/pgSQL body runs queries
+ * while volatile (which fails in the leader of a parallel statement that
+ * writes), is PARALLEL UNSAFE; the deterministic gate builders are IMMUTABLE
+ * and the deterministic readers STABLE. */
+ALTER FUNCTION agg_raw_moment(agg_token, integer, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION agg_token_cond(agg_token, uuid) IMMUTABLE PARALLEL SAFE;
+ALTER FUNCTION and_agg_sfunc(uuid, uuid) IMMUTABLE PARALLEL SAFE;
+ALTER FUNCTION beta(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION beta(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION beta(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION beta(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION binomial(integer, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION binomial(integer, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION categorical(double precision[], double precision[]) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION categorical_from_log_pmf(double precision[], double precision[]) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION central_moment(anyelement, integer, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION chi_squared(double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION cond(uuid, uuid) IMMUTABLE PARALLEL SAFE;
+ALTER FUNCTION correlation(random_variable, random_variable, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION covariance(random_variable, random_variable, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION empirical_cdf(double precision[], double precision[]) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION empirical_samples(double precision[]) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION entropy(random_variable, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION erlang(integer, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION evidence_as_observation(uuid) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION expected(anyelement, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION exponential(double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION exponential(random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION gamma(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION gamma(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION gamma(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION gamma(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION geometric(double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION geometric(random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION given(uuid) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION gmm(double precision[], double precision[], double precision[]) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION hypergeometric(integer, integer, integer) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gamma(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gamma(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gamma(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gamma(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gaussian(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gaussian(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gaussian(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION inverse_gaussian(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION kl(random_variable, random_variable) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION logistic(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION logistic(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION logistic(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION logistic(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION lognormal(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION lognormal(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION lognormal(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION lognormal(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION mixture(double precision, random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION moment(anyelement, integer, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION mutual_information(random_variable, random_variable) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION negative_binomial(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION negative_binomial(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION negative_binomial(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION negative_binomial(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION normal(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION normal(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION normal(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION normal(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION observe(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION pareto(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION pareto(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION pareto(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION pareto(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION poisson(double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION poisson(random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION probability(uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION probability_evaluate(uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION quantile(anyelement, double precision, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION random_variable_cond(random_variable, uuid) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION rv_analytical_curves(uuid, integer, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_correlation(uuid, uuid, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_covariance(uuid, uuid, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_entropy(uuid, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_kl(uuid, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_moment(uuid, integer, boolean, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_mutual_information(uuid, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION rv_parametric1(text, uuid) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION rv_parametric2(text, uuid, double precision, uuid, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION rv_quantile(uuid, double precision, uuid) VOLATILE PARALLEL SAFE;
+ALTER FUNCTION stddev(random_variable, uuid) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION sub_circuit_with_desc(uuid, regclass) STABLE PARALLEL RESTRICTED;
+ALTER FUNCTION support(anyelement, uuid, text, text) STABLE PARALLEL SAFE;
+ALTER FUNCTION uniform(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION uniform(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION uniform(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION uniform(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION variance(anyelement, uuid, text, text) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION wald(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION weibull(double precision, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION weibull(double precision, random_variable) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION weibull(random_variable, double precision) VOLATILE PARALLEL UNSAFE;
+ALTER FUNCTION weibull(random_variable, random_variable) VOLATILE PARALLEL UNSAFE;
+
 SELECT reset_constants_cache();
 

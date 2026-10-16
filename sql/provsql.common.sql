@@ -571,7 +571,7 @@ BEGIN
   PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev, jnt]);
   RETURN result;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
 
 /**
@@ -683,7 +683,7 @@ $$
 BEGIN
   RETURN provsql.evidence_as_observation(evidence);
 END
-$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE
    SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 /**
@@ -2357,7 +2357,7 @@ BEGIN
   USING token LOOP;
   RETURN;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED;
 
 /**
  * @brief Identify which table and how many columns a provenance token belongs to
@@ -2594,7 +2594,7 @@ CREATE OR REPLACE FUNCTION rv_analytical_curves(
   token UUID, samples INT DEFAULT 100, prov UUID DEFAULT gate_one())
   RETURNS jsonb
   AS 'provsql','rv_analytical_curves'
-  LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Draw conditional Monte Carlo samples from a scalar gate.
@@ -3956,7 +3956,7 @@ BEGIN
   PERFORM create_gate(result, 'conditioned', ARRAY[tok, ev]);
   RETURN agg_token_make(result, agg_token_value(a));
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OPERATOR | (
@@ -4442,7 +4442,7 @@ BEGIN
                               family || ':' || s1 || ',' || s2);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Internal: build a one-parameter latent @c gate_rv (rate/scale).
@@ -4457,7 +4457,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok], NULL, NULL, family || ':$0');
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /*
  * Token-accepting constructor overloads.  For each numeric family the
@@ -4472,117 +4472,117 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 -- normal(mu, sigma)
 CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION normal(mu double precision, sigma random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- logistic(mu, s)
 CREATE OR REPLACE FUNCTION logistic(mu random_variable, s double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION logistic(mu double precision, s random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION logistic(mu random_variable, s random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- uniform(a, b)
 CREATE OR REPLACE FUNCTION uniform(a random_variable, b double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION uniform(a double precision, b random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION uniform(a random_variable, b random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- exponential(lambda)
 CREATE OR REPLACE FUNCTION exponential(lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric1('exponential', ($1)::uuid); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- gamma(k, lambda)
 CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION gamma(k double precision, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- lognormal(mu, sigma)
 CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION lognormal(mu double precision, sigma random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- weibull(k, lambda)
 CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION weibull(k double precision, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- pareto(xm, alpha)
 CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION pareto(xm double precision, alpha random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- beta(alpha, beta)
 CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION beta(alpha double precision, beta random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- inverse_gamma(alpha, beta)
 CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION inverse_gamma(alpha double precision, beta random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 -- inverse_gaussian(mu, lambda)
 CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda double precision)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION inverse_gaussian(mu double precision, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a normal-distribution random variable
@@ -4631,7 +4631,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'normal:' || mu || ',' || sigma);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a logistic-distribution random variable Logistic(μ, s)
@@ -4671,7 +4671,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'logistic:' || mu || ',' || s);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a uniform-distribution random variable on [a, b]
@@ -4707,7 +4707,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'uniform:' || a || ',' || b);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct an exponential-distribution random variable with rate λ
@@ -4738,7 +4738,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'exponential:' || lambda);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct an Erlang-distribution random variable, sum of
@@ -4785,7 +4785,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'erlang:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a gamma-distribution random variable with shape @p k
@@ -4833,7 +4833,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'gamma:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a chi-squared random variable with @p k degrees of
@@ -4860,7 +4860,7 @@ BEGIN
   END IF;
   RETURN provsql.gamma(k / 2, 0.5);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a log-normal random variable: @c exp of a
@@ -4901,7 +4901,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'lognormal:' || mu || ',' || sigma);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Weibull random variable with shape @p k and
@@ -4941,7 +4941,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'weibull:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Pareto random variable with scale (minimum)
@@ -4977,7 +4977,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'pareto:' || xm || ',' || alpha);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct an inverse-gamma random variable with shape
@@ -5014,7 +5014,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gamma:' || alpha || ',' || beta);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct an inverse-Gaussian (Wald) random variable with mean
@@ -5051,7 +5051,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gaussian:' || mu || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Wald distribution: alias for @ref inverse_gaussian.
@@ -5062,7 +5062,7 @@ CREATE OR REPLACE FUNCTION wald(mu double precision, lambda double precision)
   RETURNS random_variable AS
 $$
   SELECT provsql.inverse_gaussian(mu, lambda);
-$$ LANGUAGE sql VOLATILE PARALLEL SAFE;
+$$ LANGUAGE sql VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Build a discrete (categorical) random variable from outcomes
@@ -5117,7 +5117,7 @@ BEGIN
   END LOOP;
   RETURN provsql.categorical(kept_p, kept_o);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Poisson random variable with mean @p lambda, as a
@@ -5171,7 +5171,7 @@ BEGIN
   END IF;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Poisson with a LATENT rate: @c poisson(random_variable).
@@ -5187,7 +5187,7 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION poisson(lambda random_variable)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric1('poisson', ($1)::uuid); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Beta(α, β) random variable on the unit interval
@@ -5225,7 +5225,7 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'beta:' || alpha || ',' || beta);
   RETURN provsql.random_variable_make(token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Binomial(n, p) random variable (number of
@@ -5272,7 +5272,7 @@ BEGIN
   END LOOP;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Binomial with a fixed trial count and a LATENT success
@@ -5289,7 +5289,7 @@ CREATE OR REPLACE FUNCTION binomial(n integer, p random_variable)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric2('binomial', NULL, $1::double precision,
                                  ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Geometric(p) random variable -- the number of
@@ -5326,7 +5326,7 @@ BEGIN
   END LOOP;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Geometric with a LATENT success probability: @c geometric(random_variable).
@@ -5339,7 +5339,7 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION geometric(p random_variable)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric1('geometric', ($1)::uuid); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a Hypergeometric(N, K, n) random variable: the
@@ -5387,7 +5387,7 @@ BEGIN
   END LOOP;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Construct a negative-binomial random variable: the number of
@@ -5440,7 +5440,7 @@ BEGIN
   END LOOP;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /*
  * NegativeBinomial with a LATENT parameter: the count r (number of successes)
@@ -5452,15 +5452,15 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION negative_binomial(r double precision, p random_variable)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric2('negative_binomial', NULL, $1, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p double precision)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, NULL, $2); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p random_variable)
   RETURNS random_variable AS
 $$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
-  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+  LANGUAGE sql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Catalog of the registered continuous-distribution families.
@@ -5614,7 +5614,7 @@ BEGIN
   PERFORM provsql.set_prob(p_token, p_value);
   RETURN provsql.mixture(p_token, x, y);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Categorical-RV constructor over explicit (probabilities,
@@ -5745,7 +5745,7 @@ BEGIN
   PERFORM provsql.create_gate(mix_token, 'mixture', mix_wires);
   RETURN provsql.random_variable_make(mix_token);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Gaussian-mixture-model (GMM) constructor.
@@ -5832,7 +5832,7 @@ BEGIN
   END LOOP;
   RETURN acc;
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Empirical-samples constructor: the ecdf of a sample bundle as
@@ -5905,7 +5905,7 @@ BEGIN
   END IF;
   RETURN provsql.categorical(probs, outcomes);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Empirical-CDF constructor: a piecewise-linear CDF table as a
@@ -5999,7 +5999,7 @@ BEGIN
   END LOOP;
   RETURN acc;
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Lift a deterministic constant into a random_variable
@@ -6576,8 +6576,8 @@ BEGIN
   PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev]);
   RETURN (result)::random_variable;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
-   SECURITY DEFINER PARALLEL SAFE;
+$$ LANGUAGE plpgsql VOLATILE SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL UNSAFE;
 
 CREATE OPERATOR | (
   LEFTARG   = random_variable,
@@ -6716,7 +6716,7 @@ BEGIN
                          provsql.get_extra(datum_gate)::double precision);
 END
 $$ LANGUAGE plpgsql VOLATILE
-   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL UNSAFE;
 
 /**
  * @brief Internal: bind an observed datum to a random-variable leaf --
@@ -6762,7 +6762,7 @@ BEGIN
   RETURN result;
 END
 $$ LANGUAGE plpgsql VOLATILE
-   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL UNSAFE;
 
 /**
  * @brief Conjunction state function for @c and_agg (evidence @c gate_times).
@@ -6775,7 +6775,7 @@ CREATE OR REPLACE FUNCTION and_agg_sfunc(state uuid, ev uuid)
   RETURNS uuid AS
 $$
   SELECT provsql.provenance_times(state, ev);
-$$ LANGUAGE sql PARALLEL SAFE;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Conjoin per-row evidence tokens into one evidence circuit.
@@ -8327,7 +8327,7 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
-  'provsql','probability_evaluate' LANGUAGE C STABLE;
+  'provsql','probability_evaluate' LANGUAGE C VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Short alias of @ref probability_evaluate.
@@ -8347,7 +8347,7 @@ CREATE OR REPLACE FUNCTION probability(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
-  'provsql','probability_evaluate' LANGUAGE C STABLE;
+  'provsql','probability_evaluate' LANGUAGE C VOLATILE PARALLEL UNSAFE;
 
 /**
  * @brief Probability of a Boolean event over random variables.
@@ -8426,7 +8426,7 @@ CREATE OR REPLACE FUNCTION expected(
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS $$
   SELECT moment(input, 1, prov, method, arguments);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL UNSAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Internal: shared C entry point for variance / moment / central_moment.
@@ -8443,7 +8443,7 @@ CREATE OR REPLACE FUNCTION rv_moment(
   token uuid, k integer, central boolean,
   prov uuid DEFAULT gate_one())
   RETURNS double precision
-  AS 'provsql','rv_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_moment' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /** @brief Exact E[AVG^k | COUNT >= 1] over independent rows (the joint
  *  (sum, count) fold); NULL when the shape is out of scope (shared
@@ -8953,7 +8953,7 @@ BEGIN
 
   RETURN total;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the variance Var[X | prov] of a probabilistic scalar
@@ -9035,7 +9035,7 @@ BEGIN
       USING ERRCODE = 'feature_not_supported',
             DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the raw moment E[X^k | prov] of a probabilistic scalar
@@ -9091,7 +9091,7 @@ BEGIN
       USING ERRCODE = 'feature_not_supported',
             DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Internal: rv-side quantile computation.
@@ -9110,7 +9110,7 @@ CREATE OR REPLACE FUNCTION rv_quantile(
   token uuid, p double precision,
   prov uuid DEFAULT gate_one())
   RETURNS double precision
-  AS 'provsql','rv_quantile' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_quantile' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Compute the p-quantile (inverse CDF) of a probabilistic scalar
@@ -9163,7 +9163,7 @@ BEGIN
       USING ERRCODE = 'feature_not_supported',
             DETAIL = 'provsql-reason: quantile-input-type; scope: gap';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Internal: rv-side support computation
@@ -9345,7 +9345,7 @@ BEGIN
       USING ERRCODE = 'feature_not_supported',
             DETAIL = 'provsql-reason: support-input-type; scope: gap';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the central moment E[(X - E[X|prov])^k | prov]
@@ -9440,12 +9440,12 @@ BEGIN
       USING ERRCODE = 'feature_not_supported',
             DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref covariance (uuid-level binding). */
 CREATE OR REPLACE FUNCTION rv_covariance(x uuid, y uuid, prov uuid)
   RETURNS double precision
-  AS 'provsql','rv_covariance' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_covariance' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Covariance Cov(X, Y) = E[XY] − E[X]·E[Y] of two random variables.
@@ -9474,7 +9474,7 @@ CREATE OR REPLACE FUNCTION covariance(
   x random_variable, y random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
   SELECT provsql.rv_covariance((x)::uuid, (y)::uuid, prov);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL SAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Standard deviation σ(X) = √Var(X) of a random variable.
@@ -9493,12 +9493,12 @@ CREATE OR REPLACE FUNCTION stddev(
   x random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
   SELECT sqrt(provsql.variance(x, prov));
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL UNSAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref correlation (uuid-level binding). */
 CREATE OR REPLACE FUNCTION rv_correlation(x uuid, y uuid, prov uuid)
   RETURNS double precision
-  AS 'provsql','rv_correlation' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_correlation' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Pearson correlation ρ(X, Y) = Cov(X, Y) / (σ(X)·σ(Y)).
@@ -9519,12 +9519,12 @@ CREATE OR REPLACE FUNCTION correlation(
   x random_variable, y random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
   SELECT provsql.rv_correlation((x)::uuid, (y)::uuid, prov);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL SAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref entropy (uuid-level binding). */
 CREATE OR REPLACE FUNCTION rv_entropy(token uuid, prov uuid)
   RETURNS double precision
-  AS 'provsql','rv_entropy' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_entropy' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Entropy H(X) of a random variable, in nats.
@@ -9546,12 +9546,12 @@ CREATE OR REPLACE FUNCTION entropy(
   x random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
   SELECT provsql.rv_entropy((x)::uuid, prov);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL SAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref kl (uuid-level binding). */
 CREATE OR REPLACE FUNCTION rv_kl(p uuid, q uuid)
   RETURNS double precision
-  AS 'provsql','rv_kl' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_kl' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Kullback-Leibler divergence KL(P || Q), in nats.
@@ -9569,13 +9569,13 @@ CREATE OR REPLACE FUNCTION rv_kl(p uuid, q uuid)
 CREATE OR REPLACE FUNCTION kl(p random_variable, q random_variable)
   RETURNS double precision AS $$
   SELECT provsql.rv_kl((p)::uuid, (q)::uuid);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL SAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref mutual_information (uuid-level
  *  binding). */
 CREATE OR REPLACE FUNCTION rv_mutual_information(x uuid, y uuid)
   RETURNS double precision
-  AS 'provsql','rv_mutual_information' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','rv_mutual_information' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 /**
  * @brief Mutual information I(X; Y), in nats.
@@ -9593,7 +9593,7 @@ CREATE OR REPLACE FUNCTION mutual_information(
   x random_variable, y random_variable)
   RETURNS double precision AS $$
   SELECT provsql.rv_mutual_information((x)::uuid, (y)::uuid);
-$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+$$ LANGUAGE sql PARALLEL SAFE VOLATILE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the Shapley value of an input variable
