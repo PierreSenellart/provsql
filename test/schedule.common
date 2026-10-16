@@ -1,325 +1,121 @@
-# Setting up the database
+# The pg_regress schedule.  A line runs its tests in parallel, one backend
+# each, and the lines run one after the other.  So that the suite is fast,
+# and so that it exercises ProvSQL under concurrency, tests share a line
+# unless one of these keeps them apart:
+#   - a test that changes or reads what every test sees (the extension
+#     itself, the tool registry, the whole circuit store, the probabilities
+#     or tokens of the shared fixture personnel, the content of every
+#     tracked table) runs on a line of its own;
+#   - a test that reads an object another test creates (a table, a mapping,
+#     a function) runs on a later line than it;
+#   - two tests that create objects of the same name do not share a line
+#     (a test leaving an object behind runs after those that create one of
+#     that name).
+# A new test that only creates and drops objects of its own, under names no
+# other test uses, can join any line.  schedule.14 and schedule.15 are
+# appended for PostgreSQL 14+ and 15+, then extension_upgrade (Makefile).
+
 test: setup
 
-# Per-database circuit isolation and mmap file placement
+# Each runs alone: they create databases, or check the store as a whole.
 test: per_db_circuit
 
-# Adding a provenance table
+# The shared fixture personnel, then its provenance removed and re-added,
+# before anything maps its tokens.
 test: add_provenance
 test: remove_add_provenance
 
-# Per-relation metadata follows the transaction that writes it
 test: transactional_metadata
-
-# Probabilities are written once, and a rolled-back write is cleared
 test: write_once_probability
-
-# Durability of the store: the at-commit barrier and the consistency report
 test: store_durability
 
-# Basic checks
-# identify_token scans every provenance-tracked relation in the database, so it
-# must not run concurrently with tests that create/drop such relations (e.g.
-# subquery's subquery_result): a dropped-but-still-catalogued table makes its
-# dynamic "SELECT * FROM <rel>" fail. Keep it on its own serial line.
-test: provenance_in_from subquery create_provenance_mapping
+# Basic checks.  identify_token and resolve_input answer from the content of
+# every tracked table, so each runs alone; the gate-cache pair must run in
+# two backends, one after the other.
+test: provenance_in_from subquery
+test: create_provenance_mapping
 test: identify_token
-test: circuit_subgraph
-test: simplify_identities
+test: circuit_subgraph simplify_identities
 test: resolve_input
 test: annotation_gate
-# Regression for the get_gate_type → get_children cache-poisoning bug:
-# the two tests must run in separate backends (sequential `test:` lines),
-# so the cache for gate_cache_consistency starts empty.
 test: gate_cache_setup
 test: gate_cache_consistency
 
-# Introducing a few semirings
-test: sr_formula sr_counting sr_boolean sr_why sr_how sr_which sr_tropical sr_viterbi sr_lukasiewicz
-test: sr_minmax sr_maxmin sr_subset capability
-test: sr_qualified_mapping
-test: formula counting boolean
+# Semirings.  sr_counting, sr_boolean, sr_minmax and formula create the
+# mappings and functions the next lines read.
+test: sr_formula sr_counting sr_boolean sr_why sr_how sr_which sr_tropical sr_viterbi sr_lukasiewicz sr_minmax sr_maxmin sr_subset capability sr_qualified_mapping
 
-# Test of various ProvSQL features and SQL language capabilities
-test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values verbose_setops union_untracked
-test: star_provsql
-test: star_hint
-test: null_semantics
-test: nonzero
-test: cte
-test: active
-test: aggregation
-test: agg_kinds
-test: aggregate_null
-test: outer_join
-test: nested_antijoin
-test: sublink_block_shapes
-test: scalar_subquery
-test: join_syntax_equivalence
-test: agg_distinct agg_order_by agg_arithmetic agg_functions agg_deviation
-test: window_aggregates
+# SQL language coverage.  unsupported_features drops and re-creates the
+# extension, so it runs alone.
+test: formula counting boolean deterministic union_all
+test: union nested_union union_nary distinct group_by_provenance except null
+test: unsupported_features
+test: no_attribute resjunk values verbose_setops union_untracked star_provsql star_hint null_semantics nonzero cte active aggregation agg_kinds aggregate_null outer_join nested_antijoin sublink_block_shapes scalar_subquery join_syntax_equivalence
 
-# Rows kept for their provenance alone: dropped where cheaply impossible,
-# and never failing a division SQL does not
-test: phantom_rows
-test: agg_distinct_null_where
-test: agg_distinct_expr
-test: agg_token_casts
-test: agg_support
-test: agg_case
-test: agg_avg_moment
-test: agg_token_text_as_uuid
-test: create_as
-test: insert_select_provenance
-test: no_zero_gate
-test: having_on_aggregation
-test: formula_on_having
-test: where_on_aggregation
-test: choose
-test: agg_token_text
-test: empty_count
+# Aggregation, before personnel has probabilities (agg_arithmetic reads it
+# without them).
+test: agg_distinct agg_order_by agg_arithmetic agg_functions agg_deviation window_aggregates phantom_rows agg_distinct_null_where agg_distinct_expr agg_token_casts agg_support agg_case agg_avg_moment agg_token_text_as_uuid create_as insert_select_provenance no_zero_gate having_on_aggregation formula_on_having where_on_aggregation
+test: choose agg_token_text empty_count
 
-# Adding probabilities
+# The probabilities and descriptions of personnel, which everything below
+# reads.
 test: probability_setup
-
-# Adding descriptions
 test: viewing_setup
 
-# Probability computation using internal methods
-test: possible_worlds monte_carlo karp_luby stopping_rule sieve probability_paths probability_bounds dtree
-
-# Regression: SUM and AVG over the same children must produce
-# distinct agg gates (the aggfnoid is part of the gate UUID).
-test: agg_uuid_aggfnoid
-test: gate_builders
-test: gate_builders_agg
-
-# Complex test relying on probabilities
-test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_safe_join_count having_safe_join_agg having_numeric having_union having_group_by_const having_grouped_column having_always_true having_min_max_scan
+# Probability computation, HAVING, and conditioning
+test: possible_worlds monte_carlo karp_luby stopping_rule sieve probability_paths probability_bounds dtree agg_uuid_aggfnoid gate_builders gate_builders_agg sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_safe_join_count having_safe_join_agg
+test: having_numeric having_union having_group_by_const having_grouped_column having_always_true having_min_max_scan
 test: having_bool_agg
-test: having_array_agg
-test: agg_filter
-test: set_operation_nesting
-test: set_operation_with_ties
-test: except_untracked_arm
-test: null_safe_join
-test: limit_warning limit_rank implicit_freeze
-test: having_impossible
-test: having_choose
-test: having_first_present
-test: having_correlated
-test: having_count_distinct
-test: scalar_empty_having
-test: having_sum_zero
-test: having_bid
+test: having_array_agg agg_filter set_operation_nesting set_operation_with_ties except_untracked_arm null_safe_join limit_warning limit_rank implicit_freeze having_impossible
+test: having_choose having_first_present
+test: having_correlated having_count_distinct scalar_empty_having having_sum_zero having_bid having_certified having_arithmetic having_agg_fptras insert_select_sublink insert_select_provsql_column
+test: inert_provenance_sublink conditioning given_conditioning rv_conditioning agg_conditioning
 
-# Certified HAVING enumerations: the possible-worlds DNF over independent
-# base contributors carries the d-DNNF certificate, so 'independent'
-# evaluates AVG / multi-aggregate arithmetic / choose() HAVING exactly
-test: having_certified
-test: having_arithmetic
-test: having_agg_fptras
-test: insert_select_sublink
-test: insert_select_provsql_column
-test: inert_provenance_sublink
-test: conditioning
-test: given_conditioning
-test: rv_conditioning
-test: agg_conditioning
-test: predicate_conditioning
-test: provenance_not
-test: mixed_selection
-test: last_eval_method
+# External compilers, tree decompositions, and knowledge-compilation helpers
+test: predicate_conditioning provenance_not mixed_selection last_eval_method d4 dsharp weightmc c2d minic2d d4_timeout external_tool_timeout semiring_timeout treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key expected
+test: large_circuit btw_reachability tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf compile_to_ddnnf_inversion_free ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
 
-# Probability computation using external software
-test: d4 dsharp weightmc c2d minic2d
-test: d4_timeout
-test: external_tool_timeout
-test: semiring_timeout
-
-# Probability computation using tree decompositions, independent
-# probability computation, and default computation
-test: treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key
-test: expected
-test: large_circuit
-
-# Two-terminal network reliability compiled along a tree decomposition
-# of the data graph (bounded-treewidth data)
-test: btw_reachability
-
-# Knowledge-compilation demo helpers (DOT/CNF surfaces)
-test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf compile_to_ddnnf_inversion_free ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
-
-# Expected Shapley and Banzhaf value computation
+# Shapley and Banzhaf values, and makeDD: they rewrite the tokens or
+# probabilities of personnel, so each runs alone.
 test: shapley
 test: banzhaf
 test: shapley_mulinput
-
-# makeDD route is cost-selected by default ('auto'); named routes force one
 test: makedd_auto
 
-# Viewing circuit
-test: view_circuit_multiple
-test: view_circuit_mulinput
+test: view_circuit_multiple view_circuit_mulinput tool_search_path
 
-# External-tool PATH override (provsql.tool_search_path GUC)
-test: tool_search_path
-
-# External-tool registry (catalog SQL surface + registry-gated dispatch)
+# The external-tool registry and the KCMCP client change what every
+# probability computation uses, so each runs alone (the KCMCP tests skip
+# unless test/kcmcp/with-tdkc.sh provisioned a server).
 test: tool_registry
-
-# KCMCP client: compile over a socket to a warm server, in endpoint and
-# managed modes (skip unless test/kcmcp/with-tdkc.sh provisioned a server).
 test: kcmcp_client_endpoint
 test: kcmcp_client_managed
 
-# Tables with keywords as name
-test: keyword_table
+# Where-provenance, the tutorial, and the case studies
+test: keyword_table where_provenance where_provenance_join where_provenance_or tutorial casestudy1
+test: casestudy2 casestudy3 casestudy5 group_by_empty grouping_sets continuous_basic continuous_sampler continuous_arithmetic continuous_transforms
 
-# Where-provenance
-test: where_provenance
-test: where_provenance_join
-test: where_provenance_or
-
-# Full example from tutorial
-test: tutorial
-
-# Case Study 1: The Intelligence Agency
-test: casestudy1
-
-# Case Study 2: The Open Science Database
-test: casestudy2
-
-# Case Study 3: Île-de-France Public Transit (synthetic mini-dataset)
-test: casestudy3
-
-# Case Study 5: Wildlife Photo Archive (mulinput, EXCEPT, CTE, expected)
-test: casestudy5
-
-# Grouping
-test: group_by_empty
-
-test: grouping_sets
-
-# Continuous probability distributions (random_variable type)
-test: continuous_basic
-test: continuous_sampler
-test: continuous_arithmetic
-test: continuous_transforms
+# Continuous random variables
 test: continuous_selection
-test: continuous_join
-test: continuous_union
-test: continuous_rangecheck
-test: continuous_rangecheck_having
-test: continuous_analytic
-test: continuous_gamma
-test: continuous_lognormal
-test: continuous_beta
-test: continuous_weibull_pareto
-test: continuous_inverse
-test: continuous_logistic
-test: continuous_discrete_families
-test: continuous_gmm
-test: continuous_information
-test: continuous_empirical
-test: continuous_comparison_surface
-test: continuous_expectation
-test: continuous_quantile
-test: continuous_mc_transparency
-test: continuous_conditioning
-test: continuous_latent
-test: continuous_posterior
-test: continuous_latent_aggregate
-test: continuous_latent_discrete
-test: continuous_latent_usecases
-test: continuous_cte_latent
-test: continuous_collapsed_posterior
-test: continuous_conjugate
-test: continuous_support
-test: continuous_hybrid
-test: continuous_rv_histogram
-test: continuous_mixture_basic
-test: continuous_mixture_sampler
+test: continuous_join continuous_union continuous_rangecheck continuous_rangecheck_having continuous_analytic continuous_gamma continuous_lognormal continuous_beta continuous_weibull_pareto continuous_inverse continuous_logistic continuous_discrete_families continuous_gmm continuous_information continuous_empirical continuous_comparison_surface continuous_expectation continuous_quantile continuous_mc_transparency continuous_conditioning
+test: continuous_latent continuous_posterior continuous_latent_aggregate continuous_latent_discrete continuous_latent_usecases continuous_cte_latent continuous_collapsed_posterior continuous_conjugate continuous_support continuous_hybrid continuous_rv_histogram continuous_mixture_basic continuous_mixture_sampler
 test: continuous_mixture_analytic
 test: continuous_mixture_support
 test: continuous_mixture_histogram
-test: continuous_mixture_hybrid
-test: continuous_categorical
-test: continuous_aggregation
-test: continuous_order_statistics
-test: continuous_covariance
-test: continuous_stat_aggregates
-test: continuous_case
-test: continuous_having
-test: continuous_having_rv_cmp
-test: continuous_sample_truncated
-test: continuous_analytical_curves
+test: continuous_mixture_hybrid continuous_categorical continuous_aggregation continuous_order_statistics continuous_covariance continuous_stat_aggregates
 
-# Symbolic rendering of the measure-carrier gates by the formula
-# pseudo-semiring (which refuses no gate type)
-test: formula_measure_gates
+# More continuous features, case studies 6 and 8, PROV export, table
+# metadata, and the safe-query rewriter
+test: continuous_case continuous_having continuous_having_rv_cmp continuous_sample_truncated continuous_analytical_curves formula_measure_gates casestudy6 casestudy8 to_provxml table_info ancestry ctas_inheritance safe_query_basic safe_query_pushdown safe_query_semiring safe_query_opaque safe_query_const_sel safe_query_pk_fd safe_query_deterministic safe_query_self_join_pk
 
-# Case Study 6: City Air-Quality Sensor Network (continuous RVs)
-test: casestudy6
-test: casestudy8
+# Query classification, rewriting corner cases, and the joint-width UCQ
+# compiler
+test: safe_query_fd_closure safe_query_self_join_disjoint safe_query_view_descent safe_query_ancestry_disjoint safe_query_inner_join safe_query_inversion_free classify_query boolean_fold nested_agg_refuse reaggregation possible_worlds_aggregates rank_over_aggregate explode_agg_value sublink_no_relation sublink_boolean sublink_body_groups sublink_body_setop provenance_per_row ucq_joint ucq_joint_correlated
 
-# PROV export
-test: to_provxml
+# The Möbius-inversion route
+test: ucq_joint_answers mobius_safe mobius_selfjoin
 
-# Per-table provenance metadata maintenance (safe-query optimisation)
-test: table_info
-
-# Per-table base-ancestor registry (correlation tracking for the
-# safe-query rewriter's disjoint-ancestor check)
-test: ancestry
-
-# CTAS / SELECT INTO / CREATE MATERIALIZED VIEW lineage inheritance
-test: ctas_inheritance
-
-# Safe-query optimisation: end-to-end hierarchical CQ rewrite
-test: safe_query_basic
-test: safe_query_pushdown
-test: safe_query_semiring
-test: safe_query_opaque
-test: safe_query_const_sel
-test: safe_query_pk_fd
-test: safe_query_deterministic
-test: safe_query_self_join_pk
-test: safe_query_fd_closure
-test: safe_query_self_join_disjoint
-test: safe_query_view_descent
-test: safe_query_ancestry_disjoint
-test: safe_query_inner_join
-test: safe_query_inversion_free
-
-# Query-time TID / BID / OPAQUE classifier (NOTICE surface)
-test: classify_query
-
-# Load-time Boolean-identity folding (idempotence + plus-with-one absorber)
-test: boolean_fold
-
-# Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
-test: nested_agg_refuse reaggregation possible_worlds_aggregates rank_over_aggregate explode_agg_value sublink_no_relation sublink_boolean sublink_body_groups sublink_body_setop
-
-# provenance() read per input row where SQL evaluates it so
-test: provenance_per_row
-
-# Joint-width UCQ compiler (data-graph regime): exact probability of an
-# arbitrary UCQ -- including #P-hard ones -- over bounded joint treewidth
-test: ucq_joint
-test: ucq_joint_correlated
-test: ucq_joint_answers
-
-# Safe-UCQ Möbius-inversion route: the last missing exact route of the
-# Dalvi-Suciu dichotomy (UCQs safe only because the #P-hard terms cancel on
-# the CNF lattice; canonical witness q9 / QW)
-test: mobius_safe
-
-# Self-joins on the Möbius route: ranking / shattering (the shard split) and
-# the disjunctive detour a within-disjunct self-join forces
-test: mobius_selfjoin
-
-# Reclaiming what nothing references any more.  Takes the database
-# exclusively, so it must be the only test running -- and it runs late,
-# since it removes the orphan gates every earlier test left behind.
+# Reclaiming what nothing references any more takes the database
+# exclusively, so it runs alone, and late: it removes the orphan gates every
+# earlier test left behind.
 test: circuit_cleanup

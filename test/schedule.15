@@ -1,67 +1,12 @@
-# Provenance for recursive queries (WITH RECURSIVE).
+# PostgreSQL 15+ only (see schedule.common for how tests share a line).
 #
-# PG15+ only: the planner-hook lowering uses pg_get_querydef (exported from
-# ruleutils.h only since PG15) and pg_analyze_and_rewrite_fixedparams (PG15).
-# On earlier majors recursive CTEs over tracked relations keep raising
-# "Recursive CTEs not supported", so this test is gated to PG15+.
-test: recursive
-
-# A comparison readout (expected(cost <= c)) over a pure-RV recursive CTE:
-# the untracked UNION ALL recursion runs as native SQL while the outer
-# comparison is lifted.  PG15+ for the same recursive-CTE reason as above.
-test: continuous_recursive_cte
-
-# Bounded-treewidth reachability through the rewriter: the recursive
-# reachability shape compiled along a tree decomposition of the data
-# (provenance class 'absorptive' or 'boolean'), with fallback coverage
-test: btw_recursive
-
-# Bounded-hop reachability: the hop-counting CTE shape, walk-length-set
-# states, certified within-bound deduplication gates
-test: btw_hops
-
-# Case Study 7 (peer-review / knowledge compilation): its recursive
-# reachability section is PG15+, so the whole case study is gated here.
-test: casestudy7
-
-# Cyclic recursion under the provenance classes: the rows of a cycle are
-# solved by the evaluating semiring (min-plus, probability) or refused by it
-# (counting)
-test: absorptive_recursion
-
-# Recursion as equations: every solver of a cyclic component (Dijkstra,
-# value iteration, bounded rounds, Gaussian elimination with star, sr_formula's
-# equations), the refusals, PROV-XML labels and the per-statement cache
-test: recursion_equations
-
-# Non-commutative semirings (regular expressions, least cost with its paths):
-# factors in query order, Gaussian elimination on either side, two-sided
-# recursions refused
-test: noncommutative_semirings
-
-# One least-cost path (sr_best_path): labels in query order, ties broken by
-# length then lexicographically, two-sided recursion, the monus, refusals
-test: best_path
-
-# Case Study 3, Part 2 (journeys over a miniature network): the recursion
-# evaluated in several semirings, and its sampled probabilities.
-test: casestudy3_network
-
-# Cross-vertex reachability aggregations: GROUP BY over a join with a
-# reachability CTE gets certified any-member gates planted per group
-test: btw_anyreach
-
-# Min-cost reachability: tropical (and any absorptive-semiring)
-# evaluation of the route's certified circuits -- plain, hop-bounded
-# and per-region, cost-0 edges included
-test: btw_tropical
-
-# K-terminal coverage: reachability self-join conjunctions get a
-# certified all-members circuit planted at the times-canonical address
-# (k-terminal reliability, Steiner cost via min-plus)
-test: btw_cover
+# Recursive queries: the planner-hook lowering of WITH RECURSIVE uses
+# pg_get_querydef and pg_analyze_and_rewrite_fixedparams, both PG15+;
+# reachability, recursion as equations, non-commutative semirings, and the
+# case studies with a recursive part (3's network, 7).
+test: recursive continuous_recursive_cte btw_recursive btw_hops casestudy7 absorptive_recursion recursion_equations noncommutative_semirings best_path casestudy3_network btw_anyreach btw_tropical btw_cover
 
 # WAL-logging the circuit store through a custom resource manager
-# (RegisterCustomRmgr, PG15+), and its requirement on the at-commit
-# barrier.
+# (RegisterCustomRmgr, PG15+): it checks the store as a whole, so it runs
+# alone.
 test: wal_logging
