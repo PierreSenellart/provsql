@@ -377,14 +377,21 @@ standard deviation 5, and look at it:
 
     SELECT normal(20, 5) AS biomarker;
 
-One row comes back with a ``random_variable`` token. **Click it**, then on
-the circuit cell press :fa:`external-link-alt` :guilabel:`Circuit mode` (this leaves
-the notebook; you will come back through the :fa:`book-open` :guilabel:`Notebook`
-tab in the mode switcher at the top). In Circuit mode, press :fa:`play`
-:guilabel:`Run` on the evaluation strip: for a continuous variable the default
-evaluation is its :guilabel:`Distribution profile`, and Studio draws the bell curve
-of Normal(20, 5), centred on 20. Have a look, then return through the
-:guilabel:`Notebook` tab -- the notebook reopens where you left it.
+One row comes back with a ``random_variable`` token. **Click it** to draw
+its circuit below the query -- a single Normal leaf -- and press
+:fa:`bolt` :guilabel:`Evaluate` on the circuit cell. For a random variable,
+the evaluation cell starts on :guilabel:`Distribution profile`; run it with
+its :fa:`play` button, and Studio draws the bell curve of Normal(20, 5),
+centred on 20, with its mean μ and standard deviation σ alongside. The
+other entries of the same menu give a :guilabel:`Moment`, a
+:guilabel:`Quantile`, or a :guilabel:`Sample` of the variable.
+
+The circuit cell's :fa:`external-link-alt` :guilabel:`Circuit mode` button
+opens the same token in Studio's Circuit mode, for a closer look: expanding
+the circuit gate by gate, inspecting each gate, and the full evaluation
+strip. That leaves the notebook; come back to it through the
+:fa:`book-open` :guilabel:`Notebook` tab of the mode switcher at the top,
+and it reopens where you left it.
 
 Its `mean <https://en.wikipedia.org/wiki/Expected_value>`_ is no surprise:
 
@@ -427,11 +434,12 @@ inspect whole. Print it:
     SELECT (x | (x > 25)) AS referred_biomarker
     FROM r;
 
-**Click its token, open** :fa:`external-link-alt` :guilabel:`Circuit mode`
-**and press** :fa:`play` :guilabel:`Run`. Its distribution profile is the *truncated* bell curve
--- everything below 25 cut away, the rest renormalised -- with its support,
-mean, and variance reported alongside: the same conditioned variable you
-just took moments of, now seen as a whole distribution.
+**Click its token and evaluate it** as before (:fa:`bolt`
+:guilabel:`Evaluate`, then :fa:`play`). Its distribution profile is the
+*truncated* bell curve -- everything below 25 cut away, the rest
+renormalised -- with its support, mean, and standard deviation reported
+alongside: the same conditioned variable you just took moments of, now seen
+as a whole distribution.
 
 The same ``|`` also conditions one *event* on another, so a conditional
 probability reads directly. Among referred patients (biomarker above 25),
@@ -478,9 +486,11 @@ precision, with no sampling.
 Problem 5: A Probabilistic Total
 --------------------------------
 
-The last carrier is an *aggregate*. When the rows you add up are themselves
-uncertain, their total is a random quantity, and ProvSQL tracks it as an
-``agg_token`` -- the aggregate counterpart of a provenance token.
+So far, uncertainty came in two forms: *events*, true or false (Problems 1
+to 3), and *random variables*, numbers drawn from a distribution (Problem
+4). The third form is an *aggregate*: when the rows you add up are
+themselves uncertain, their total is a random quantity, and ProvSQL tracks
+it as an ``agg_token`` -- the aggregate counterpart of a provenance token.
 
 Each row of ``cases`` reports a day's case count for a region, present only
 with some probability:
@@ -535,16 +545,17 @@ right -- here an ``agg_token``. Select it directly to get its token:
     FROM casesum WHERE region = 'North';
 
 **Click that token to see its circuit** -- the same ``∣`` gate as before,
-now over the aggregate and the evidence. In :fa:`external-link-alt`
-:guilabel:`Circuit mode`, the evaluation strip defaults to
-:guilabel:`Distribution profile`; switch it to the :guilabel:`Moment`
-evaluator (order *k* = 1, ``raw``) and press
-:fa:`play` :guilabel:`Run`: its expected value comes back as **5.5**, the same answer
-as above. A moment of an aggregate is computed *exactly* -- by enumerating the
-rows' contributions and weighting each by its probability -- so it needs no
-sampling and is unaffected by the ``provsql.rv_mc_samples = 0`` you set in
-Problem 4 (its full distribution and individual samples, by contrast, are
-estimated by Monte Carlo, and would need sampling switched back on).
+now over the aggregate and the evidence -- and press :fa:`bolt`
+:guilabel:`Evaluate`. An aggregate is a value too, so the evaluation cell
+starts on :guilabel:`Distribution profile`; run it: the total ranges over
+[0, 7] and its mean μ is **5.5**, the same answer as above, but the
+histogram stays empty (*no samples*). Switch the cell to :guilabel:`Moment` (order *k* = 1,
+``raw``) and run it again: 5.5 once more. A moment of an aggregate is
+computed *exactly* -- by enumerating the rows' contributions and weighting
+each by its probability -- so it needs no sampling and is unaffected by the
+``provsql.rv_mc_samples = 0`` you set in Problem 4; the histogram and
+individual samples, by contrast, are drawn by Monte Carlo, and would need
+sampling switched back on.
 
 Problem 6: Ruling Worlds Out
 ----------------------------
@@ -824,8 +835,8 @@ The mixture is built from Bernoulli-mixture gates, so the moments are
 **exact** (``rv_mc_samples = 0``): the mean
 is :math:`0.7 \cdot 15 + 0.3 \cdot 40 = 22.5` and the variance
 :math:`0.7(16 + 225) + 0.3(36 + 1600) - 22.5^2 = 153.25`. The query also
-returns ``titre`` itself: **click its token** and open Circuit mode to
-see those gates -- a Bernoulli selector choosing between the two Normal
+returns ``titre`` itself: **click its token** to see those gates in its
+circuit cell -- a Bernoulli selector choosing between the two Normal
 components. A tail probability -- how many cases exceed the reporting
 threshold of 30 -- is estimated by Monte Carlo over the same gates:
 
