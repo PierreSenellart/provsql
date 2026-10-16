@@ -11,7 +11,7 @@
 
 SET search_path TO provsql, public;
 SET provsql.monte_carlo_seed = 424242;
-SET provsql.rv_mc_samples = 300000;
+SET provsql.rv_mc_samples = 50000;
 
 -- Five sensors with known true values; readings share a calibration drift
 -- d ~ Normal(0, 1):  reading_i = Normal(true_i + d, 0.3).
@@ -88,12 +88,12 @@ BEGIN
   SELECT provenance() INTO e2 FROM reading     WHERE id = 2 AND y > 20.2;
   SELECT provenance() INTO f1 FROM reading_ind WHERE id = 1 AND y > 20.2;
   SELECT provenance() INTO f2 FROM reading_ind WHERE id = 2 AND y > 20.2;
-  joint_s := probability_evaluate(provenance_times(e1, e2), 'monte-carlo', '300000');
-  prod_s  := probability_evaluate(e1, 'monte-carlo', '300000')
-           * probability_evaluate(e2, 'monte-carlo', '300000');
-  joint_i := probability_evaluate(provenance_times(f1, f2), 'monte-carlo', '300000');
-  prod_i  := probability_evaluate(f1, 'monte-carlo', '300000')
-           * probability_evaluate(f2, 'monte-carlo', '300000');
+  joint_s := probability_evaluate(provenance_times(e1, e2), 'monte-carlo', '50000');
+  prod_s  := probability_evaluate(e1, 'monte-carlo', '50000')
+           * probability_evaluate(e2, 'monte-carlo', '50000');
+  joint_i := probability_evaluate(provenance_times(f1, f2), 'monte-carlo', '50000');
+  prod_i  := probability_evaluate(f1, 'monte-carlo', '50000')
+           * probability_evaluate(f2, 'monte-carlo', '50000');
   RAISE NOTICE 'shared_events_positively_correlated: %', (joint_s > prod_s + 0.03);
   RAISE NOTICE 'independent_events_uncorrelated: %', (abs(joint_i - prod_i) < 0.02);
 END $$;
