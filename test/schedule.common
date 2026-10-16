@@ -110,10 +110,15 @@ test: continuous_case continuous_having continuous_having_rv_cmp continuous_samp
 
 # Query classification, rewriting corner cases, and the joint-width UCQ
 # compiler
-test: safe_query_fd_closure safe_query_self_join_disjoint safe_query_view_descent safe_query_ancestry_disjoint safe_query_inner_join safe_query_inversion_free classify_query boolean_fold nested_agg_refuse reaggregation possible_worlds_aggregates rank_over_aggregate explode_agg_value sublink_no_relation sublink_boolean sublink_body_groups sublink_body_setop provenance_per_row ucq_joint ucq_joint_correlated
+test: safe_query_fd_closure safe_query_self_join_disjoint safe_query_view_descent safe_query_ancestry_disjoint safe_query_inner_join safe_query_inversion_free boolean_fold nested_agg_refuse reaggregation possible_worlds_aggregates rank_over_aggregate explode_agg_value sublink_no_relation sublink_boolean sublink_body_groups sublink_body_setop provenance_per_row ucq_joint ucq_joint_correlated
 
 # The Möbius-inversion route
 test: ucq_joint_answers mobius_safe mobius_selfjoin
+
+# The classifier's NOTICE is emitted each time a statement is planned, and a
+# statement is planned again when another test changes the catalog meanwhile:
+# classify_query, which counts these NOTICEs, runs alone.
+test: classify_query
 
 # Reclaiming what nothing references any more takes the database
 # exclusively, so it runs alone, and late: it removes the orphan gates every
