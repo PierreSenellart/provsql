@@ -234,6 +234,19 @@ of the ``personnel`` table for every agent in that city. The notation
 contributing row; the trailing ``[]`` is the untracked ``source``
 column itself.
 
+Seeing it in Studio: Where mode
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:ref:`ProvSQL Studio's Where mode <studio-where-mode>` shows the same
+answer interactively. Pick :guilabel:`Where` from the mode switcher at the
+top and run the shared-city query without the two ``SET`` statements and
+without the ``source`` column: Where mode sets ``provsql.provenance``
+itself. Then hover a city in the result: the ``city`` cells of every agent
+in that city light up in the ``personnel`` table of the
+:guilabel:`Provenance-Tagged Relations` panel, both agents for Nairobi and
+all three for Paris. To return to the notebook, if you are following one,
+pick :guilabel:`Notebook` from the same switcher.
+
 
 Step 7: Assign Probabilities
 -----------------------------
@@ -352,7 +365,7 @@ box-art diagram using
 (which must be on your ``PATH``). The query guards the call with
 :sqlfunc:`tool_available`, so without ``graph-easy`` -- in particular in
 the :ref:`Playground <playground-note>`, where Studio's interactive
-:doc:`circuit mode <studio>` is the better view anyway -- it returns a
+:doc:`Circuit mode <studio>` is the better view anyway -- it returns a
 message instead of failing:
 
 .. code-block:: postgresql
@@ -360,7 +373,7 @@ message instead of failing:
     SELECT city,
            CASE WHEN tool_available('graph-easy')
                 THEN view_circuit(provenance(), 'personnel_name')
-                ELSE '(needs the graph-easy renderer; use Studio circuit mode)'
+                ELSE '(needs the graph-easy renderer; use Studio Circuit mode)'
            END AS circuit
     FROM (
         SELECT DISTINCT city FROM personnel

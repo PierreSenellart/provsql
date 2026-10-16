@@ -270,7 +270,7 @@ Circuit inspection
    "``get_nb_gates``", "", "✓", "", "", "", "", "", "", "", ""
    "``get_infos``", "", "", "", "", "", "", "✓", "", "", ""
    "``get_extra``", "", "", "", "", "", "", "✓", "", "✓", ""
-   "``circuit_subgraph`` / ``resolve_input`` (Studio circuit mode)", "", "", "", "", "", "", "✓", "✓", "", ""
+   "``circuit_subgraph`` / ``resolve_input`` (Studio Circuit mode)", "", "", "", "", "", "", "✓", "✓", "", ""
    "``simplified_circuit_subgraph``", "", "", "", "", "", "", "(✓)", "✓", "", ""
    "``provenance_plus`` / ``provenance_times`` / ``provenance_not`` (circuits built by hand)", "", "", "", "", "", "", "", "", "", ""
 
@@ -479,5 +479,17 @@ Export and visualisation
    "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", "", "", ""
    "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)", "", ""
    "``provsql.trace_rewrite`` / ``provsql.verify_rewrite`` GUCs (debugging the rewriting)", "", "", "", "", "", "", "", "", "", ""
-   "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓", "", ""
-   "ProvSQL Studio (Contributions mode)", "", "", "✓", "", "", "", "", "", "", ""
+
+ProvSQL Studio
+~~~~~~~~~~~~~~
+
+.. csv-table::
+   :class: coverage-matrix
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
+
+   "Circuit mode", "(✓)", "(✓)", "", "", "", "", "✓", "✓", "(✓)", ""
+   "Contributions mode", "", "", "✓", "", "", "", "", "", "", ""
+   "Where mode", "(✓)", "✓", "", "", "", "", "", "", "", ""
+   "Temporal mode", "", "", "", "", "✓", "", "", "", "", ""
+   "Notebook mode", "", "", "", "", "", "", "", "", "✓", ""
