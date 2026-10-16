@@ -545,7 +545,7 @@ Click ``p1``'s ``provsql`` cell and, in the eval strip, pick
 :guilabel:`Formula` with the ``extends_label`` mapping: the lineage is the
 conjunction along the path, ``ext(p6,p4) ⊗ ext(p4,p1)``, and
 :guilabel:`Marginal probability` with ``exact`` gives its value, ``0.72``. Because the
-graph is acyclic the lineage is read-once per ancestor, so *every* semiring
+graph is acyclic, no ancestor is derived through itself, so *every* semiring
 evaluation works, not just probability.
 
 *Who is reviewer* ``r1`` *connected to through co-reviewing?* -- now a cyclic

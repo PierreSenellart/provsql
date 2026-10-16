@@ -186,9 +186,10 @@ Step 5: Why- and Which-Provenance for Replicated Findings
 ---------------------------------------------------------
 
 For replicated findings, the *why-provenance* returns a set of *witness
-sets*. Each witness set is a minimal collection of studies that together
-(⊗) suffice to derive the finding; the outer set collects all such
-independent alternatives (⊕). Use :sqlfunc:`sr_why`, and
+sets*. Each witness set is a collection of studies that together (⊗)
+suffice to derive the finding; the outer set collects all such alternatives
+(⊕). Why-provenance does not keep only the minimal ones: ⊕ is a plain union,
+and a witness set that contains another one stays. Use :sqlfunc:`sr_why`, and
 :sqlfunc:`sr_which` for comparison, on ``f`` with ``GROUP BY`` for the
 (Exercise, Cardiovascular Disease, beneficial) and (Aspirin, Cardiovascular
 Disease, beneficial) pairs.
@@ -213,9 +214,11 @@ Disease, beneficial) pairs.
 
    </details>
 
-Each inner set in ``witnesses`` is a minimal group of studies that together
-(⊗) derive the finding; the multiple inner sets are independent
-alternatives (⊕): any one of them alone suffices.
+Each inner set in ``witnesses`` is a group of studies that together (⊗)
+derive the finding; the multiple inner sets are alternatives (⊕): any one of
+them alone suffices. Here each holds a single study, so they look minimal;
+that is a property of this query, in which each derivation reads one study,
+not of why-provenance.
 
 The *which-provenance* of :sqlfunc:`sr_which`, in ``lineage``, flattens
 them into the single set of studies the finding draws on, here
@@ -445,9 +448,11 @@ integer column ``cnt`` to ``finding`` (all values ``1``) and create a
     DROP TABLE IF EXISTS count_mapping;
     SELECT create_provenance_mapping('count_mapping', 'finding', 'cnt');
 
-Now query ``f_replicated`` using :sqlfunc:`sr_counting` to display,
-for each (exposure, outcome, effect) triple of the view, the number of
-ways it is derived.
+Now query ``f_replicated`` using :sqlfunc:`sr_counting` to display what
+the counting semiring gives each (exposure, outcome, effect) triple of the
+view. It is not the number of ways the triple is derived: through the
+``HAVING`` threshold, a group counts once if it passes it, whatever its
+number of rows.
 
 .. note::
 
@@ -566,9 +571,10 @@ Step 14: Banzhaf Values
 
 *Expected Banzhaf values* offer an alternative game-theoretic measure of each
 study's contribution. Unlike Shapley values, which average marginal
-contributions over all orderings of the players, Banzhaf values average over
-all *subsets* of the other players. This makes the computation simpler (no
-ordering weights) and often faster in practice. Like Shapley values, they are
+contributions over all orderings of the players, Banzhaf values add them up
+over all *subsets* of the other players, without dividing by their number.
+This makes the computation simpler (no ordering weights) and often faster in
+practice. Like Shapley values, they are
 computed in the probabilistic sense (see :doc:`the chapter on Shapley
 values <shapley>`), but they do not
 satisfy the efficiency axiom: they are not constrained to sum to the
@@ -615,7 +621,8 @@ Shapley values from Step 13.
 The relative ranking of Johnson2020, Smith2018, and Williams2021 is the same as
 with Shapley values, confirming that both measures agree on who contributes most
 to the replication probability. The absolute magnitudes are larger (around 1.7
-per study) and their sum does not equal the replication probability.
+per study, a sum over subsets rather than an average) and their sum does not
+equal the replication probability.
 
 Step 15: Bulk Shapley/Banzhaf with ``shapley_all_vars`` and ``banzhaf_all_vars``
 ---------------------------------------------------------------------------------

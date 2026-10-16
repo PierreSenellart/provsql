@@ -12,8 +12,10 @@ Given a Boolean query result whose truth depends on a set of input tuples,
 the **Shapley value** of an input tuple ``t`` is the average marginal
 contribution of ``t`` over all orderings of the input tuples.
 
-The **Banzhaf value** is a simpler variant: the average marginal contribution
-over all subsets of the other inputs (not weighted by ordering).
+The **Banzhaf value** is a simpler variant: the sum of the marginal
+contributions of ``t`` over all subsets of the other inputs (not weighted by
+ordering). ProvSQL computes this raw value, not its average: dividing it by
+:math:`2^{n-1}`, for *n* inputs, gives the average, and it can exceed 1.
 
 Both measures are always computed under the probabilistic model
 :cite:`DBLP:journals/pacmmod/KarmakarMSB24`, giving *expected*

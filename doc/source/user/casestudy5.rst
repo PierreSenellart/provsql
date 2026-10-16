@@ -196,7 +196,8 @@ Step 5: Mutually Exclusive Candidates with ``repair_key``
 
 :sqlfunc:`repair_key` rewrites the provenance so that rows sharing a key
 become alternatives under a single ``mulinput`` (multivalued input) gate,
-i.e., *exactly one* of them is true. Applied with the key
+i.e., *at most one* of them is true (none, with what probability the
+candidates leave). Applied with the key
 ``(photo_id, bbox_id)``, every bounding box becomes one mulinput
 variable whose values are the candidate species the classifier
 considered for that box.

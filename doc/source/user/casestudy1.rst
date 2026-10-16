@@ -196,10 +196,13 @@ with at least two, using ``EXCEPT``:
 
    ProvSQL evaluates ``EXCEPT`` with the *monus* operator ``⊖`` of the
    provenance semiring. Every city
-   appears in the result with a provenance formula; the formula
-   evaluates to ``𝟘`` for cities that are definitely shared and to a
-   non-trivial expression for cities that *could* be single-agent in
-   some possible world. Nairobi's formula
+   appears in the result with a provenance formula. Whether that formula
+   evaluates to ``𝟘`` depends on the semiring it is evaluated in and on
+   the values given to the agents, not on the formula alone: with
+   polynomials over the agents' names, no city's formula is ``𝟘``;
+   with every agent present (true, in the Booleans), all three
+   cities are; in the min-max semiring of security levels, only
+   Beijing's is. Nairobi's formula
    ``(Juma ⊕ Paul) ⊖ (Juma ⊗ Paul)`` reads: "at least one of Juma
    or Paul is present, minus the event where both are."
 
