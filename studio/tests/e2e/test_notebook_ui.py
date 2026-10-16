@@ -827,8 +827,7 @@ def _make_circuit_cell(page: Page) -> None:
 
 
 def test_eval_cell_probability_and_boolexpr(page: Page, studio_url: str) -> None:
-    """The circuit cell's Evaluate button (offered for plain provenance
-    tokens) inserts an evaluation cell; probability/exact on the 3-way
+    """The circuit cell's Evaluate button inserts an evaluation cell; probability/exact on the 3-way
     Paris OR with p=0.5 inputs is 1 - 0.5^3 = 0.875; the mapping-free
     boolexpr semiring re-evaluates symbolically."""
     _goto_notebook(page, studio_url)
@@ -890,6 +889,89 @@ def test_eval_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None
     legacy.write_text(json.dumps(doc))
     page.locator("#nb-load-input").set_input_files(str(legacy))
     expect(page.locator(".nb-cell--eval .nb-eval__method").last).to_have_value("exact", timeout=8000)
+
+
+def test_eval_cell_on_random_variable_shows_distribution(
+        page: Page, studio_url: str) -> None:
+    """A random-variable token gets an evaluation cell too: it starts on the
+    distribution profile (the same panel as Circuit mode), offers the
+    other distribution evaluations with their arguments, and round-trips
+    through .ipynb with its result."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("WITH r AS (SELECT provsql.normal(20, 5) AS x) SELECT x FROM r;")
+    ta.focus()
+    _run_focused(page)
+    page.locator(".nb-cell--sql .nb-out [data-token-kind='random_variable']"
+                 ).first.click(timeout=8000)
+    page.locator(".nb-circ__eval").click()
+    ev = page.locator(".nb-cell--eval")
+    expect(ev.locator(".nb-eval__semiring")).to_have_value("distribution-profile")
+    expect(ev.locator(".nb-eval__method")).to_be_hidden()
+    expect(ev.locator(".nb-eval__bins")).to_be_visible()
+    ev.locator(".nb-cell__run").click()
+    panel = ev.locator(".nb-eval__out .cv-profile-panel")
+    expect(panel).to_be_visible(timeout=15000)
+    expect(panel).to_contain_text("μ = 20")
+    expect(panel.locator(".cv-profile-bars rect").first).to_be_attached()
+
+    # Moment: its own arguments replace the bin count.
+    ev.locator(".nb-eval__semiring").select_option("moment")
+    expect(ev.locator(".nb-eval__bins")).to_be_hidden()
+    ev.locator(".nb-eval__k").fill("1")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".nb-eval__value")).to_have_text("20", timeout=8000)
+
+    # Back to the profile, then save and reload: the panel re-renders
+    # from the saved result, with no kernel started.
+    ev.locator(".nb-eval__semiring").select_option("distribution-profile")
+    ev.locator(".nb-cell__run").click()
+    expect(panel).to_be_visible(timeout=15000)
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
+    meta = [c["metadata"]["provsql"] for c in doc["cells"]
+            if c.get("metadata", {}).get("provsql", {}).get("cell") == "eval"][0]
+    assert meta["semiring"] == "distribution-profile"
+    assert meta["token_kind"] == "random_variable"
+    assert meta["distribution"]["k"] == "1"
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
+    page.reload()
+    page.locator("#nb-load-input").set_input_files(str(dl.path()))
+    ev2 = page.locator(".nb-cell--eval")
+    expect(ev2.locator(".cv-profile-panel")).to_contain_text("μ = 20", timeout=8000)
+    expect(ev2.locator(".nb-eval__semiring")).to_have_value("distribution-profile")
+    expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
+
+
+def test_eval_cell_conditions_on_the_row(
+        page: Page, studio_url: str) -> None:
+    """From a result row, the evaluation cell is given the row's provenance
+    as its condition, as Circuit mode's strip is: the profile of a
+    reading kept by WHERE reading > 25 starts at 25."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("DROP TABLE IF EXISTS nb_eval_rv;\n"
+            "CREATE TABLE nb_eval_rv(id text, reading provsql.random_variable);\n"
+            "INSERT INTO nb_eval_rv VALUES ('s1', provsql.normal(20, 5));\n"
+            "SELECT provsql.add_provenance('nb_eval_rv');\n"
+            "SELECT id, reading FROM nb_eval_rv WHERE reading > 25;")
+    ta.focus()
+    _run_focused(page)
+    page.locator(".nb-cell--sql .nb-out [data-token-kind='random_variable']"
+                 ).first.click(timeout=8000)
+    page.locator(".nb-circ__eval").click()
+    ev = page.locator(".nb-cell--eval")
+    expect(ev.locator(".nb-eval__cond")).not_to_have_value("")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".cv-profile-panel")).to_contain_text(
+        "supp [25", timeout=15000)
+
+    # Cleared, the condition goes away: the unconditional Normal again.
+    ev.locator(".nb-eval__cond").fill("")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".cv-profile-panel")).to_contain_text(
+        "μ = 20", timeout=15000)
 
 
 def test_open_example_menu_and_deep_link(page: Page, studio_url: str) -> None:

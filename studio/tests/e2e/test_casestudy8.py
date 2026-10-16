@@ -74,3 +74,36 @@ def test_cs8_notebook_runs_end_to_end(page: Page, cs8_studio_url: str) -> None:
     # P(insulin_resistance | obesity) = 0.5 * 0.6 = 0.3 (casestudy8.rst).
     got = float(re.search(r"[0-9]*\.?[0-9]+", value.inner_text()).group())
     assert abs(got - 0.3) < 5e-3, value.inner_text()
+
+    # The distribution steps evaluate values in the notebook too: Problem
+    # 4's conditioned biomarker (a random variable) starts on its
+    # distribution profile, truncated at 25 ...
+    def evaluate_token(marker: str, kind: str):
+        sql = page.locator(".nb-cell--sql", has_text=marker).first
+        tok = sql.locator(f".nb-out [data-token-kind='{kind}']").first
+        tok.scroll_into_view_if_needed()
+        tok.click()
+        circuit = sql.locator("xpath=following-sibling::*[1]")
+        expect(circuit).to_have_class(re.compile(r"\bnb-cell--circuit\b"),
+                                      timeout=8000)
+        circuit.locator(".nb-circ__eval").click()
+        cell = circuit.locator("xpath=following-sibling::*[1]")
+        expect(cell).to_have_class(re.compile(r"\bnb-cell--eval\b"))
+        return cell
+
+    ev = evaluate_token("AS referred_biomarker", "random_variable")
+    expect(ev.locator(".nb-eval__semiring")).to_have_value("distribution-profile")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".cv-profile-panel")).to_contain_text("supp [25",
+                                                            timeout=30000)
+
+    # ... and Problem 5's conditioned total (an aggregate) has mean 5.5,
+    # read off its profile and, exactly, as its first raw moment.
+    ev = evaluate_token("AS conditioned_total", "agg_token")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".cv-profile-panel")).to_contain_text("μ = 5.5",
+                                                            timeout=30000)
+    ev.locator(".nb-eval__semiring").select_option("moment")
+    ev.locator(".nb-eval__k").fill("1")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".nb-eval__value")).to_have_text("5.5", timeout=30000)

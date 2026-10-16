@@ -662,7 +662,7 @@
               <i class="fas fa-project-diagram"></i>
               Circuit for <code class="nb-circ__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
               <button type="button" class="nb-circ__eval wp-btn wp-btn--ghost wp-btn--mini"
-                      ${cell.tokenKind === 'agg_token' || cell.tokenKind === 'random_variable' ? 'hidden ' : ''}title="Insert an evaluation cell for this token below (semiring / probability)">
+                      title="Insert an evaluation cell for this token below (probability / semiring, or the distribution of a random variable or aggregate)">
                 <i class="fas fa-bolt"></i> Evaluate</button>
               <button type="button" class="nb-circ__jump wp-btn wp-btn--ghost wp-btn--mini"
                       title="Open this token in Circuit mode (eval strip, expansion, inspector)">
@@ -677,15 +677,16 @@
               <i class="fas fa-bolt"></i>
               <code class="nb-eval__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
               <select class="nb-eval__semiring" title="What to evaluate on this token">
-                ${EVAL_SEMIRINGS.map(([v, l]) =>
+                ${evalSemiringsFor(cell).map(([v, l]) =>
                   `<option value="${v}"${v === (cell.semiring || 'probability') ? ' selected' : ''}>${l}</option>`).join('')}
               </select>
-              <select class="nb-eval__method" title="Probability method (the full per-method controls live in Circuit mode)">
+              <select class="nb-eval__method" title="Probability method">
                 ${evalMethodOptions(normalizeEvalMethod(cell.method))}
               </select>
               <input type="text" class="nb-eval__args" placeholder="arguments (eps=…, samples=…)"
                      title="Optional method arguments, key=value comma-separated (e.g. eps=0.05,delta=0.01 or a sample count)"
                      value="${env.escapeAttr(cell.args || '')}">
+              ${distInputsHtml(cell)}
               <select class="nb-eval__mapping" title="Optional provenance mapping labelling the input tokens" hidden>
                 <option value="">(no mapping)</option>
               </select>
@@ -821,7 +822,8 @@
       div.querySelector('.nb-cell__run').addEventListener('click',
         () => refreshCircuitCell(cell));
       div.querySelector('.nb-circ__eval').addEventListener('click', () => {
-        insertEvalAfter(cell, cell.token, sceneRootFlags(cell.scene));
+        insertEvalAfter(cell, cell.token, sceneRootFlags(cell.scene),
+                        cell.tokenKind, cell.rowProv);
       });
       div.querySelector('.nb-circ__jump').addEventListener('click', () => {
         // Same carry mechanism as the where-mode jump button: Circuit
@@ -878,6 +880,14 @@
         cell.mapping = map.value;
         scheduleAutosave();
       });
+      for (const [key, cls] of DIST_FIELDS) {
+        const input = div.querySelector(cls);
+        input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
+          if (key === 'condition') cell.condition = input.value.trim();
+          else cell.dist = { ...distOf(cell), [key]: input.value };
+          scheduleAutosave();
+        });
+      }
       ensureMappings().then((maps) => {
         for (const m of maps) {
           const opt = document.createElement('option');
@@ -1250,22 +1260,6 @@
     scheduleAutosave();
   }
 
-  // The eval strip's semantics (semiring evaluation, probability of a
-  // Boolean event) apply to plain provenance tokens; an agg_token or
-  // random_variable root gets no Evaluate affordance -- Circuit mode's
-  // dedicated dispatch (distribution profiles, moments, agg inspection)
-  // is the investigation surface for those.
-  function evalApplies(cell) {
-    return cell.tokenKind !== 'agg_token'
-        && cell.tokenKind !== 'random_variable';
-  }
-
-  function syncCircuitEvalButton(cell) {
-    const el = cellEl(cell);
-    const btn = el && el.querySelector('.nb-circ__eval');
-    if (btn) btn.hidden = !evalApplies(cell);
-  }
-
   function shortToken(t) {
     const s = String(t || '');
     return s.length > 8 ? s.slice(0, 8) + '…' : s;
@@ -1282,7 +1276,6 @@
       cell.token = token;
       cell.rowProv = rowProv || '';
       cell.tokenKind = tokenKind || '';
-      syncCircuitEvalButton(cell);
       const el = cellEl(cell);
       const lbl = el && el.querySelector('.nb-circ__token');
       if (lbl) { lbl.textContent = shortToken(token); lbl.title = token; }
@@ -1322,6 +1315,79 @@
     ['how', 'How'],
     ['counting', 'Counting'],
   ];
+
+  // A random variable or an aggregate is a value, not an event: it gets
+  // the distribution evaluations, as in Circuit mode, plus Formula, which
+  // renders its gates.
+  const EVAL_VALUE_SEMIRINGS = [
+    ['distribution-profile', 'Distribution profile'],
+    ['moment', 'Moment'],
+    ['quantile', 'Quantile'],
+    ['sample', 'Sample'],
+    ['formula', 'Formula'],
+  ];
+  const DIST_SEMIRINGS = new Set(['distribution-profile', 'moment', 'quantile', 'sample']);
+
+  function isValueToken(cell) {
+    return cell.tokenKind === 'random_variable' || cell.tokenKind === 'agg_token';
+  }
+
+  function evalSemiringsFor(cell) {
+    return isValueToken(cell) ? EVAL_VALUE_SEMIRINGS : EVAL_SEMIRINGS;
+  }
+
+  // Arguments of the distribution evaluations, with Circuit mode's
+  // defaults: histogram bins, moment order and kind, quantile fraction,
+  // sample count.
+  const DIST_DEFAULTS = { bins: '30', k: '2', central: 'raw', p: '0.5', n: '100' };
+  const DIST_FIELDS = [
+    ['bins', '.nb-eval__bins'], ['k', '.nb-eval__k'], ['central', '.nb-eval__central'],
+    ['p', '.nb-eval__p'], ['n', '.nb-eval__n'], ['condition', '.nb-eval__cond'],
+  ];
+
+  function distOf(cell) {
+    return { ...DIST_DEFAULTS, ...(cell.dist || {}) };
+  }
+
+  function distInputsHtml(cell) {
+    const d = distOf(cell);
+    const a = env.escapeAttr;
+    const num = (cls, key, attrs, title) =>
+      `<input type="number" class="nb-eval__num ${cls}" ${attrs} value="${a(d[key])}" title="${title}">`;
+    return `<span class="nb-eval__dist" hidden>`
+      + `<label data-for="distribution-profile">bins `
+      +   num('nb-eval__bins', 'bins', 'min="1" step="1"', 'Histogram bin count') + `</label>`
+      + `<label data-for="moment">k `
+      +   num('nb-eval__k', 'k', 'min="0" step="1"',
+              'Moment order k (k = 1 gives the mean; k = 2, central, the variance)')
+      +   ` <select class="nb-eval__central" title="Raw moment E[X^k] or central moment E[(X − E[X])^k]">`
+      +   ['raw', 'central'].map((v) =>
+            `<option value="${v}"${v === d.central ? ' selected' : ''}>${v}</option>`).join('')
+      +   `</select></label>`
+      + `<label data-for="quantile">p `
+      +   num('nb-eval__p', 'p', 'min="0" max="1" step="0.05"',
+              'Quantile fraction p in [0, 1]: 0.5 is the median') + `</label>`
+      + `<label data-for="sample">n `
+      +   num('nb-eval__n', 'n', 'min="1" step="1"', 'Number of samples') + `</label>`
+      + `<label data-for="distribution-profile moment quantile sample">given `
+      +   `<input type="text" class="nb-eval__cond" placeholder="condition on (UUID)" `
+      +   `spellcheck="false" value="${a(cell.condition || '')}" `
+      +   `title="Optional event UUID: the result is then the conditional distribution given that event. `
+      +   `Filled in with the row's provenance when the circuit came from a result row; clear it for the unconditional distribution."></label>`
+      + `</span>`;
+  }
+
+  // The backend's `arguments` string for a distribution evaluation.
+  function distArguments(cell) {
+    const d = distOf(cell);
+    switch (cell.semiring) {
+      case 'distribution-profile': return d.bins;
+      case 'moment': return `${d.k};${d.central === 'central' ? 'central' : 'raw'}`;
+      case 'quantile': return d.p;
+      case 'sample': return d.n;
+      default: return '';
+    }
+  }
 
   // Per-semiring soundness flags for the eval-cell dropdown, mirroring
   // circuit.js's _COMPILED_REGISTRY (booleanCompatible / absorptive) and
@@ -1403,9 +1469,16 @@
 
   function syncEvalControls(cell, el) {
     const isProb = cell.semiring === 'probability';
+    const isDist = DIST_SEMIRINGS.has(cell.semiring);
     el.querySelector('.nb-eval__method').hidden = !isProb;
-    el.querySelector('.nb-eval__mapping').hidden = isProb;
+    el.querySelector('.nb-eval__mapping').hidden = isProb || isDist;
     el.querySelector('.nb-eval__args').hidden = !isProb;
+    el.querySelector('.nb-eval__dist').hidden = !isDist;
+    // Within the distribution group, only the chosen evaluation's own
+    // argument shows; condition-on applies to all four.
+    for (const lbl of el.querySelectorAll('.nb-eval__dist [data-for]')) {
+      lbl.hidden = !lbl.dataset.for.split(' ').includes(cell.semiring);
+    }
   }
 
   // Same grouping as Circuit mode's method picker: first the three
@@ -1487,6 +1560,26 @@
       }
     }
     const noticeHtml = notices.length ? renderEvalNotice(notices) : '';
+    const elapsedHtml = cell.elapsed != null
+      ? `<span class="nb-eval__meta">${esc(String(cell.elapsed))} ms</span>` : '';
+    if (r.kind === 'distribution-profile' || r.kind === 'sample') {
+      // The same panels as Circuit mode (profile.js). The profile panel
+      // re-renders itself in place on zoom and on the PDF/CDF toggle, so
+      // it gets a host element of its own.
+      const S = window.ProvsqlStudio;
+      box.innerHTML = noticeHtml
+        + `<div class="nb-eval__panel cv-eval__result" data-kind="${esc(r.kind)}"></div>`
+        + elapsedHtml;
+      const host = box.querySelector('.nb-eval__panel');
+      if (r.kind === 'sample') {
+        host.innerHTML = S.renderSamplePanel(r.result);
+      } else {
+        host.innerHTML = S.renderProfilePanel(r.result, 'pdf');
+        S.wireProfileInteractions(host, r.result);
+      }
+      cell.htmlSnapshot = box.innerHTML;
+      return;
+    }
     const value = (r.result == null) ? '(null)'
       : (typeof r.result === 'object' ? JSON.stringify(r.result, null, 1)
                                       : String(r.result));
@@ -1517,6 +1610,10 @@
     if (cell.semiring === 'probability') {
       if (cell.method) body.method = cell.method;
       if (cell.args) body.arguments = cell.args;
+    } else if (DIST_SEMIRINGS.has(cell.semiring)) {
+      const a = String(distArguments(cell) || '').trim();
+      if (a) body.arguments = a;
+      if (cell.condition) body.condition_uuid = cell.condition;
     } else if (cell.mapping) {
       body.mapping = cell.mapping;
     }
@@ -1542,15 +1639,21 @@
   }
 
   // Insert an evaluation cell for `token` after `afterCell` (a circuit
-  // cell's "Evaluate" button).
-  function insertEvalAfter(afterCell, token, assumed) {
+  // cell's "Evaluate" button). An event starts on its exact probability;
+  // a random variable or aggregate on its distribution profile, given the
+  // row's provenance when the circuit came from a result row (as Circuit
+  // mode presets its "condition on").
+  function insertEvalAfter(afterCell, token, assumed, tokenKind, rowProv) {
     const idx = cells.indexOf(afterCell);
     const cell = newCell('eval');
     cell.token = token;
-    cell.semiring = 'probability';
+    cell.tokenKind = tokenKind || '';
+    cell.semiring = isValueToken(cell) ? 'distribution-profile' : 'probability';
     cell.method = 'exact';
     cell.args = '';
     cell.mapping = '';
+    cell.dist = null;
+    cell.condition = (isValueToken(cell) && rowProv && rowProv !== token) ? rowProv : '';
     cell.assumed = assumed || null;
     const pos = idx >= 0 ? idx + 1 : cells.length;
     cells.splice(pos, 0, cell);
@@ -2114,6 +2217,9 @@
               semiring: c.semiring || 'probability',
               method: c.method || undefined, arguments: c.args || undefined,
               mapping: c.mapping || undefined,
+              token_kind: c.tokenKind || undefined,
+              distribution: c.dist || undefined,
+              condition: c.condition || undefined,
               // The token's assumed class, so a reloaded notebook keeps
               // disabling the semirings the evaluator would refuse.
               assumed: c.assumed || undefined,
@@ -2179,6 +2285,10 @@
         cell.method = normalizeEvalMethod(String(p.method || ''));
         cell.args = String(p.arguments || '');
         cell.mapping = String(p.mapping || '');
+        cell.tokenKind = String(p.token_kind || '');
+        cell.dist = (p.distribution && typeof p.distribution === 'object')
+          ? p.distribution : null;
+        cell.condition = String(p.condition || '');
         cell.assumed = (p.assumed && typeof p.assumed === 'object')
           ? p.assumed : null;
         cell.count = (typeof c.execution_count === 'number') ? c.execution_count : null;

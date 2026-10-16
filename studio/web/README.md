@@ -120,7 +120,8 @@ studio/web/                  # this dir is itself the doc-root
   child-boot.js              # /api/* -> shell bridge, injects app.js, WASM-only UI bits
   psycopg_pglite.py          # the fake psycopg / psycopg_pool / subprocess module
   build.sh serve.py          # assembler + dev static server (tracked)
-  app.js circuit.js          # copied from ../provsql_studio/static (unmodified)
+  app.js circuit.js          # copied from ../provsql_studio/static (unmodified),
+  circuit-vocab.js profile.js #   with the shared vocabulary and profile panel
   app.css colors_and_type.css fonts-face.css fonts/ img/
   pkg/                       # copy of ../provsql_studio/*.py (the unmodified backend)
   pkg/notebooks/             # the bundled example notebooks + manifest.json;

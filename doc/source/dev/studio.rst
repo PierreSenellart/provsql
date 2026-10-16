@@ -75,6 +75,10 @@ Module Layout
    * - ``provsql_studio/static/circuit-vocab.js``
      - Shared gate-vocabulary table (labels, colors, tooltips)
        used by the circuit renderer and the inspector.
+   * - ``provsql_studio/static/profile.js``
+     - The Distribution-profile panel (histogram, PDF / CDF,
+       analytical-curve overlay, wheel zoom), shared by Circuit
+       mode's evaluation strip and notebook evaluation cells.
    * - ``provsql_studio/static/vendor/``
      - Vendored third-party front-end libraries (marked, DOMPurify,
        KaTeX), self-hosted so no CDN is needed at runtime.

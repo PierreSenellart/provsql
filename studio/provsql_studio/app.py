@@ -248,6 +248,7 @@ def create_app(
             "colors_and_type.css",
             "app.css",
             "circuit-vocab.js",
+            "profile.js",
             "app.js",
             "img/favicon.ico",
             "img/logo.png",

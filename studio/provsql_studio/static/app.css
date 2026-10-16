@@ -3392,6 +3392,39 @@ table thead th[data-sort="desc"]::after {
   font-size: 0.72rem;
   color: var(--fg-muted);
 }
+/* Distribution profile / sample panels (profile.js) in an evaluation
+   cell: the chart is a fixed-size SVG, so keep the panel about as wide
+   as Circuit mode's strip rather than stretching its header row. */
+.nb-eval__panel {
+  max-width: 26rem;
+  margin-bottom: 0.2rem;
+}
+/* Arguments of the distribution evaluations (bins, k, p, n, condition). */
+.nb-eval__dist {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+.nb-eval__dist[hidden], .nb-eval__dist label[hidden] { display: none; }
+.nb-eval__dist label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+.nb-eval__num {
+  width: 4.5rem;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+}
+.nb-eval__central { font-size: 0.75rem; }
+.nb-eval__cond {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  width: 18rem;
+  padding: 0.15rem 0.3rem;
+}
 
 /* Example-notebook picker in the notebook toolbar. */
 .nb__example {

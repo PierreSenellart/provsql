@@ -857,17 +857,20 @@ snapshot against the live circuit; the :fa:`external-link-alt`
 :guilabel:`Circuit mode` button jumps to the full canvas (frontier expansion, inspector,
 evaluation strip) preloaded with the token.
 
-For a plain provenance token, the circuit cell offers
-:fa:`bolt` :guilabel:`Evaluate`, which inserts an **evaluation cell**: a compiled
-semiring or probability method (the same picker as Circuit mode's,
-starting from ``exact``, without the methods that depend on the root's
-structure), optional free-text arguments and
-provenance mapping, run against the cell's token. The invocation and
-its result are saved with the notebook, so a loaded notebook shows its
-evaluations without recomputing them. Aggregate and
-random-variable tokens get no Evaluate button: their evaluations
-(distribution profiles, moments, aggregate inspection) are in Circuit
-mode.
+The circuit cell offers :fa:`bolt` :guilabel:`Evaluate`, which inserts an
+**evaluation cell** run against the cell's token. For a provenance token
+(an event), it offers a compiled semiring or probability: the same method
+picker as Circuit mode's, starting from ``exact``, without the methods
+that depend on the root's structure, with optional free-text arguments
+and a provenance mapping. For a random-variable or aggregate token (a
+value), it offers the evaluations Circuit mode offers on such a token:
+:guilabel:`Distribution profile` (the same histogram / PDF / CDF panel,
+with wheel zoom), :guilabel:`Moment` (order *k*, raw or central),
+:guilabel:`Quantile` (fraction *p*), :guilabel:`Sample` (*n* draws), and
+``formula``. Each takes an optional event to condition on, filled in with
+the row's provenance when the circuit came from a result row. The
+invocation and its result are saved with the notebook, so a loaded
+notebook shows its evaluations without recomputing them.
 
 .. figure:: /_static/studio/notebook-circuit-cell.png
    :alt: A circuit cell showing a small plus-rooted DAG with monus and
