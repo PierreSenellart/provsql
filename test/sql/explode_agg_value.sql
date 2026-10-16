@@ -470,6 +470,44 @@ SELECT g, round(e::numeric, 6) AS e FROM ect_vr ORDER BY g;
 DROP TABLE ect_vr;
 DROP VIEW ect_v;
 DROP TABLE ect_k;
+
+-- An aggregate of aggregate results: a view of the totals per (g, h), each a
+-- COALESCE onto 0 over an untracked table of the pairs, and one of the totals
+-- per g summing them.  The values of the outer sum are the sums of one value
+-- of each inner one, which the rank explodes into.  Over the rows (1,1,1),
+-- (1,2,5), (2,1,2), (2,2,3), each present with probability one half, by the
+-- enumeration of the 16 worlds: g = 1 ranks 1.375 on average and g = 2 1.5,
+-- and the total of g = 1 is at least 4 with probability 0.5, that of g = 2
+-- with 0.25.  The outer total has a value in every world, its arguments
+-- being totals that always do: no unknown row.
+CREATE TABLE egh(g int, h int, v int);
+INSERT INTO egh VALUES (1,1,1), (1,2,5), (2,1,2), (2,2,3);
+SELECT add_provenance('egh');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM egh; END $$;
+CREATE TABLE egh_k(g int NOT NULL, h int NOT NULL);
+INSERT INTO egh_k VALUES (1,1), (1,2), (2,1), (2,2);
+CREATE VIEW egh_gh AS
+  SELECT k.g, k.h, coalesce(sum(egh.v), 0) AS s
+  FROM egh_k k LEFT JOIN egh ON egh.g = k.g AND egh.h = k.h
+  GROUP BY k.g, k.h;
+CREATE VIEW egh_g AS SELECT g, sum(s) AS t FROM egh_gh GROUP BY g;
+CREATE TABLE egh_r AS
+  SELECT g, expected(rk) AS e
+  FROM (SELECT g, rank() OVER (ORDER BY t DESC) AS rk FROM egh_g) r;
+SELECT remove_provenance('egh_r');
+SELECT g, round(e::numeric, 6) AS e FROM egh_r ORDER BY g;
+DROP TABLE egh_r;
+CREATE TABLE egh_c AS
+  SELECT g, t >= 4 AS f, probability(provenance()) AS p FROM egh_g;
+SELECT remove_provenance('egh_c');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM egh_c ORDER BY g, f;
+DROP TABLE egh_c;
+DROP VIEW egh_g;
+DROP VIEW egh_gh;
+DROP TABLE egh_k;
+SELECT remove_provenance('egh');
+DROP TABLE egh;
 -- A scalar aggregation, whose single row exists in every world -- including
 -- the one where no row of the table is -- cannot take the truth as a grouping
 -- key, which would lose that world's row: it is exploded into one copy of the

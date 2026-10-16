@@ -283,6 +283,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
+static bool expr_never_null_in(Query *sub, Node *e);
 static bool has_outer_join_walker(Node *node, void *data);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
@@ -27035,12 +27036,12 @@ static void agg_cmp_settle_nullability(agg_cmp_truth_ctx *found, Query *q,
     return;                     /* a null test: two truths only */
   if (agg_nullable && grouped && !outer && found->agg->aggfilter == NULL &&
       list_length(found->agg->args) == 1 &&
-      expr_provably_not_null(
-        (Node *)((TargetEntry *)linitial(found->agg->args))->expr, q, 0))
+      expr_never_null_in(
+        q, (Node *)((TargetEntry *)linitial(found->agg->args))->expr))
     agg_nullable = false;
   found->other_nullable =
     found->other != NULL && contain_vars_of_level(found->other, 0) &&
-    (outer || !expr_provably_not_null(found->other, q, 0));
+    (outer || !expr_never_null_in(q, found->other));
   found->nullable = agg_nullable || found->other_nullable;
 }
 
@@ -27442,6 +27443,38 @@ static Var *subquery_column_of(Query *q, Node *e, Query **sub_out,
  *        @c FILTER over a column declared @c NOT @c NULL has a value in every
  *        group that has a row.
  */
+static bool subquery_agg_column_nullable(Query *sub, TargetEntry *te);
+
+/** @brief Whether @p e, an expression of @p sub (an aggregate's argument, a
+ *  side of a comparison), is never @c NULL: a constant or a column declared
+ *  @c NOT @c NULL, or a column of a subquery that never is (an aggregate that
+ *  has a value in each of its rows, such as a @c COALESCE onto a constant, or
+ *  a column @c output_provably_not_null accepts), no outer join of @p sub
+ *  padding it. */
+static bool expr_never_null_in(Query *sub, Node *e) {
+  e = peel_agg_casts(e);
+  if (expr_provably_not_null(e, sub, 0))
+    return true;
+  if (e != NULL && IsA(e, Var) && ((Var *)e)->varlevelsup == 0 &&
+      ((Var *)e)->varattno > 0 && ((Var *)e)->varno > 0 &&
+      (int)((Var *)e)->varno <= list_length(sub->rtable)) {
+    Var *v = (Var *)e;
+    RangeTblEntry *rte = rt_fetch(v->varno, sub->rtable);
+    TargetEntry *ste;
+
+    if (rtindex_null_padded((Node *)sub->jointree, v->varno, false) ||
+        rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+      return false;
+    ste = get_tle_by_resno(rte->subquery->targetList, v->varattno);
+    if (ste == NULL)
+      return false;
+    if (rte->subquery->hasAggs && contain_aggs_of_level((Node *)ste->expr, 0))
+      return !subquery_agg_column_nullable(rte->subquery, ste);
+    return output_provably_not_null(rte->subquery, v->varattno);
+  }
+  return false;
+}
+
 static bool subquery_agg_column_nullable(Query *sub, TargetEntry *te) {
   Node *e = peel_agg_casts((Node *)te->expr);
 
@@ -27463,8 +27496,8 @@ static bool subquery_agg_column_nullable(Query *sub, TargetEntry *te) {
                 strcmp(name, "min") == 0 || strcmp(name, "max") == 0) &&
                sub->groupClause != NIL && ar->aggfilter == NULL &&
                list_length(ar->args) == 1 &&
-               expr_provably_not_null(
-                 (Node *)((TargetEntry *)linitial(ar->args))->expr, sub, 0) &&
+               expr_never_null_in(
+                 sub, (Node *)((TargetEntry *)linitial(ar->args))->expr) &&
                !rtindex_null_padded(
                  (Node *)sub->jointree,
                  IsA(((TargetEntry *)linitial(ar->args))->expr, Var)

@@ -2915,6 +2915,8 @@ DECLARE
   one     numeric;
   scalar_agg boolean;
   arms    uuid[];
+  cv      uuid;
+  cvals   text[];
 BEGIN
   /* The planner hands the aggregate result itself (an agg_token), whatever
    * the type the query declares for that column. */
@@ -3025,6 +3027,62 @@ BEGIN
       HINT = 'compare it in a HAVING clause, or mark it plain() to read its '
              'plain value',
       DETAIL = 'provsql-reason: explode-aggregate-kind; scope: gap';
+  END IF;
+
+  /* An aggregate of aggregate results -- sum(revenue) over a view of
+   * totals -- has contributions that are no constants but aggregate results
+   * themselves, each taking several values: their own (agg_possible_values
+   * of their gate), a NULL among them contributing nothing.  A sum takes the
+   * subset sums choosing one value of each contribution there, a minimum
+   * (maximum, choice) one of their values.  The combinations no world
+   * realises (two contributions that depend on each other) are emitted too,
+   * and their rows have a provenance of zero. */
+  IF EXISTS (SELECT 1 FROM unnest(provsql.get_children(token)) AS sm
+             WHERE provsql.get_gate_type(sm) = 'semimod'
+               AND provsql.get_gate_type((provsql.get_children(sm))[2])
+                     <> 'value') THEN
+    sums := ARRAY[]::numeric[];
+    vals := ARRAY[]::text[];
+    FOR cv IN SELECT (provsql.get_children(sm))[2]
+              FROM unnest(provsql.get_children(token)) AS sm
+              WHERE provsql.get_gate_type(sm) = 'semimod' LOOP
+      cvals := CASE WHEN provsql.get_gate_type(cv) = 'value'
+                    THEN ARRAY[provsql.get_extra(cv)]
+                    ELSE provsql.agg_possible_values(
+                           provsql.agg_token_make(cv, 0)) END;
+      cvals := ARRAY(SELECT v FROM unnest(cvals) AS v
+                     WHERE coalesce(v, '') NOT IN ('', 'NULL'));
+      IF (ns, fn) = ('pg_catalog', 'sum') THEN
+        sums := ARRAY(SELECT DISTINCT s FROM
+                        (SELECT unnest(sums) AS s
+                         UNION ALL SELECT v::numeric FROM unnest(cvals) AS v
+                         UNION ALL SELECT a + b::numeric
+                                   FROM unnest(sums) AS a, unnest(cvals) AS b)
+                          AS u);
+      ELSE
+        vals := ARRAY(SELECT DISTINCT v FROM
+                        (SELECT unnest(vals) AS v
+                         UNION ALL SELECT unnest(cvals)) AS u);
+      END IF;
+      IF coalesce(array_length(sums, 1), 0) > max_values
+         OR coalesce(array_length(vals, 1), 0) > max_values THEN
+        RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+          MESSAGE = format('ProvSQL: the result of %s() takes more than %s '
+                           'values over the possible worlds, too many to '
+                           'explode it into one row per value', fn,
+                           max_values),
+          HINT = 'mark it plain() to read its plain value',
+          DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
+      END IF;
+    END LOOP;
+    IF (ns, fn) = ('pg_catalog', 'sum') THEN
+      RETURN ARRAY(SELECT s::text FROM unnest(sums) AS s ORDER BY s)
+             || CASE WHEN scalar_agg THEN ARRAY[NULL::text]
+                     ELSE ARRAY[]::text[] END;
+    END IF;
+    RETURN ARRAY(SELECT v FROM unnest(vals) AS v ORDER BY v)
+           || CASE WHEN scalar_agg THEN ARRAY[NULL::text]
+                   ELSE ARRAY[]::text[] END;
   END IF;
 
   IF EXISTS (SELECT 1 FROM unnest(vals) AS v WHERE v IS NULL) THEN

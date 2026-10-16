@@ -475,7 +475,9 @@ another does not.
 This applies to ``count()``, ``min()``, ``max()``, :sqlfunc:`choose`, and
 ``sum()`` over an integer column, and to such an aggregate given a default
 by ``COALESCE(aggregate, constant)``, whose values are the aggregate's and
-the default. Other aggregates (``sum()`` over a
+the default. A ``sum()``, ``min()`` or ``max()`` of aggregate results (the
+totals of a view of subtotals) takes the values that combine those of its
+contributions. Other aggregates (``sum()`` over a
 non-integer column, ``avg()``, ``string_agg()``…) are refused with SQLSTATE
 ``0A000``; group by their value shown with :sqlfunc:`plain` instead:
 

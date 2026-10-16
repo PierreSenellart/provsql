@@ -313,6 +313,28 @@ g|e
 3|1.375000
 4|2.250000
 (4 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|e
+1|1.375000
+2|1.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|f|p
+1|false|0.500000
+1|true|0.500000
+2|false|0.750000
+2|true|0.250000
+(4 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
