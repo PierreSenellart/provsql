@@ -37801,7 +37801,12 @@ static Node *rowstar_mutator(Node *node, void *cx) {
  * Runs on the SELECT of a statement and on that of a CREATE VIEW (analysed
  * on its own by @c DefineView), before the planner hook.
  */
-#if PG_VERSION_NUM >= 140000
+#if PG_VERSION_NUM >= 190000
+static void provsql_post_parse_analyze(ParseState *pstate, Query *query,
+                                       const JumbleState *jstate) {
+  if (prev_post_parse_analyze)
+    prev_post_parse_analyze(pstate, query, jstate);
+#elif PG_VERSION_NUM >= 140000
 static void provsql_post_parse_analyze(ParseState *pstate, Query *query,
                                        JumbleState *jstate) {
   if (prev_post_parse_analyze)
