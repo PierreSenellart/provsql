@@ -420,4 +420,67 @@ DROP TABLE csc_r;
 SELECT remove_provenance('csc');
 DROP TABLE csc;
 
+-- A COALESCE (or GREATEST / LEAST) gives the aggregate a value in the world
+-- where the group has no row, so a grouped HAVING on it says nothing of
+-- whether the group exists: the group's delta stays.  One group of two rows,
+-- 10 and 20, each present with probability one half: the group exists in
+-- three worlds out of four, with a sum of at least 10, so coalesce(sum, 0) = 0
+-- and greatest(sum, 0) = 0 hold in none (they read 1/4, the empty world,
+-- before), and NOT (coalesce(sum, 0) >= 25) in the two worlds of one row
+-- (3/4 before).
+CREATE TABLE ce(g int, v int);
+INSERT INTO ce VALUES (1, 10), (1, 20);
+SELECT add_provenance('ce');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ce; END $$;
+CREATE TABLE ce_h AS
+SELECT 'coalesce = 0' AS q, round(probability(provenance())::numeric, 6) AS p
+  FROM (SELECT g FROM ce GROUP BY g HAVING coalesce(sum(v), 0) = 0) s
+UNION ALL
+SELECT 'greatest = 0', round(probability(provenance())::numeric, 6)
+  FROM (SELECT g FROM ce GROUP BY g HAVING greatest(sum(v), 0) = 0) s
+UNION ALL
+SELECT 'not coalesce >= 25', round(probability(provenance())::numeric, 6)
+  FROM (SELECT g FROM ce GROUP BY g
+        HAVING NOT (coalesce(sum(v), 0) >= 25)) s;
+SELECT remove_provenance('ce_h');
+SELECT * FROM ce_h ORDER BY 1;
+DROP TABLE ce_h;
+
+-- The same comparison in the select list is one truth per world, exploded
+-- into a row per truth as for a bare aggregate (it was read frozen).  Grouped,
+-- the false row holds where the group exists below 25 (1/2); without GROUP BY
+-- the row of the aggregation is there in the empty world too, where the sum
+-- is 0 (3/4).
+CREATE TABLE ce_s AS
+SELECT 'grouped' AS q, coalesce(sum(v), 0) >= 25 AS ok,
+       round(probability(provenance())::numeric, 6) AS p
+  FROM ce GROUP BY g
+UNION ALL
+SELECT 'scalar', coalesce(sum(v), 0) >= 25,
+       round(probability(provenance())::numeric, 6)
+  FROM ce;
+SELECT remove_provenance('ce_s');
+SELECT * FROM ce_s ORDER BY 1, 2;
+DROP TABLE ce_s;
+
+-- An untracked relation of the database outer-joined to a tracked one is
+-- certain (provenance one), so the join is lowered (it was refused): every
+-- group of ce_k keeps its row, the one with no row in ce among them, and the
+-- COALESCE counts it 0.  Group 1 meets 25 in the world holding both rows
+-- (1/4) and misses it in the three others (3/4), the empty one included;
+-- group 2 misses it in every world.
+CREATE TABLE ce_k(g int);
+INSERT INTO ce_k VALUES (1), (2);
+CREATE TABLE ce_j AS
+SELECT k.g, coalesce(sum(ce.v), 0) >= 25 AS ok,
+       round(probability(provenance())::numeric, 6) AS p
+  FROM ce_k k LEFT JOIN ce ON ce.g = k.g
+  GROUP BY k.g;
+SELECT remove_provenance('ce_j');
+SELECT * FROM ce_j ORDER BY 1, 2;
+DROP TABLE ce_j;
+DROP TABLE ce_k;
+SELECT remove_provenance('ce');
+DROP TABLE ce;
+
 SELECT 'ok'::text AS agg_case_done;

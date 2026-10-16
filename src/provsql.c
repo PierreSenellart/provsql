@@ -16148,6 +16148,16 @@ static bool needs_having_lift(Node *havingQual, const constants_t *constants) {
  * is another comparison over the same non-empty worlds, so negation preserves
  * entailment at the atoms.
  */
+/** @brief Walker: an expression that can give an aggregate a value on an
+ *  empty group (@c COALESCE, @c CASE, @c GREATEST / @c LEAST). */
+static bool value_for_empty_group_walker(Node *n, void *ctx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, CoalesceExpr) || IsA(n, CaseExpr) || IsA(n, MinMaxExpr))
+    return true;
+  return expression_tree_walker(n, value_for_empty_group_walker, ctx);
+}
+
 static bool having_entails_group_existence(Expr *expr,
                                            const constants_t *constants,
                                            bool negated)
@@ -16195,8 +16205,11 @@ static bool having_entails_group_existence(Expr *expr,
   }
 
   /* An atom that survived the aggregate test above is a comparison on an
-   * aggregate, which is 0 on the empty group. */
-  return true;
+   * aggregate, which is 0 on the empty group -- unless a COALESCE, a CASE or
+   * a GREATEST / LEAST gives the aggregate a value there: COALESCE(sum(x), 0)
+   * = 0 holds in the world where the group has no row, so the predicate says
+   * nothing of whether the group exists. */
+  return !value_for_empty_group_walker((Node *) expr, NULL);
 }
 
 /* bool_or / bool_and / its every() alias -- the boolean aggregates that the
@@ -26667,12 +26680,21 @@ static bool aggref_truth_comparable(Aggref *ar) {
  *                 group that exists, so that the explosion needs its third,
  *                 unknown row.
  * @param other_out Out (optional): the side compared with the aggregate.
+ * @param defaulted_out Out (optional): whether the aggregate is read through
+ *                 @c COALESCE(aggregate, @c constant), which gives the worlds
+ *                 where it has no value the constant instead.
+ *
+ * The aggregate side may also be @c COALESCE(aggregate, @c constant), the
+ * constant not @c NULL: it is never @c NULL, so the comparison is unknown
+ * only where the other side is.
  */
 static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
-                                     bool *nullable, Node **other_out) {
+                                     bool *nullable, Node **other_out,
+                                     bool *defaulted_out) {
   OpExpr *op;
   Node *l, *r, *agg_side, *other;
   bool l_agg, r_agg;
+  bool defaulted = false;
   Aggref *ar;
 
   if (n == NULL || !IsA(n, OpExpr) || exprType(n) != BOOLOID)
@@ -26708,6 +26730,18 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
   }
 
   agg_side = peel_agg_casts(l_agg ? l : r);
+  if (agg_side != NULL && IsA(agg_side, CoalesceExpr) && !(l_agg && r_agg)) {
+    CoalesceExpr *co = (CoalesceExpr *)agg_side;
+    Node *dflt;
+
+    if (list_length(co->args) != 2)
+      return false;
+    dflt = peel_agg_casts((Node *)lsecond(co->args));
+    if (dflt == NULL || !IsA(dflt, Const) || ((Const *)dflt)->constisnull)
+      return false;
+    agg_side = peel_agg_casts((Node *)linitial(co->args));
+    defaulted = true;
+  }
   if (agg_side == NULL || !IsA(agg_side, Aggref))
     return false;
   ar = (Aggref *)agg_side;
@@ -26732,9 +26766,11 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
     if (agg_out != NULL)
       *agg_out = ar;
     if (nullable != NULL)
-      *nullable = can_be_null;
+      *nullable = can_be_null && !defaulted;
     if (other_out != NULL)
       *other_out = other;
+    if (defaulted_out != NULL)
+      *defaulted_out = defaulted;
   }
   return true;
 }
@@ -26747,6 +26783,7 @@ typedef struct agg_cmp_truth_ctx {
   const constants_t *constants; /**< To recognise @c plain(). */
   Node *other;       /**< What the aggregate is compared with. */
   bool other_nullable; /**< Whether that can be NULL (a column of the group). */
+  bool defaulted;    /**< Whether the aggregate is read through COALESCE. */
 } agg_cmp_truth_ctx;
 
 /**
@@ -26787,7 +26824,19 @@ static void agg_cmp_settle_nullability(agg_cmp_truth_ctx *found, Query *q,
  *        column of the group; a constant never is).
  */
 static Node *agg_cmp_unknown_condition(const agg_cmp_truth_ctx *found) {
-  NullTest *anull = makeNode(NullTest);
+  NullTest *anull;
+
+  if (found->defaulted) {
+    /* COALESCE gives the aggregate a value in every world: only the other
+     * side can make the comparison unknown. */
+    NullTest *onull = makeNode(NullTest);
+    onull->arg = (Expr *)copyObject(found->other);
+    onull->nulltesttype = IS_NULL;
+    onull->argisrow = false;
+    onull->location = -1;
+    return (Node *)onull;
+  }
+  anull = makeNode(NullTest);
   anull->arg = (Expr *)copyObject(found->agg);
   anull->nulltesttype = IS_NULL;
   anull->argisrow = false;
@@ -26842,7 +26891,8 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
         return false;
     }
   }
-  if (agg_cmp_against_constant(n, &ctx->agg, &ctx->nullable, &ctx->other)) {
+  if (agg_cmp_against_constant(n, &ctx->agg, &ctx->nullable, &ctx->other,
+                               &ctx->defaulted)) {
     ctx->found = n;
     return true;
   }
@@ -26892,7 +26942,8 @@ static Node *agg_cmp_subst_mutator(Node *n, void *context) {
  */
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false,
+                             false};
   agg_cmp_subst_ctx subst;
   ListCell *lc;
   RangeTblEntry *rte;
@@ -27065,7 +27116,8 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
  */
 static Query *rewrite_explode_scalar_agg_cmp_truth(
   Query *q, const constants_t *constants) {
-  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false};
+  agg_cmp_truth_ctx found = {NULL, NULL, false, constants, NULL, false,
+                             false};
   List *arms = NIL;
   ListCell *lc;
   Node *cmp;

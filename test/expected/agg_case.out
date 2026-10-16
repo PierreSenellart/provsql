@@ -204,6 +204,38 @@ k|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|p
+coalesce = 0|0.000000
+greatest = 0|0.000000
+not coalesce >= 25|0.500000
+(3 rows)
+remove_provenance
+
+(1 row)
+q|ok|p
+grouped|f|0.500000
+grouped|t|0.250000
+scalar|f|0.750000
+scalar|t|0.250000
+(4 rows)
+remove_provenance
+
+(1 row)
+g|ok|p
+1|f|0.750000
+1|t|0.250000
+2|f|1.000000
+2|t|0.000000
+(4 rows)
+remove_provenance
+
+(1 row)
 agg_case_done
 ok
 (1 row)

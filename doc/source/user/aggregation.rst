@@ -509,7 +509,10 @@ and ``IS NOT NULL`` of an expression over aggregates give two rows the same
 way (a division is refused there).
 
 This works for ``count``, ``sum``, ``avg``, ``min``, ``max`` and
-:sqlfunc:`choose`, with or without ``GROUP BY``. A comparison between two
+:sqlfunc:`choose`, with or without ``GROUP BY``, and for such an aggregate
+given a default by ``COALESCE(aggregate, constant)``, which has a value
+wherever its row is there, so that only a ``NULL`` on the other side of the
+comparison makes it unknown. A comparison between two
 aggregates, one over an aggregate whose ``NULL`` does not mean "no value"
 (``stddev``), and one in a query that also computes a window function are
 read as plain values, with a warning. A ``HAVING`` condition is not
