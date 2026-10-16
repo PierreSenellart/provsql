@@ -2374,12 +2374,12 @@ CREATE OR REPLACE FUNCTION identify_token(
 $$
 DECLARE
   t RECORD;
-  result RECORD;
+  found uuid;
 BEGIN
   table_name:=NULL;
   nb_columns:=-1;
   FOR t IN
-    SELECT relname,
+    SELECT pg_namespace.nspname, relname, attrelid,
       (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0 AND atttypid<>0)-1 c
     FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
                         JOIN pg_class ON attrelid=pg_class.oid
@@ -2388,13 +2388,17 @@ BEGIN
                                      AND nspname<>'provsql'
                                      AND attname='provsql'
   LOOP
-    EXECUTE format('SELECT * FROM %I WHERE provsql=%L',t.relname,token) INTO result;
-    -- Test result.provsql rather than the whole record: "RECORD IS NOT NULL"
-    -- is true only when every field is non-null, so a matched row that has any
-    -- NULL data column would be wrongly skipped. The provsql column is the
-    -- (non-null) token we matched on, so it is set iff a row was found.
-    IF result.provsql IS NOT NULL THEN
-      table_name:=t.relname;
+    -- Qualified by its schema, which need not be on the search_path; and a
+    -- table another session drops, or removes the provenance of, between the
+    -- catalog read and the query is skipped rather than failing the lookup.
+    BEGIN
+      EXECUTE format('SELECT provsql FROM %I.%I WHERE provsql=%L LIMIT 1',
+                     t.nspname, t.relname, token) INTO found;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
+    IF found IS NOT NULL THEN
+      table_name:=t.attrelid::regclass;
       nb_columns:=t.c;
       EXIT;
     END IF;
@@ -2642,7 +2646,6 @@ CREATE OR REPLACE FUNCTION resolve_input(uuid UUID)
 $$
 DECLARE
   t RECORD;
-  rel regclass;
   rd  JSONB;
   -- ProvSQL's rewriter unconditionally appends a provsql column to the
   -- targetlist of any SELECT reading from a tracked relation; capture and
@@ -2650,7 +2653,7 @@ DECLARE
   ign UUID;
 BEGIN
   FOR t IN
-    SELECT c.oid::regclass AS regc
+    SELECT c.oid::regclass AS regc, ns.nspname, c.relname
     FROM pg_attribute a
          JOIN pg_class c ON a.attrelid = c.oid
          JOIN pg_namespace ns ON c.relnamespace = ns.oid
@@ -2661,16 +2664,22 @@ BEGIN
       AND ns.nspname <> 'provsql'
       AND a.attnum > 0
   LOOP
-    FOR rel, rd, ign IN
-      EXECUTE format(
-        'SELECT %L::regclass, to_jsonb(t) - ''provsql'', t.provsql FROM %s AS t WHERE provsql = $1',
-        t.regc, t.regc)
-      USING uuid
-    LOOP
-      relation := rel;
-      row_data := rd;
-      RETURN NEXT;
-    END LOOP;
+    -- A table another session drops, or removes the provenance of, between
+    -- the catalog read and the query is skipped (see identify_token).
+    BEGIN
+      FOR rd, ign IN
+        EXECUTE format(
+          'SELECT to_jsonb(t) - ''provsql'', t.provsql FROM %I.%I AS t WHERE provsql = $1',
+          t.nspname, t.relname)
+        USING uuid
+      LOOP
+        relation := t.regc;
+        row_data := rd;
+        RETURN NEXT;
+      END LOOP;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
   END LOOP;
 END
 $$ LANGUAGE plpgsql STABLE;

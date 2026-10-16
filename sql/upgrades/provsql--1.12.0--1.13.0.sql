@@ -6300,6 +6300,88 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 
+/* identify_token: tables named with their schema, and a table dropped
+ * concurrently skipped rather than failing the lookup. */
+CREATE OR REPLACE FUNCTION identify_token(
+  token UUID, OUT table_name regclass, OUT nb_columns integer) AS
+$$
+DECLARE
+  t RECORD;
+  found uuid;
+BEGIN
+  table_name:=NULL;
+  nb_columns:=-1;
+  FOR t IN
+    SELECT pg_namespace.nspname, relname, attrelid,
+      (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0 AND atttypid<>0)-1 c
+    FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
+                        JOIN pg_class ON attrelid=pg_class.oid
+                        JOIN pg_namespace ON relnamespace=pg_namespace.oid
+    WHERE typname='uuid' AND relkind='r'
+                                     AND nspname<>'provsql'
+                                     AND attname='provsql'
+  LOOP
+    -- Qualified by its schema, which need not be on the search_path; and a
+    -- table another session drops, or removes the provenance of, between the
+    -- catalog read and the query is skipped rather than failing the lookup.
+    BEGIN
+      EXECUTE format('SELECT provsql FROM %I.%I WHERE provsql=%L LIMIT 1',
+                     t.nspname, t.relname, token) INTO found;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
+    IF found IS NOT NULL THEN
+      table_name:=t.attrelid::regclass;
+      nb_columns:=t.c;
+      EXIT;
+    END IF;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql STRICT;
+
+CREATE OR REPLACE FUNCTION resolve_input(uuid UUID)
+  RETURNS TABLE(relation regclass, row_data JSONB) AS
+$$
+DECLARE
+  t RECORD;
+  rd  JSONB;
+  -- ProvSQL's rewriter unconditionally appends a provsql column to the
+  -- targetlist of any SELECT reading from a tracked relation; capture and
+  -- discard it here rather than disabling the rewriter for the whole call.
+  ign UUID;
+BEGIN
+  FOR t IN
+    SELECT c.oid::regclass AS regc, ns.nspname, c.relname
+    FROM pg_attribute a
+         JOIN pg_class c ON a.attrelid = c.oid
+         JOIN pg_namespace ns ON c.relnamespace = ns.oid
+         JOIN pg_type ty ON a.atttypid = ty.oid
+    WHERE a.attname = 'provsql'
+      AND ty.typname = 'uuid'
+      AND c.relkind = 'r'
+      AND ns.nspname <> 'provsql'
+      AND a.attnum > 0
+  LOOP
+    -- A table another session drops, or removes the provenance of, between
+    -- the catalog read and the query is skipped (see identify_token).
+    BEGIN
+      FOR rd, ign IN
+        EXECUTE format(
+          'SELECT to_jsonb(t) - ''provsql'', t.provsql FROM %I.%I AS t WHERE provsql = $1',
+          t.nspname, t.relname)
+        USING uuid
+      LOOP
+        relation := t.regc;
+        row_data := rd;
+        RETURN NEXT;
+      END LOOP;
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+      CONTINUE;
+    END;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql STABLE;
+
 /* Volatility and parallel safety (1.13): a function that may sample (a Monte
  * Carlo fallback) or draws a fresh random variable is VOLATILE; one that
  * reaches probability_evaluate, or whose SQL / PL/pgSQL body runs queries
