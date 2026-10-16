@@ -35,6 +35,13 @@ CREATE TABLE cs9_r AS
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
+-- The revenue of each region, a region where no deal is made counting 0: a
+-- LEFT JOIN from the untracked, certain regions, and COALESCE.  Steps 5, 6,
+-- 7 and 11 read it.
+CREATE VIEW cs9_region_revenue AS
+  SELECT r.name AS region, r.target, coalesce(sum(d.amount), 0) AS revenue
+  FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
+  GROUP BY r.name;
 
 -- Step 3: ROLLUP subtotals add up (94.50 + 60.00 = 154.50; total 405.00).
 CREATE TABLE cs9_r AS
@@ -66,45 +73,47 @@ SELECT customer, region, quarter, amount, to_date, expected_to_date,
 FROM cs9_r ORDER BY region, quarter, customer;
 DROP TABLE cs9_r;
 
--- Step 5: expected share of the total, per world (North 0.3891).
+-- Step 5: expected share of the total, per world (North 0.3863; 0.3891 if a
+-- region where no deal is made had no share at all instead of 0).
 CREATE TABLE cs9_r AS
-  SELECT region, round(expected(sum(amount)::numeric
+  SELECT region, round(expected(revenue::numeric
                                 / (SELECT sum(amount) FROM cs9_deal))::numeric, 4)
                    AS share
-  FROM cs9_deal GROUP BY region;
+  FROM cs9_region_revenue;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
 -- Step 6: the top region (North 0.4516, South 0.2790, West 0.2960) and the
--- expected rank (North 1.7398, South 2.0766, West 2.0925).
+-- expected rank (North 1.7483, South 2.0830, West 2.1211, a region where no
+-- deal is made ranking with 0), both checked against the enumeration of the
+-- 4096 worlds.  The view holds an outer join, so the rank, which reads it
+-- twice, reads it through a shared CTE.
 CREATE TABLE cs9_r AS
   SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_top
-  FROM (SELECT region, sum(amount) AS revenue FROM cs9_deal GROUP BY region
+  FROM (SELECT region FROM cs9_region_revenue
         ORDER BY revenue DESC FETCH FIRST 1 ROW WITH TIES) t;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
   SELECT region, rk, round(expected(rk)::numeric, 4) AS expected_rank
-  FROM (SELECT region, rank() OVER (ORDER BY sum(amount) DESC) AS rk
-        FROM cs9_deal GROUP BY region) t;
+  FROM (SELECT region, rank() OVER (ORDER BY revenue DESC) AS rk
+        FROM cs9_region_revenue) t;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 7: on target, compared with the region's target, fixed by its key.
--- The LEFT JOIN from the untracked, certain regions keeps every region in
--- every world, and COALESCE counts the one closing nothing as 0, so the two
--- truths add up to 1 (North true 0.5490, false 0.4510 = 0.4440 + 0.0070, the
--- world closing nothing).  The target is NOT NULL and COALESCE gives the sum
--- a value, so the comparison is never unknown, and there is no unknown row.
+-- Step 7: on target, a comparison over the view's aggregate column, exploded
+-- into its truths.  Every region has a row in every world, so the two truths
+-- add up to 1 (North true 0.5490, false 0.4510 = 0.4440 + 0.0070, the world
+-- where no deal is made).  The target is NOT NULL on the preserved side of the
+-- LEFT JOIN and COALESCE gives the revenue a value, so the comparison is never
+-- unknown, and there is no unknown row.
 CREATE TABLE cs9_r AS
-  SELECT r.name AS region,
-         coalesce(sum(d.amount), 0) >= r.target AS on_target,
+  SELECT region, revenue >= target AS on_target,
          round(probability_evaluate(provenance())::numeric, 4) AS p
-  FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
-  GROUP BY r.name;
+  FROM cs9_region_revenue;
 SELECT remove_provenance('cs9_r');
 SELECT region, coalesce(on_target::text, 'unknown') AS on_target, p
 FROM cs9_r ORDER BY region, on_target;
@@ -156,9 +165,9 @@ SELECT * FROM cs9_r ORDER BY name, big_deal;
 DROP TABLE cs9_r;
 
 -- Step 9: a percentage with FILTER and a NULLIF divisor (North 49.35).
--- Step 11: best and average region (194.73 and 135.00 = 405 / 3, the regions
--- closing nothing counted 0 through the LEFT JOIN and COALESCE; 137.14 from
--- the deals alone, which give such a region no row).
+-- Step 11: best and average region over the view (194.73 and 135.00 =
+-- 405 / 3; 137.14 from the deals alone, which give a region where no deal is
+-- made no row).
 CREATE TABLE cs9_r AS
   SELECT region,
          round(expected(100.0 * count(*) FILTER (WHERE amount >= 60)
@@ -170,9 +179,7 @@ DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
   SELECT round(expected(max(revenue))::numeric, 2) AS best_region,
          round(expected(avg(revenue))::numeric, 2) AS average_region
-  FROM (SELECT r.name AS region, coalesce(sum(d.amount), 0) AS revenue
-        FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
-        GROUP BY r.name) t;
+  FROM cs9_region_revenue;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r;
 DROP TABLE cs9_r;
@@ -266,6 +273,7 @@ SELECT * FROM cs9_r ORDER BY name;
 DROP TABLE cs9_r, cs9_deal_consent, cs9_consent;
 DROP TYPE cs9_purpose;
 
+DROP VIEW cs9_region_revenue;
 SELECT remove_provenance('cs9_deal');
 DROP TABLE cs9_deal;
 DROP TABLE cs9_region;

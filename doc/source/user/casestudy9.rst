@@ -130,8 +130,19 @@ uncertain, present only in the worlds where some deal is made in North,
 with probability ``probability_evaluate(provenance())`` = 0.9930, and
 155.59 × 0.9930 = 154.50.
 
-A dashboard counts a region where no deal is made as 0, and so does the
-rest of this case study, with ``coalesce``.
+A dashboard counts a region where no deal is made as 0. The view below
+gives each region its revenue that way, for the steps that read it:
+starting from ``region`` with a ``LEFT JOIN`` keeps a row for every region,
+even in the worlds where no deal is made in it, and ``coalesce`` counts its
+revenue as 0 there.
+
+.. code-block:: postgresql
+
+    CREATE VIEW region_revenue AS
+      SELECT r.name AS region, r.target,
+             coalesce(sum(d.amount), 0) AS revenue
+      FROM region r LEFT JOIN deal d ON d.region = r.name
+      GROUP BY r.name;
 
 ``round(avg(amount), 1)`` rounds the average in every world: the rounding
 is carried with the aggregate, not applied to its value on the data as it
@@ -194,16 +205,15 @@ Step 5: Each Region's Share
 .. code-block:: postgresql
 
     SELECT region,
-           round(expected(sum(amount)::numeric
+           round(expected(revenue::numeric
                           / (SELECT sum(amount) FROM deal))::numeric, 4)
              AS share
-    FROM deal
-    GROUP BY region
+    FROM region_revenue
     ORDER BY region;
 
 The share is a ratio of two sums that vary together: in each world, a
 region's revenue over the total revenue of that same world. Its expected
-value (0.3891 for North) is not the ratio of the forecasts (154.50 /
+value (0.3863 for North) is not the ratio of the forecasts (154.50 /
 405.00 = 0.3815), since a world where North closes a large deal is also a
 world with a larger total.
 
@@ -217,9 +227,8 @@ The top region is the first row of a sort by revenue:
 
     SELECT region,
            round(probability_evaluate(provenance())::numeric, 4) AS p_top
-    FROM (SELECT region, sum(amount) AS revenue
-          FROM deal
-          GROUP BY region
+    FROM (SELECT region
+          FROM region_revenue
           ORDER BY revenue DESC
           FETCH FIRST 1 ROW WITH TIES) t
     ORDER BY region;
@@ -237,12 +246,11 @@ A ``rank()`` over the revenue gives each region its rank in every world:
 .. code-block:: postgresql
 
     SELECT region, rk, round(expected(rk)::numeric, 4) AS expected_rank
-    FROM (SELECT region, rank() OVER (ORDER BY sum(amount) DESC) AS rk
-          FROM deal
-          GROUP BY region) t
+    FROM (SELECT region, rank() OVER (ORDER BY revenue DESC) AS rk
+          FROM region_revenue) t
     ORDER BY region;
 
-North's expected rank, 1.7398, is the best of the three.
+North's expected rank, 1.7483, is the best of the three.
 
 
 Step 7: On Target?
@@ -253,19 +261,15 @@ target in ``region``:
 
 .. code-block:: postgresql
 
-    SELECT r.name AS region,
-           coalesce(sum(d.amount), 0) >= r.target AS on_target,
+    SELECT region, revenue >= target AS on_target,
            round(probability_evaluate(provenance())::numeric, 4) AS p
-    FROM region r LEFT JOIN deal d ON d.region = r.name
-    GROUP BY r.name
-    ORDER BY r.name, on_target;
+    FROM region_revenue
+    ORDER BY region, on_target;
 
 The comparison has one truth value per world, so each region comes out
 once per truth value, with its probability: North meets its target of 150
-with probability 0.5490 and misses it with probability 0.4510. Starting
-from ``region`` with a ``LEFT JOIN`` keeps a row for every region, even in
-the worlds where no deal is made in it, and ``coalesce`` counts its revenue
-as 0 there (Step 2).
+with probability 0.5490 and misses it with probability 0.4510, the worlds
+where no deal is made in North included.
 
 
 Step 8: Quarter-over-Quarter Growth
@@ -361,15 +365,12 @@ An aggregate of the regional revenues reads them in every world:
 
     SELECT round(expected(max(revenue))::numeric, 2) AS best_region,
            round(expected(avg(revenue))::numeric, 2) AS average_region
-    FROM (SELECT r.name AS region, coalesce(sum(d.amount), 0) AS revenue
-          FROM region r LEFT JOIN deal d ON d.region = r.name
-          GROUP BY r.name) t;
+    FROM region_revenue;
 
 The best region's revenue is 194.73 on average, well above any single
 region's forecast: whichever region is lucky in a world, that one counts.
 The average region's, 135.00, is the mean of the three forecasts of Step 2,
-the ``LEFT JOIN`` and ``coalesce`` counting a region where no deal is made
-as 0 (Step 7).
+a region where no deal is made counting as 0.
 
 
 Step 12: How Many Deals Does a Region Close?

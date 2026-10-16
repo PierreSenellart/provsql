@@ -195,7 +195,7 @@ Supported SQL constructs
    "``FILTER`` clause on aggregates", "", "", "✓", "", "", "", "", "", "", "✓"
    "``CREATE TABLE … AS SELECT``", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓", ""
    "``CREATE MATERIALIZED VIEW``", "", "", "", "", "", "", "", "", "", ""
-   "Provenance-bearing view", "", "", "✓", "", "✓", "", "", "", "", ""
+   "Provenance-bearing view", "", "", "✓", "", "✓", "", "", "", "", "✓"
    "``INSERT … SELECT`` (provenance propagation)", "", "", "", "", "", "✓", "", "", "", ""
    "Outer join (``LEFT`` / ``RIGHT`` / ``FULL JOIN``)", "", "", "", "", "", "✓", "", "", "", "✓"
    "``EXISTS`` / ``NOT EXISTS`` subquery", "", "", "", "", "", "✓", "", "", "", ""

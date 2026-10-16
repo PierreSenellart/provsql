@@ -46,9 +46,9 @@ remove_provenance
 
 (1 row)
 region|share
-North|0.3891
-South|0.3144
-West|0.3115
+North|0.3863
+South|0.3121
+West|0.3015
 (3 rows)
 remove_provenance
 
@@ -62,9 +62,9 @@ remove_provenance
 
 (1 row)
 region|rk|expected_rank
-North|2 (*)|1.7398
-South|3 (*)|2.0766
-West|1 (*)|2.0925
+North|2 (*)|1.7483
+South|3 (*)|2.0830
+West|1 (*)|2.1211
 (3 rows)
 remove_provenance
 
