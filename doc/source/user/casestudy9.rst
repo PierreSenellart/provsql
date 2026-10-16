@@ -222,6 +222,10 @@ The top region is the first row of a sort by revenue:
           FETCH FIRST 1 ROW WITH TIES) t
     ORDER BY region;
 
+``FETCH FIRST 1 ROW`` is the SQL-standard way of writing ``LIMIT 1``; its
+``WITH TIES`` option, which ``LIMIT`` lacks, also keeps the rows that tie
+with the last one, here a region with the same revenue as the leader.
+
 Each region is kept in the worlds where it leads: North with probability
 0.4516, South 0.2790, West 0.2960. When every deal closes, West leads, with
 310; but West's lead rests on Sierra, a 150 deal at 0.2.
