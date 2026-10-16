@@ -22,21 +22,33 @@ continuous random variables, and for probabilistic aggregates alike.
 .. tip::
 
    **Best run as a notebook.** This case study is meant to be run
-   interactively in :doc:`ProvSQL Studio <studio>` in notebook mode -- try
-   it in the ProvSQL Playground, no install, `as a runnable notebook
-   <https://provsql.org/playground/?nb=cs8>`_ and step through the cells.
-   See the :ref:`Playground note <playground-note>`.
+   interactively in :doc:`ProvSQL Studio <studio>` in notebook mode, in
+   either of two ways:
 
-   With ProvSQL installed, launch Studio (``provsql-studio``), switch to
-   :guilabel:`Notebook` mode, and pick *Case Study: ProvSQL as a
-   Probability Calculator* from the :guilabel:`Open example…` menu. The
-   notebook is bound to a database named ``cs8``: if it does not exist
-   yet, press :guilabel:`Create cs8` in the banner above the notebook (see
-   :ref:`studio-example-notebooks`). Then step through the cells, or press
-   :fa:`forward` :guilabel:`Run all`.
+   - **In the ProvSQL Playground**, with nothing to install: open it `as a
+     runnable notebook <https://provsql.org/playground/?nb=cs8>`_ and step
+     through the cells (see the :ref:`Playground note <playground-note>`).
+   - **In a local Studio**, if ProvSQL is installed: launch Studio
+     (``provsql-studio``), switch to :guilabel:`Notebook` mode, and pick
+     *Case Study: ProvSQL as a Probability Calculator* from the
+     :guilabel:`Open example…` menu. The notebook is bound to a database
+     named ``cs8``: if it does not exist yet, press :guilabel:`Create cs8`
+     in the banner above the notebook (see :ref:`studio-example-notebooks`).
+     Then step through the cells, running each one with its :fa:`play`
+     button, or with :kbd:`Shift+Enter`, which also moves on to the next
+     cell.
 
 The Scenario
 ------------
+
+.. warning::
+
+   The agency, its screening programme, and every figure in this case study
+   (prevalences, test accuracies, biomarker distributions, thresholds,
+   dosing intervals, case counts, durations) are **fictional or simplified**,
+   chosen solely to illustrate classic probability problems with ProvSQL.
+   They convey no medical or epidemiological knowledge and are not health
+   advice.
 
 An epidemiology desk at a public-health agency keeps a small probabilistic
 model of a screening programme and reaches for ProvSQL whenever a question
@@ -46,22 +58,10 @@ building its model and then asking the calculator.
 
 .. nb:omit-begin
 
-This case study assumes a working ProvSQL installation (see
-:doc:`getting-provsql`). It needs no setup script: each problem creates its
-own little model as part of the story. Start a fresh database and enable
-the extension once,
-
-.. code-block:: bash
-
-    createdb cs8
-    psql -d cs8
-
-.. code-block:: postgresql
-
-    CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
-    SET search_path TO public, provsql;
-
-then paste the blocks below as you read.
+The case study needs no setup script: each problem creates its own little
+model as part of the story. The blocks also run as they are in ``psql``,
+on any database where the extension is enabled (see :doc:`getting-provsql`)
+and with ``SET search_path TO public, provsql``.
 
 .. nb:omit-end
 
@@ -333,7 +333,7 @@ token to bring the circuit back up:
       AND x.factor IN ('insulin_resistance', 'high_salt')
     GROUP BY ();
 
-Press :fa:`bolt` :guilabel:`Evaluate`, leave the method on its default, and
+Press :fa:`bolt` :guilabel:`Evaluate`, leave the method on ``exact``, and
 :fa:`play` :guilabel:`Run`: 0.44, and the strip notes *via possible-worlds* -- the
 exact method the chooser judged cheapest here. Now change the method
 dropdown in the strip and re-run:
@@ -349,7 +349,7 @@ dropdown in the strip and re-run:
   ``obesity`` feeds both conditions (the shared gate in that circuit).
 
 That refusal is the point. The chooser never offered ``independent`` for
-this circuit; the bare default stays correct as your circuits gain
+this circuit; ``exact`` stays correct as your circuits gain
 structure, and a method that does not fit is refused, never quietly wrong.
 
 Problem 4: A Continuous Quantity
@@ -437,7 +437,10 @@ The same ``|`` also conditions one *event* on another, so a conditional
 probability reads directly. Among referred patients (biomarker above 25),
 how many are in fact severe (above 30)? That is
 :math:`\Pr(x > 30 \mid x > 25)`, written by conditioning the two comparison
-events:
+events. From here on we use :sqlfunc:`probability`, the short form of
+:sqlfunc:`probability_evaluate`: on a token it is the very same function,
+and it also takes the event itself, as a Boolean condition, so no detour
+through a token is needed:
 
 .. code-block:: postgresql
 
@@ -593,8 +596,8 @@ the complementary "valid record" event:
       FROM doses a JOIN doses b
         ON a.id < b.id AND abs(a.administered - b.administered) < 21;
 
-    SELECT probability_evaluate(provenance())  AS p_violation,
-           probability_evaluate(!provenance()) AS p_valid
+    SELECT probability(provenance())  AS p_violation,
+           probability(!provenance()) AS p_valid
     FROM violation;
 
 The clash has probability 0.375, so a valid record (``!provenance()``) has
@@ -609,8 +612,8 @@ names ``W`` without adding it to the row's lineage:
 .. code-block:: postgresql
 
     SELECT d.id,
-           probability_evaluate(provenance()) AS prior,
-           probability_evaluate(provenance() | !(SELECT provenance() FROM violation)) AS posterior
+           probability(provenance()) AS prior,
+           probability(provenance() | !(SELECT provenance() FROM violation)) AS posterior
     FROM doses d
     ORDER BY d.id;
 
@@ -1093,8 +1096,9 @@ recurred:
   is therefore one node, so joint, disjoint, and conditional probabilities
   come out consistent without assuming independence. That is the gap between
   ProvSQL's 0.44 and the independence estimate 0.545 in Problem 2.
-* :sqlfunc:`probability_evaluate` returns an exact probability and selects the
-  evaluation method itself; Studio's evaluation strip reports which one ran.
+* :sqlfunc:`probability_evaluate` (or its short form :sqlfunc:`probability`)
+  returns an exact probability and selects the evaluation method itself;
+  Studio's evaluation strip reports which one ran.
   Sampling appears only where no exact method applies (the full distribution
   profiles in Problems 4 and 5, the mixture tail in Problem 10) or where you
   request it (Problem 3's Monte-Carlo run), and then under an explicit
