@@ -5,7 +5,7 @@ add_provenance
 remove_provenance
 
 (1 row)
-region|pipeline|if_any_closes|forecast|avg_deal
+region|pipeline|if_any_deal|forecast|avg_deal
 North|275 (*)|155.59|154.50|68.8 (*)
 South|215 (*)|125.40|124.50|53.8 (*)
 West|310 (*)|130.17|126.00|77.5 (*)
@@ -89,17 +89,17 @@ remove_provenance
 
 (1 row)
 region|p_growth
-North|0.2580
-South|0.4852
-West|0.3720
+North|0.3010
+South|0.5080
+West|0.4400
 (3 rows)
 remove_provenance
 
 (1 row)
 region|big_deal|p_big
-North|true (*)|0.3021
+North|true (*)|0.3000
 South|false (*)|0.0000
-West|true (*)|0.2066
+West|true (*)|0.2000
 (3 rows)
 remove_provenance
 
@@ -123,7 +123,7 @@ remove_provenance
 
 (1 row)
 best_region|average_region
-194.73|137.14
+194.73|135.00
 (1 row)
 remove_provenance
 

@@ -106,7 +106,7 @@ Step 2: Expected Revenue per Region
 
     SELECT region,
            sum(amount) AS pipeline,
-           round(expected(sum(amount))::numeric, 2) AS if_any_closes,
+           round(expected(sum(amount))::numeric, 2) AS if_any_deal,
            round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast,
            round(avg(amount), 1) AS avg_deal
     FROM deal
@@ -117,19 +117,21 @@ Step 2: Expected Revenue per Region
 for North. The marker ``(*)`` says it is an aggregate result, whose value
 depends on the world.
 
-The two expectations answer two questions. In a world where a region closes
-no deal, its group is empty and ``sum(amount)`` is NULL, as SQL's ``sum``
-over no rows. :sqlfunc:`expected` averages over the worlds where its
+The two expectations answer two questions. In a world where no deal is
+made in a region, its group is empty and ``sum(amount)`` is NULL, as SQL's
+``sum`` over no rows. :sqlfunc:`expected` averages over the worlds where its
 argument has a value, so ``expected(sum(amount))`` is the expected revenue
-*given that the region closes something*: 155.59 for North. ``coalesce``
-turns that NULL into 0, and ``expected`` then averages over every world:
-the forecast, 154.50 for North, which is
-``80 × 0.9 + 45 × 0.5 + 120 × 0.3 + 30 × 0.8``, each
-amount times the probability of its deal closing.
-The two agree: North's row is itself uncertain, present only in the worlds
-where North closes something, with probability
-``probability_evaluate(provenance())`` = 0.9930, and
+*given that some deal is made in the region*: 155.59 for North.
+``coalesce`` turns that NULL into 0, and ``expected`` then averages over
+every world: the forecast, 154.50 for North, which is
+``80 × 0.9 + 45 × 0.5 + 120 × 0.3 + 30 × 0.8``, each amount times the
+probability of its deal closing. The two agree: North's row is itself
+uncertain, present only in the worlds where some deal is made in North,
+with probability ``probability_evaluate(provenance())`` = 0.9930, and
 155.59 × 0.9930 = 154.50.
+
+A dashboard counts a region where no deal is made as 0, and so does the
+rest of this case study, with ``coalesce``.
 
 ``round(avg(amount), 1)`` rounds the average in every world: the rounding
 is carried with the aggregate, not applied to its value on the data as it
@@ -260,13 +262,10 @@ target in ``region``:
 
 The comparison has one truth value per world, so each region comes out
 once per truth value, with its probability: North meets its target of 150
-with probability 0.5490 and misses it with probability 0.4510. The
-``LEFT JOIN`` keeps every region, even in the worlds where it closes no
-deal, and ``coalesce`` counts its revenue as 0 there, so the two
-probabilities add up to 1. With an inner join from ``deal``, North would
-have no row in those worlds, and its two probabilities would add up to
-0.9930 only. A ``NULL`` target would make the comparison unknown, in a row
-of its own; the targets are declared ``NOT NULL``, so there is none.
+with probability 0.5490 and misses it with probability 0.4510. Starting
+from ``region`` with a ``LEFT JOIN`` keeps a row for every region, even in
+the worlds where no deal is made in it, and ``coalesce`` counts its revenue
+as 0 there (Step 2).
 
 
 Step 8: Quarter-over-Quarter Growth
@@ -284,21 +283,27 @@ Aggregates combine with each other, within a group and in its ``HAVING``:
     GROUP BY region
     ORDER BY region;
 
+The difference is taken in every world, so its expectation is the
+difference of the two forecasts: North shrinks by 34.50 on average
+(``(120 × 0.3 + 30 × 0.8) - (80 × 0.9 + 45 × 0.5)``), and West, 0.00, is
+flat.
+
+The regions whose Q2 revenue beats their Q1 revenue:
+
+.. code-block:: postgresql
+
     SELECT region,
            round(probability_evaluate(provenance())::numeric, 4) AS p_growth
     FROM deal
     GROUP BY region
-    HAVING sum(amount) FILTER (WHERE quarter = 'Q2')
-         > sum(amount) FILTER (WHERE quarter = 'Q1')
+    HAVING coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
+         > coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0)
     ORDER BY region;
 
-The difference is taken in every world, so its expectation is the
-difference of the two forecasts: North shrinks by 34.50 on average
-(``(120 × 0.3 + 30 × 0.8) - (80 × 0.9 + 45 × 0.5)``), and West, 0.00, is
-flat. The ``HAVING`` keeps a region in the worlds where its Q2 revenue
-beats its Q1 revenue, both quarters closing something: West with
-probability 0.3720, although its expected growth is zero, and South, the
-likeliest to grow, with 0.4852.
+The ``HAVING`` keeps a region in the worlds where its Q2 revenue beats its
+Q1 revenue, a quarter with no deal counting as 0: West with probability
+0.4400, although its expected growth is zero, and South, the likeliest to
+grow, with 0.5080.
 
 
 Step 9: The Share of Big Deals
@@ -327,7 +332,8 @@ integer, it is an indicator, whose expectation is a probability. An
 .. code-block:: postgresql
 
     SELECT region, bool_or(amount >= 100) AS big_deal,
-           round(expected(bool_or(amount >= 100)::int)::numeric, 4) AS p_big
+           round(expected(coalesce(bool_or(amount >= 100), false)::int)::numeric, 4)
+             AS p_big
     FROM deal
     GROUP BY region
     ORDER BY region;
@@ -339,13 +345,11 @@ integer, it is an indicator, whose expectation is a probability. An
     FROM region r
     ORDER BY r.name, big_deal;
 
-The two read the same question differently. ``bool_or`` is a value of
-North's group, so it is read in the worlds where North closes a deal:
-``0.3 / 0.993 = 0.3021``, the probability that Fjordline closes over the
-probability that some North deal does. ``EXISTS`` is read from the
-``region`` table, which is not tracked: each region is there in every
-world, once per truth value, and North has a big deal with probability
-0.3000, Fjordline's own. South has none in any world.
+Both give North a big deal with probability 0.3000, Fjordline's own.
+``coalesce`` makes ``bool_or`` false where no deal is made in the region
+(Step 2); ``EXISTS`` is read from the ``region`` table, which is not
+tracked: each region is there in every world, once per truth value. South
+has no big deal in any world.
 
 
 Step 11: The Best Region and the Average Region
@@ -357,11 +361,15 @@ An aggregate of the regional revenues reads them in every world:
 
     SELECT round(expected(max(revenue))::numeric, 2) AS best_region,
            round(expected(avg(revenue))::numeric, 2) AS average_region
-    FROM (SELECT region, sum(amount) AS revenue
-          FROM deal GROUP BY region) t;
+    FROM (SELECT r.name AS region, coalesce(sum(d.amount), 0) AS revenue
+          FROM region r LEFT JOIN deal d ON d.region = r.name
+          GROUP BY r.name) t;
 
 The best region's revenue is 194.73 on average, well above any single
 region's forecast: whichever region is lucky in a world, that one counts.
+The average region's, 135.00, is the mean of the three forecasts of Step 2,
+the ``LEFT JOIN`` and ``coalesce`` counting a region where no deal is made
+as 0 (Step 7).
 
 
 Step 12: How Many Deals Does a Region Close?

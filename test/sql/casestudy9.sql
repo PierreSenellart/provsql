@@ -28,7 +28,7 @@ DO $$ BEGIN PERFORM set_prob(provenance(), win_prob) FROM cs9_deal; END $$;
 -- (North 154.50 = 80*.9 + 45*.5 + 120*.3 + 30*.8).
 CREATE TABLE cs9_r AS
   SELECT region, sum(amount) AS pipeline,
-         round(expected(sum(amount))::numeric, 2) AS if_any_closes,
+         round(expected(sum(amount))::numeric, 2) AS if_any_deal,
          round(expected(coalesce(sum(amount), 0))::numeric, 2) AS forecast,
          round(avg(amount), 1) AS avg_deal
   FROM cs9_deal GROUP BY region;
@@ -112,8 +112,10 @@ DROP TABLE cs9_r;
 
 -- Step 8: growth from Q1 to Q2, a difference of two aggregates (North
 -- (36 + 24) - (72 + 22.5) = -34.50, South -4.50, West 0.00), and the regions
--- whose Q2 beats their Q1 in a HAVING (North 0.2580, South 0.4852, West
--- 0.3720).
+-- whose Q2 beats their Q1 in a HAVING, a quarter closing nothing counting 0
+-- (North 0.3010 = 0.2580 with both quarters closing something, plus Q1 closing
+-- nothing, 0.1 x 0.5, while Q2 closes something, 1 - 0.7 x 0.2; South 0.5080,
+-- West 0.4400).
 CREATE TABLE cs9_r AS
   SELECT region,
          round(expected(coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
@@ -126,18 +128,19 @@ DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
   SELECT region, round(probability_evaluate(provenance())::numeric, 4) AS p_growth
   FROM cs9_deal GROUP BY region
-  HAVING sum(amount) FILTER (WHERE quarter = 'Q2')
-       > sum(amount) FILTER (WHERE quarter = 'Q1');
+  HAVING coalesce(sum(amount) FILTER (WHERE quarter = 'Q2'), 0)
+       > coalesce(sum(amount) FILTER (WHERE quarter = 'Q1'), 0);
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
 DROP TABLE cs9_r;
 
--- Step 10: a big deal (>= 100) closes: bool_or, read in the worlds where the
--- region closes a deal (North 0.3 / 0.993 = 0.3021, West 0.2066), and EXISTS
+-- Step 10: a big deal (>= 100) closes: bool_or, false with COALESCE where no
+-- deal is made in the region (North 0.3000, West 0.2000), and EXISTS
 -- over the untracked regions, in every world (North 0.3000, West 0.2000).
 CREATE TABLE cs9_r AS
   SELECT region, bool_or(amount >= 100) AS big_deal,
-         round(expected(bool_or(amount >= 100)::int)::numeric, 4) AS p_big
+         round(expected(coalesce(bool_or(amount >= 100), false)::int)::numeric, 4)
+           AS p_big
   FROM cs9_deal GROUP BY region;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r ORDER BY region;
@@ -153,7 +156,9 @@ SELECT * FROM cs9_r ORDER BY name, big_deal;
 DROP TABLE cs9_r;
 
 -- Step 9: a percentage with FILTER and a NULLIF divisor (North 49.35).
--- Step 11: best and average region (194.73 and 137.14).
+-- Step 11: best and average region (194.73 and 135.00 = 405 / 3, the regions
+-- closing nothing counted 0 through the LEFT JOIN and COALESCE; 137.14 from
+-- the deals alone, which give such a region no row).
 CREATE TABLE cs9_r AS
   SELECT region,
          round(expected(100.0 * count(*) FILTER (WHERE amount >= 60)
@@ -165,7 +170,9 @@ DROP TABLE cs9_r;
 CREATE TABLE cs9_r AS
   SELECT round(expected(max(revenue))::numeric, 2) AS best_region,
          round(expected(avg(revenue))::numeric, 2) AS average_region
-  FROM (SELECT region, sum(amount) AS revenue FROM cs9_deal GROUP BY region) t;
+  FROM (SELECT r.name AS region, coalesce(sum(d.amount), 0) AS revenue
+        FROM cs9_region r LEFT JOIN cs9_deal d ON d.region = r.name
+        GROUP BY r.name) t;
 SELECT remove_provenance('cs9_r');
 SELECT * FROM cs9_r;
 DROP TABLE cs9_r;
