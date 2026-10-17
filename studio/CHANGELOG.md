@@ -18,7 +18,7 @@ changed" in the GitHub release notes.
 
 Companion release for ProvSQL extension 1.13.0, which reports every
 refusal and every untracked part of a query with a reason tag, and adds
-resource limits, write-once probabilities and recursion by equation
+resource limits, write-once probabilities, and recursion by equation
 systems. Studio shows all of these where they occur, and its settings
 panel is now built from the server's own list of parameters.
 Requires extension **>= 1.13.0**.
@@ -27,21 +27,21 @@ Requires extension **>= 1.13.0**.
 
 - **Diagnostics you can act on.** A warning or an error from ProvSQL
   shows its reason tag as a badge (`provsql-reason`, and whether the
-  limit is deliberate, a gap or out of scope), and its `HINT`, which
+  limit is deliberate, a gap, or out of scope), and its `HINT`, which
   says what to write instead or which setting to raise, stays visible
   on its own line in the result area and the notebook cells.
 - **Settings built from the server.** The configuration panel is
   generated from `pg_settings`, with a curated list in sections
   (Tracking, Limits, Evaluation, Messages, and a folded Advanced
-  section): each widget follows the parameter's type, PostgreSQL
+  section). Each widget follows the parameter's type, PostgreSQL
   validates the value and its refusals appear on the status line, and
   parameters the user cannot change are greyed out. The new
-  `provsql.implicit_freeze`, `provsql.max_memory`, `provsql.max_worlds`
+  `provsql.implicit_freeze`, `provsql.max_memory`, `provsql.max_worlds`,
   and `provsql.gate_cache_size` are there. The tool settings
   (`provsql.tool_search_path`, `provsql.fallback_compiler`) move to a
   Settings section of the Tools panel.
 - **Cancel and limits.** A query stopped by the cancel button, a
-  statement timeout or one of ProvSQL's resource limits is reported as
+  statement timeout, or one of ProvSQL's resource limits is reported as
   such, with the limit's hint.
 - **Probabilities are written once.** The circuit inspector shows an
   input gate's probability read-only, offering only a first write; the
@@ -50,14 +50,14 @@ Requires extension **>= 1.13.0**.
 - **Recursion and arithmetic in the circuit view.** The equation-system
   gates of a recursion over cyclic data are rendered, and every
   arithmetic operator ProvSQL records over aggregates (integer
-  division, `floor`, `ceil`, `round`, `abs`, `power`, …) has its glyph.
-- **Subset, clearance and consent semirings.** The evaluation strip
-  offers `subset`, `clearance` and `consent` in its User-enum group, for
-  mappings whose value is an enum or an array of one; a consent result
-  returned for some purposes but not over the whole database says so.
-- **Paths of a recursion.** The evaluation strip offers *Regular
-  expression*, *Least cost with its paths* and *Least cost with one
-  path* (the extension's `sr_regex`, `sr_tropical_paths` and
+  division, `floor`, `ceil`, `round`, `abs`, `power`…) has its glyph.
+- **Subset, clearance, and consent semirings.** The evaluation strip
+  offers `subset`, `clearance`, and `consent` in its User-enum group, for
+  mappings whose value is an enum or an array of one; a row that some
+  purposes return but the unrestricted query does not is flagged.
+- **Paths in a graph.** The evaluation strip offers *Regular
+  expression*, *Least cost with its paths*, and *Least cost with one
+  path* (the extension's `sr_regex`, `sr_tropical_paths`, and
   `sr_best_path`), with a picker for the mapping that labels the
   tuples. Formula also renders circuits marked absorptive, and names
   the unknowns of a recursion's equations as the circuit view numbers
@@ -71,33 +71,31 @@ Requires extension **>= 1.13.0**.
   database session has ended is rerun on a new one, saying why; an
   unreachable database is reported at once, offering to pick another or
   edit the connection.
+- **Build commit in the footer.** When Studio or ProvSQL is not on a
+  release tag, the footer shows, on a line of its own, the commit each
+  was built from.
 
 ### Fixes
 
 - A saved setting for a parameter the server no longer has, or no longer
   accepts, no longer breaks every request: each override is applied on
   its own.
-- The row cap Studio puts around a query no longer triggers ProvSQL's
-  warning about a `LIMIT` without `ORDER BY` over tracked data.
 - Temporal mode offers plain tracked tables in its relation picker.
 - An older `/api/temporal` response no longer overwrites a newer one on
   the timeline.
 - Aggregate names are shown whole in circuit nodes.
-- A random variable that hides the current evaluation falls back to the
-  Distribution profile.
-- Opening the Tools panel keeps the evaluation result; an open popover
-  closes when another opens.
-- The footer shows the commit after Studio's and ProvSQL's versions when
-  they are not on a release tag, on a line of its own.
-- Playground: the browser build's driver reports a lost connection as
-  the server version does.
+- Opening a random variable or an aggregate result after a Boolean
+  evaluation such as Probability selects Distribution profile in the
+  evaluation strip, not Formula.
+- Opening the panel that holds the tool settings no longer clears the
+  evaluation result; an open popover closes when another opens.
 
 ### Notebooks
 
 - New example notebook for case study 9 (a sales-forecast dashboard over
-  deals that may not close); every other case study revised, case
-  study 3 now following journeys over the whole Île-de-France network
-  with the path semirings.
+  deals that may not close).
+- The other example notebooks are updated to the current versions of
+  their case studies.
 
 ## [1.8.0] - 2026-08-07
 
