@@ -207,10 +207,12 @@ def test_circuit_and_tree_decomposition_endpoints(cs7_page: Page) -> None:
     """/api/circuit returns a laid-out DAG and /api/kc/td a tree decomposition
     (the latter exercises the WASM-Graphviz path for the SVG/scene). A plain
     tracked SELECT gives an input-gate token (a bare UUID the KC endpoints
-    accept directly)."""
+    accept directly); LIMIT plain(1) keeps the first row of the actual data
+    with its own token, where a tracked LIMIT 1 would return every row that
+    comes first in some world."""
     f = ui(cs7_page)
     f.locator("#request").fill(
-        "SELECT reviewer, paper FROM bid ORDER BY reviewer, paper LIMIT 1;")
+        "SELECT reviewer, paper FROM bid ORDER BY reviewer, paper LIMIT plain(1);")
     f.locator("#run-btn").click()
     expect(f.locator("#result-count")).to_have_text("1", timeout=20000)
     token = (f.locator("#result-body tr").first
