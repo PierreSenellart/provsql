@@ -5,6 +5,9 @@
 > transparently rewrites queries to track which input tuples contribute
 > to each result, then evaluates the provenance in any user-chosen
 > semiring: Boolean reachability, counting, why/how/where-provenance,
+> the best paths in a graph while evaluating a recursive query over it
+> (or all of them, as a regular expression),
+> access clearance and consent purposes,
 > probability (probabilistic databases, including continuous random
 > variables), Shapley and Banzhaf values, temporal validity, and more.
 > A companion web UI, ProvSQL Studio, provides interactive provenance

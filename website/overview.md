@@ -54,12 +54,27 @@ in the user documentation for the precise scope.
 ## Semiring Evaluation {#semirings}
 
 Once a query carries provenance, its circuit can be evaluated in any
-commutative **(m-)semiring** through a single compiled-evaluation path:
-Boolean provenance, tuple counting, why-, how-, and which-provenance,
-symbolic formulas, and the tropical, Viterbi, Łukasiewicz, and
-min-max / max-min semirings, among others. The same circuit also drives
-**where-provenance** – which source cells contributed to each output
-value – and **Shapley / Banzhaf values** that quantify each input
+**(m-)semiring** through a single compiled-evaluation path. Built in:
+- Boolean provenance and Boolean expressions: whether a row is derived,
+  and from which combinations of inputs
+- counting: how many ways a row is derived
+- why-, how-, and which-provenance, and symbolic formulas
+- regular expressions over input labels: the paths in a graph while
+  evaluating a recursive query over it
+- tropical: the least cost of a derivation, alone, or with the best
+  paths in a graph while evaluating a recursive query over it (all of
+  them, or one)
+- Viterbi: the probability of the most likely derivation
+- Łukasiewicz: a fuzzy truth degree
+- min-max / max-min: the security level or the availability of a row
+- subset, clearance and consent: the levels at which a row is visible,
+  or the purposes it may serve
+- interval unions: the time, or the numeric range, over which a row is
+  valid
+
+Others can be defined in SQL with `provenance_evaluate`. The same
+circuit also drives **where-provenance** – which source cells
+contributed to each output value – and **Shapley / Banzhaf values** that quantify each input
 tuple's contribution to an answer, both computed in a single traversal.
 See the [semiring documentation](/docs/user/semirings.html).
 
