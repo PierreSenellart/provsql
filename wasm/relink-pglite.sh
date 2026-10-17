@@ -47,9 +47,17 @@ NM=/emsdk/upstream/bin/llvm-nm
 INCLUDED="$PWD/pglite/static/included.pglite.exports"
 IMPDIR=dist/include/postgresql/emscripten/extension/imports
 INTRINSICS='_GLOBAL_OFFSET_TABLE_|_Unwind_.*|__gxx_personality_v0|emscripten_.*|invoke_.*|__dso_handle|__memory_base|__stack_pointer|__table_base|__indirect_function_table|setThrew|__threwValue|saveSetjmp|testSetjmp|getTempRet0|setTempRet0'
+# The sweep covers every object build-extension.sh links (src/ and its
+# distributions/ and semiring/ subdirectories), plus the linked provsql.so for
+# what the bundled C++ runtime imports (asprintf, sched_yield, ...).  Sweeping
+# src/*.o alone missed
+# the libm functions only the distribution families call (erf, lgamma,
+# tgamma, expm1, log1p), which the main module then never exported: the first
+# normal CDF called a missing function and left the backend half-aborted.
 ( cd provsql-wasm
-  $NM --undefined-only src/*.o | awk '{print $2}' | sed '/^$/d' | sort -u > provsql.undef.txt
-  $NM --defined-only src/*.o provsql.so | awk '$2 ~ /^[TDB]$/ {print $3}' | sed '/^$/d' | sort -u > provsql.defs.txt
+  OBJS=$(ls src/*.o src/distributions/*.o src/semiring/*.o 2>/dev/null)
+  $NM --undefined-only $OBJS provsql.so | awk '{print $2}' | sed '/^$/d' | sort -u > provsql.undef.txt
+  $NM --defined-only $OBJS provsql.so | awk '$2 ~ /^[TDB]$/ {print $3}' | sed '/^$/d' | sort -u > provsql.defs.txt
   comm -23 provsql.undef.txt provsql.defs.txt \
     | grep -v '^_Z' \
     | { [ -f "$INCLUDED" ] && grep -vxF -f "$INCLUDED" || cat; } \
@@ -57,7 +65,7 @@ INTRINSICS='_GLOBAL_OFFSET_TABLE_|_Unwind_.*|__gxx_personality_v0|emscripten_.*|
     > "../$IMPDIR/provsql.imports" )
 echo "provsql.imports: $(wc -l < $IMPDIR/provsql.imports) symbols"
 
-PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -sSUPPORT_LONGJMP=emscripten \
+PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
 -Wno-declaration-after-statement -Wno-macro-redefined -Wno-unused-function -Wno-missing-prototypes \
 -Wno-incompatible-pointer-types -O2 \
 -D__PGLITE__ -Dsystem=pgl_system -Dpopen=pgl_popen -Dpclose=pgl_pclose \

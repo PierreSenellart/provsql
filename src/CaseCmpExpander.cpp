@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "having_semantics.hpp"  // extract_constant_string, map_cmp_op, parse_decimal_scaled
+#include "Circuit.hpp"  // Circuit<>::getUUID, used on the circuit
 
 extern "C" {
 #include "provsql_utils.h"  // gate_type enum

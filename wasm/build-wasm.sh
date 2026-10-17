@@ -78,12 +78,43 @@ rm -f "$PG/dist/include/postgresql/emscripten/extension/imports/provsql.imports"
 #    script is copied in under a distinct name so it never shadows the upstream
 #    core builder.
 #
+# The core is built with WebAssembly-native exceptions and setjmp/longjmp
+# (CORE_ABI) instead of upstream's emscripten emulation: with the emulation a
+# C++ `catch` in the extension either never runs or also catches PostgreSQL's
+# error longjmp (see build-extension.sh).  The upstream script is run from a
+# generated copy, build-pglite-core.sh, with the flag swapped and step 4 (the
+# other extensions, PostGIS included) dropped: the Playground loads none of
+# them, and they would have to be rebuilt for the same ABI.  The JavaScript-mode
+# exception helpers are removed from upstream's curated export list, which
+# would otherwise ask the link to export symbols the native mode does not have.
+CORE_ABI="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+CORE_STAMP="$PG/dist/.provsql-core-abi"
+sed -e "s/-sSUPPORT_LONGJMP=emscripten/$CORE_ABI/" \
+    -e '/^# Step 4: make and dist other extensions/,/^PATH=\$SAVE_PATH$/d' \
+    "$PG/build-pglite.sh" > "$PG/build-pglite-core.sh"
+chmod +x "$PG/build-pglite-core.sh"
+sed -i -E '/^(__cxa_find_matching_catch_[0-9]+|__resumeException)$/d' \
+    "$PG/pglite/static/included.pglite.exports"
+
 # The core build is slow (the upstream script reconfigures unconditionally) and
 # does not change between extension iterations, so do it only once: skip it
-# when the install tree is already populated.  A fresh clone (CI) has no dist/
-# and always builds it; WASM_REBUILD_CORE=1 forces a rebuild.
-if [ "${WASM_REBUILD_CORE:-0}" = 1 ] || [ ! -f "$PG/dist/bin/pglite.wasm" ]; then
-  "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite.sh
+# when the install tree is already populated with a core of the current ABI.  A
+# fresh clone (CI) has no dist/ and always builds it; a core built with another
+# ABI (an older version of this script) is rebuilt from a clean tree, its
+# extension tarballs and import lists dropped; WASM_REBUILD_CORE=1 forces a
+# rebuild.
+if [ "${WASM_REBUILD_CORE:-0}" = 1 ] || [ ! -f "$PG/dist/bin/pglite.wasm" ] \
+   || [ "$(cat "$CORE_STAMP" 2>/dev/null)" != "$CORE_ABI" ]; then
+  if [ -f "$PG/dist/bin/pglite.wasm" ]; then
+    echo "==> WASM core built with another ABI (or rebuild forced); rebuilding clean"
+    rm -rf "$PG/dist/extensions" "$PG/dist/include/postgresql/emscripten/extension/imports"
+    rm -f "$PG/config.status"
+    "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" \
+      sh -c 'emmake make PORTNAME=emscripten clean >/dev/null 2>&1;
+             emmake make PORTNAME=emscripten -C contrib clean >/dev/null 2>&1; true'
+  fi
+  "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite-core.sh
+  echo "$CORE_ABI" > "$CORE_STAMP"
 else
   echo "==> WASM core already built (dist/bin/pglite.wasm present); skipping" \
        "the core build -- set WASM_REBUILD_CORE=1 to force it"
@@ -114,6 +145,7 @@ cp "$REPO/wasm/build-extension.sh" "$REPO/wasm/relink-pglite.sh" "$PG/"
 #    release/ holds the prebuilt core the TS package links against; PGlite's own
 #    full build would create it, but we build only the core, so ensure it exists.
 mkdir -p packages/pglite/release
+rm -f packages/pglite/release/*.tar.gz   # extension bundles of an earlier core
 # pglite.* is the server module; initdb.* is the separate first-boot module the
 # TS package imports (src/initdbModFactory.ts -> ../release/initdb).  Both come
 # from the core build's dist/bin and are needed for the TS bundle to resolve.

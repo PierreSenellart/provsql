@@ -39,10 +39,16 @@ cd pglite && git submodule update --init --depth 1 postgres-pglite
 PG=$PWD/postgres-pglite
 
 # 2. Build the WASM Postgres core once (upstream configure+make+install;
-#    the `dist/` install is what the extension links against). This is the
-#    first ~two steps of postgres-pglite/build-pglite.sh, run in the image.
-podman run --rm --workdir="$PG" -v "$PG:$PG:rw" -v "$PG/dist:/pglite:rw" "$IMG" ./build-pglite.sh
-#    (or run only its configure + `emmake make` + `emmake make install`.)
+#    the `dist/` install is what the extension links against), with
+#    WebAssembly-native exceptions and setjmp/longjmp instead of upstream's
+#    emscripten emulation (see Notes), and without upstream's step 4 (the
+#    other extensions, which would need the same ABI).
+sed -e 's/-sSUPPORT_LONGJMP=emscripten/-fwasm-exceptions -sSUPPORT_LONGJMP=wasm/' \
+    -e '/^# Step 4: make and dist other extensions/,/^PATH=\$SAVE_PATH$/d' \
+    "$PG/build-pglite.sh" > "$PG/build-pglite-core.sh" && chmod +x "$PG/build-pglite-core.sh"
+sed -i -E '/^(__cxa_find_matching_catch_[0-9]+|__resumeException)$/d' \
+    "$PG/pglite/static/included.pglite.exports"
+podman run --rm --workdir="$PG" -v "$PG:$PG:rw" -v "$PG/dist:/pglite:rw" "$IMG" ./build-pglite-core.sh
 
 # 3. Stage ProvSQL's sources + generated SQL into the extension build dir.
 mkdir -p "$PG/provsql-wasm"
@@ -63,9 +69,9 @@ podman run --rm --workdir="$PG" -v "$PG:$PG:rw" -v "$PG/dist:/pglite:rw" "$IMG" 
 #    contrib tarballs (uuid-ossp, ...) ProvSQL's CASCADE needs.
 cp "$PG"/dist/bin/pglite.{wasm,data,js} packages/pglite/release/
 # Contrib tarballs (uuid-ossp…) that `CREATE EXTENSION provsql CASCADE`
-# needs: from the full build's dist/extensions, or – if you only built the
-# core – copy them from the published npm package (ABI-compatible, same
-# tree): `cp node_modules/@electric-sql/pglite/dist/*.tar.gz packages/pglite/release/`
+# needs, from the core build's dist/extensions (the published npm package's
+# are built with the emscripten emulation, a different ABI, and do not load).
+cp "$PG"/dist/extensions/*.tar.gz packages/pglite/release/
 corepack pnpm install --filter "@electric-sql/pglite..."
 corepack pnpm --filter @electric-sql/pglite-utils run build
 corepack pnpm --filter @electric-sql/pglite      run build:js
@@ -87,6 +93,21 @@ The artifacts are the **matched pair**: `packages/pglite/dist/pglite.wasm`
 - **`MAIN_MODULE=2`, not `1`.** Export-all (`MAIN_MODULE=1`) links but
   breaks `initdb`; the matched build keeps `MAIN_MODULE=2` and adds
   ProvSQL's imports to the export list (step 4 / `relink-pglite.sh`).
+- **WebAssembly-native exceptions and setjmp/longjmp**
+  (`-fwasm-exceptions -sSUPPORT_LONGJMP=wasm`), for the core and the
+  extension alike: the two modules must agree. Under upstream's emscripten
+  emulation a C++ `catch` in the extension either never runs (exception
+  catching disabled, emscripten's default) or, with `-fexceptions`, also
+  catches PostgreSQL's error longjmp, which emscripten throws as the number
+  `Infinity`. Either way the backend is left half-aborted and, a few calls
+  later, fails with `ERRORDATA_STACK_SIZE exceeded`. The native modes keep
+  the two apart, as a native build does. `build-wasm.sh` rebuilds a core
+  built with another ABI from a clean tree (stamp `dist/.provsql-core-abi`).
+- **PGlite swallows unknown exceptions.** Its message loop catches anything
+  thrown by `_PostgresMainLoopOnce` other than PostgreSQL's own longjmp
+  without logging it: a missing import or a trap shows only as an empty
+  result and leaked snapshots. To see it, log the exception in
+  `packages/pglite/dist/index.js` (the `catch` after `_PostgresMainLoopOnce()`).
 - **The libc++ `inline` fix** (`patches/0001-cxx-inline-libcxx.patch`) is a
   PGlite-Postgres bug that blocks any C++ extension; ideally upstreamed to
   `electric-sql/postgres-pglite`.

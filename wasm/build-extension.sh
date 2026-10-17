@@ -22,8 +22,16 @@ emcc --clear-cache >/dev/null 2>&1 || true
 sed -i 's/^#ifdef PG_FORCE_DISABLE_INLINE$/#if defined(PG_FORCE_DISABLE_INLINE) \&\& !defined(__cplusplus)/' \
   dist/include/postgresql/server/c.h
 
-# ABI flags PGlite's Postgres core and PostGIS were built with.
-PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -sSUPPORT_LONGJMP=emscripten \
+# ABI flags of the PGlite Postgres core (build-wasm.sh switches the upstream
+# core build to them).  Exceptions and setjmp/longjmp are the WebAssembly-native
+# ones, -fwasm-exceptions -sSUPPORT_LONGJMP=wasm, not emscripten's JavaScript
+# emulation: with the latter a C++ `catch` either never runs (exceptions
+# disabled, emscripten's default) or, with -fexceptions, also catches
+# PostgreSQL's error longjmp, which emscripten throws as a plain number.  The
+# extension raises PostgreSQL errors from inside C++ `try` blocks and catches
+# C++ exceptions around PostgreSQL calls; only the native modes keep the two
+# apart, as they are on a native build.  Main and side module must agree.
+PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
 -Wno-declaration-after-statement -Wno-macro-redefined -Wno-unused-function -Wno-missing-prototypes \
 -Wno-incompatible-pointer-types -O2 \
 -D__PGLITE__ -Dsystem=pgl_system -Dpopen=pgl_popen -Dpclose=pgl_pclose \
@@ -62,10 +70,12 @@ for f in $CFILES;   do o="${f%.c}.o";   emcc            $PGLITE_CFLAGS $INC -c "
 for f in $CPPFILES; do o="${f%.cpp}.o"; em++ -std=c++17 $BOOST_CXX17_COMPAT $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CXX FAIL $f"; head -5 "$o.err"; }; done
 [ -n "$FAIL" ] && { echo "COMPILE FAILURES:$FAIL"; exit 1; }
 
-# Whole-archive libc++/libc++abi: the PGlite main module is pure C and
-# cannot supply the C++ runtime to the side module.
-em++ $PGLITE_CFLAGS -sSIDE_MODULE=1 -sSUPPORT_LONGJMP=emscripten \
-  -Wl,--whole-archive -lc++ -lc++abi -Wl,--no-whole-archive \
+# Whole-archive libc++/libc++abi/libunwind: the PGlite main module is pure C
+# and cannot supply the C++ runtime to the side module.  libunwind carries
+# _Unwind_CallPersonality, through which every catch site of a WebAssembly
+# exception reaches the C++ personality routine.
+em++ $PGLITE_CFLAGS -sSIDE_MODULE=1 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm \
+  -Wl,--whole-archive -lc++ -lc++abi -lunwind -Wl,--no-whole-archive \
   $OBJS -o provsql.so 2>link.err || { echo "LINK FAILED"; tail -15 link.err; exit 1; }
 echo "built provsql.so: $(stat -c%s provsql.so) bytes"
 

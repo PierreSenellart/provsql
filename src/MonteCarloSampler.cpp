@@ -7,7 +7,7 @@
 #include "RandomVariable.h"
 #include "distributions/Distribution.h"  // makeDistribution -> per-family sample()
 #include "RangeCheck.h"        // collectRvConstraints
-#include "Circuit.h"
+#include "Circuit.hpp"         // Circuit<>::getUUID, used on the circuit
 #include "provsql_interrupt.h"  // provsql_poll_interrupt
 
 #include <algorithm>
