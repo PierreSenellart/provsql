@@ -701,3 +701,47 @@ SELECT remove_provenance('oj_q');
 SELECT remove_provenance('oj_a');
 SELECT remove_provenance('oj_h');
 DROP TABLE oj_q, oj_a, oj_h;
+
+-- The left input of an outer join that holds an outer join itself, an
+-- aggregate over it: the arms of the lowering read it from a shared CTE, and
+-- its count is no key of the matching (one null-padded row, not one per value
+-- the count takes).  Each row at 0.5: s is (2) where a2 has no b, which holds
+-- with probability 0.25; its row matches c1 in half of those worlds.
+CREATE TABLE oj_ca(id int, k int);
+CREATE TABLE oj_cb(id int, aid int);
+CREATE TABLE oj_cc(id int);
+INSERT INTO oj_ca VALUES (2, 1);
+INSERT INTO oj_cb VALUES (1, 2);
+INSERT INTO oj_cc VALUES (1);
+SELECT add_provenance('oj_ca');
+SELECT add_provenance('oj_cb');
+SELECT add_provenance('oj_cc');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM oj_ca;
+  PERFORM set_prob(provsql, 0.5) FROM oj_cb;
+  PERFORM set_prob(provsql, 0.5) FROM oj_cc;
+END $$;
+CREATE TABLE oj_t AS
+  SELECT s.id, c.id AS cid,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT a.id, a.k, count(b.id) AS n
+        FROM oj_ca a LEFT JOIN oj_cb b ON a.id = b.aid
+        GROUP BY a.id, a.k HAVING count(b.id) = 0) s
+  LEFT JOIN oj_cc c ON s.k = c.id;
+SELECT remove_provenance('oj_t');
+SELECT * FROM oj_t ORDER BY id, cid;
+DROP TABLE oj_t;
+
+-- A join beside an outer join, moved into a subquery, reading a WITH entry of
+-- the statement: the rows present are those of SQL.
+CREATE TABLE oj_t AS
+  WITH bc(name, v) AS (SELECT 'one', 1 UNION SELECT 'two', 2)
+  SELECT a.id, bc.name, c.id AS cid, present(provenance()) AS present
+  FROM oj_ca a JOIN bc ON bc.v = a.k LEFT JOIN oj_cc c ON c.id = a.k;
+SELECT remove_provenance('oj_t');
+SELECT id, name, cid FROM oj_t WHERE present ORDER BY id, name, cid;
+DROP TABLE oj_t;
+SELECT remove_provenance('oj_ca');
+SELECT remove_provenance('oj_cb');
+SELECT remove_provenance('oj_cc');
+DROP TABLE oj_ca, oj_cb, oj_cc;

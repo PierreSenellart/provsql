@@ -1712,3 +1712,31 @@ DROP TABLE sq_r;
 SELECT remove_provenance('sq_s');
 SELECT remove_provenance('sq_u');
 DROP TABLE sq_s, sq_u;
+
+-- A scalar subquery in a branch of a CASE whose guard compares an aggregate of
+-- a subquery joined to another relation: the condition kept on the group (the
+-- guard's truths) is added to a HAVING that is no comparison of its own.  The
+-- rows present are those of SQL.
+CREATE TABLE sq_p(id int, typ int, parentid int, owner int, tags text);
+CREATE TABLE sq_us(id int);
+INSERT INTO sq_p VALUES (1, 4, 1, 1, 'a'), (2, 1, NULL, 5, 'b'),
+  (4, 2, 2, 1, 'c'), (5, 4, 2, 3, 'd');
+INSERT INTO sq_us VALUES (1), (3), (5);
+SELECT add_provenance('sq_p');
+SELECT add_provenance('sq_us');
+CREATE TABLE sq_r AS
+  SELECT u.id AS owner, p.id::text AS id,
+         CASE WHEN p.typ = 1 THEN p.tags
+              WHEN p.typ = 2 THEN (SELECT tags FROM sq_p p3
+                                   WHERE p3.id = p.parentid) END AS tags,
+         present(provenance()) AS present
+  FROM sq_us u
+  JOIN (SELECT owner, min(id) AS id, min(typ) AS typ,
+               min(parentid) AS parentid, min(tags) AS tags
+        FROM sq_p WHERE typ IN (1, 2) GROUP BY owner) p ON u.id = p.owner;
+SELECT remove_provenance('sq_r');
+SELECT owner, id, tags FROM sq_r WHERE present ORDER BY owner;
+DROP TABLE sq_r;
+SELECT remove_provenance('sq_p');
+SELECT remove_provenance('sq_us');
+DROP TABLE sq_p, sq_us;
