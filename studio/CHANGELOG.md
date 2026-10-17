@@ -14,7 +14,7 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
-## [1.9.0] - unreleased
+## [1.9.0] - 2026-10-17
 
 Companion release for ProvSQL extension 1.13.0, which reports every
 refusal and every untracked part of a query with a reason tag, and adds
