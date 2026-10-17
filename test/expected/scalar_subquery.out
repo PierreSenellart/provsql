@@ -1073,3 +1073,52 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: scalar subquery nested in an expression: provenance not tracked, although the statement tracks sq_p
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
+HINT:  Mark it plain() to say so.
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks sq_us
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: cast, conditional, comparison
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+owner|id|tags
+1|4|b
+5|2|b
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

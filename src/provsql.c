@@ -17906,6 +17906,13 @@ static void wrap_join_tree(Query *q, Node **slot) {
   sub->hasSubLinks = checkExprHasSubLink((Node *)sub->jointree);
   /* One level deeper: its references to queries around q */
   IncrementVarSublevelsUp((Node *)sub, 1, 1);
+  /* ... and to the WITH entries of q itself, which the increment leaves at
+   * level 0, where sub, without any of its own, has none to name */
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind == RTE_CTE && r->ctelevelsup == 0)
+      r->ctelevelsup = 1;
+  }
 
   i = 0;
   foreach (lc, q->rtable)
@@ -24490,6 +24497,20 @@ static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
       return expr_is_aggregate_result(constants, rte->subquery,
                                       (Node *)te->expr);
     }
+    /* The input of an outer join that holds outer joins itself, which the
+     * arms of its lowering read from a shared CTE */
+    if (rte_is_shared_cte(rte)) {
+      Query *body = shared_cte_orig(rte->ctename);
+      TargetEntry *te;
+      if (body == NULL)
+        return false;
+      te = get_tle_by_resno(body->targetList, v->varattno);
+      if (te == NULL || expression_returns_set((Node *)te->expr))
+        return false;
+      if (body->hasAggs && contain_aggs_of_level((Node *)te->expr, 0))
+        return true;
+      return expr_is_aggregate_result(constants, body, (Node *)te->expr);
+    }
     if (rte->rtekind == RTE_JOIN &&
         v->varattno <= list_length(rte->joinaliasvars))
       return expr_is_aggregate_result(
@@ -24876,8 +24897,9 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
   } else if(IsA(havingQual, BoolExpr) && ((BoolExpr*)havingQual)->boolop==AND_EXPR) {
     BoolExpr *be = (BoolExpr*)havingQual;
     be->args = lappend(be->args, expr);
-  } else if(IsA(havingQual, OpExpr) || IsA(havingQual, BoolExpr)) {
-    /* BoolExpr that is not an AND (OR/NOT): wrap with a new AND node. */
+  } else if(exprType(havingQual) == BOOLOID) {
+    /* Any other condition (an OR, a NOT, a comparison, a function, a
+     * CASE...): wrap with a new AND node. */
     BoolExpr *be = makeNode(BoolExpr);
     be->boolop=AND_EXPR;
     be->location=-1;

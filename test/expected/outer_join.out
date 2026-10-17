@@ -507,3 +507,34 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|cid|p
+2|1|0.1250
+2||0.1250
+(2 rows)
+remove_provenance
+
+(1 row)
+id|name|cid
+2|one|1
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
