@@ -35207,7 +35207,7 @@ static Query *process_query_impl(const constants_t *constants, Query *q,
          * per value it takes carries it (in every arm, so that the difference
          * matches rows on data), and what cannot be exploded is refused. */
         AttrNumber col;
-        int ncols = list_length(stmt->colTypes);
+        AttrNumber ncols = (AttrNumber) list_length(stmt->colTypes);
 
         for (col = 1; col <= ncols; ++col) {
           if (!setop_column_has_aggregate(constants, q, q->setOperations, col))

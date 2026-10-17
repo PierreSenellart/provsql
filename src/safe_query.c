@@ -4637,7 +4637,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     int pos = (int) vars_arr[i]->varattno;
     if (pos > cert->maxarity) cert->maxarity = pos;
   }
-  cert->atom_col_class = palloc(natoms * cert->maxarity * sizeof(int));
+  cert->atom_col_class = palloc((Size) natoms * cert->maxarity * sizeof(int));
   for (i = 0; i < natoms * cert->maxarity; i++) cert->atom_col_class[i] = -1;
   for (i = 0; i < nvars; i++) {
     Index vno = vars_arr[i]->varno;
