@@ -109,9 +109,15 @@ if [ "${WASM_REBUILD_CORE:-0}" = 1 ] || [ ! -f "$PG/dist/bin/pglite.wasm" ] \
     echo "==> WASM core built with another ABI (or rebuild forced); rebuilding clean"
     rm -rf "$PG/dist/extensions" "$PG/dist/include/postgresql/emscripten/extension/imports"
     rm -f "$PG/config.status"
-    "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" \
-      sh -c 'emmake make PORTNAME=emscripten clean >/dev/null 2>&1;
-             emmake make PORTNAME=emscripten -C contrib clean >/dev/null 2>&1; true'
+    # Delete the build products directly: a `make clean` that stops early
+    # leaves objects of the old ABI behind (src/common, src/port...), and the
+    # link then mixes the two (`invoke_ functions exported but exceptions and
+    # longjmp are both disabled`).  objfiles.txt goes too: it stands for its
+    # subsystem's objects, which make would otherwise not rebuild.
+    find "$PG" -path "$PG/dist" -prune -o -path "$PG/.git" -prune -o \
+         -type f \( -name '*.o' -o -name '*.a' -o -name '*.so' \
+                    -o -name objfiles.txt \) -print0 \
+      | xargs -0 rm -f
   fi
   "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite-core.sh
   echo "$CORE_ABI" > "$CORE_STAMP"
