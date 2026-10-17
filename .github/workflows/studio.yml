@@ -17,6 +17,8 @@ on:
       - 'doc/source/user/*.rst'
       - 'doc/tutorial/setup.sql'
       - 'doc/casestudy*/setup.sql'
+      # The changelog is read by studio-release.yml only, never built or tested.
+      - '!studio/CHANGELOG.md'
   pull_request:
     paths:
       - 'studio/**'
@@ -26,6 +28,7 @@ on:
       - 'doc/source/user/*.rst'
       - 'doc/tutorial/setup.sql'
       - 'doc/casestudy*/setup.sql'
+      - '!studio/CHANGELOG.md'
   workflow_dispatch:
 
 jobs:
