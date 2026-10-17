@@ -91,9 +91,12 @@ fi
 # 2c. CI green check
 #
 # Verify that all required CI workflows passed on the current HEAD
-# before tagging.  The release commit only touches files in paths-ignore
-# (control file, CHANGELOG, CITATION, META.json, releases.yml), so CI
-# will not re-run after it; the pre-release HEAD is the last tested commit.
+# before tagging.  The release commit changes provsql.common.control,
+# which no workflow ignores, so CI runs again on it, but only after the
+# tag is pushed: the pre-release HEAD is the last commit tested before
+# tagging.  A HEAD whose own changes are all path-ignored (docs, website,
+# Studio, docker/) has no run of its own; the check then reports it
+# missing, to be skipped once the last code commit is known to be green.
 #
 # We check the three platform workflows: Linux (build_and_test.yml),
 # Mac OS (macos.yml), and Windows Subsystem for Linux (wsl.yml).
