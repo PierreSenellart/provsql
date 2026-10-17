@@ -5,6 +5,369 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.13.0] - 2026-10-17
+
+ProvSQL 1.13.0 is a hardening and performance release. Over two months,
+the rewriting was run against thousands of real-world SQL queries and
+compared, possible world by possible world, with what PostgreSQL itself
+answers. Every internal error and every wrong answer this turned up was
+fixed, either by tracking the construct exactly or by refusing it with a
+documented reason. Tracking provenance became much cheaper, long
+evaluations can now be bounded and cancelled, and the circuit store became
+transactional. Along the way, the rewriting learned a large part of the
+SQL that real queries use and that it used to refuse or read only on the
+actual data: window functions and ranking, `ORDER BY … LIMIT`,
+`INTERSECT`, `DISTINCT ON`, grouping sets, materialized views, and
+recursion over cyclic data in every semiring, with probabilities sampled
+on large graphs. Two new kinds of semirings are added and shown to work
+in case studies: non-commutative semirings, for the best paths in a
+graph while evaluating a recursive query over it, and Boolean algebras
+of sets, for the clearance levels at which a row is visible or the
+purposes it may serve.
+
+#### Faster provenance tracking
+
+- **Gate creation moved to C.** The gate builders (`times`, `plus`,
+  `monus`, `delta`, semimodule, aggregate, and comparison gates) are
+  written in C instead of SQL, create a gate together with its
+  annotations in a single message to the circuit store, and no longer
+  wait for an answer; the store worker buffers its reads. This cuts the
+  cost of tracking provenance substantially.
+- **The backend's gate cache** is sized by the new
+  `provsql.gate_cache_size` (64 MB by default), and the evaluation of
+  comparisons reads the gates it needs through it.
+- **Closed forms for `HAVING`.** Comparisons of `MIN` / `MAX` with a
+  constant are evaluated in a single scan of the group, in every
+  semiring where this is exact. Two comparisons of one `COUNT` (a range
+  such as `count(*) BETWEEN 3 AND 5`) are resolved as a Poisson-binomial
+  range. Several conditions on the aggregates of one group are resolved
+  together, in one enumeration of the group's worlds, rather than as the
+  product of their separate provenances.
+- **Moments of aggregates** are computed exactly over the possible worlds
+  of up to 20 inputs before falling back to sampling; the variance of a
+  `SUM` or a `COUNT` over independent rows is computed directly from the
+  probability of each row, at any size.
+- **Hashable joins.** The `IS NOT DISTINCT FROM` join conditions the
+  rewriting builds become a plain `=` where one side cannot be `NULL`.
+- **Semiring evaluations run in parallel workers**: `sr_*` functions in a
+  query PostgreSQL parallelizes are evaluated by its workers.
+- **Choosing a probability method** costs less on large circuits: the
+  treewidth is first bounded in linear time, and the tree decomposition
+  is attempted only within a budget.
+
+#### Bounded and interruptible evaluations
+
+- `statement_timeout`, a query cancel, and `pg_terminate_backend` now stop
+  ProvSQL's long evaluations (possible-world enumerations, sampling,
+  moments, Shapley values, semiring evaluation) instead of waiting for
+  them to finish (#102).
+- **`provsql.max_memory`** sets a per-statement memory budget for
+  evaluations, external tools and their children included;
+  **`provsql.max_worlds`** stops a condition on an aggregate whose group
+  has more possible worlds than allowed. Both are raised as
+  `program_limit_exceeded`, with a tag and a hint (#103).
+- `provsql.max_memory` also covers loading the circuit, in the backend
+  and in the background worker that builds it from the store, which
+  refuses a circuit larger than what remains of the statement's budget
+  and gives the memory of a large circuit back once it has sent it
+  (#104). A text result over 1 GB, the most PostgreSQL holds in one value, stops
+  with the same kind of error, `result-too-large`, whatever the setting;
+  a formula that writes out a shared sub-circuit at each of its uses can
+  reach that size.
+- A rewriting that would outgrow memory (a long chain of outer joins) is
+  refused.
+
+#### Refusals and warnings with a reason
+
+- **Tagged refusals.** A query ProvSQL cannot track is refused with
+  `SQLSTATE 0A000` (feature not supported) instead of an internal error,
+  and every refusal names its cause on its `DETAIL` line,
+  `provsql-reason: <tag>; scope: <scope>`. The scope says whether the
+  refusal is **deliberate** (the shape has no provenance to give, such as
+  `EXCEPT ALL`), a **gap** (provenance exists and is not computed yet),
+  or **out of scope**. Most refusals carry a `HINT` saying how to write
+  the query instead.
+- **Untracked parts are reported.** Where a part of a query is evaluated
+  as plain SQL (an aggregate read as a plain value, a subquery in a block
+  left untracked, an `ORDER BY … LIMIT` read as a truncation), a tagged
+  `WARNING` is raised. Setting `provsql.implicit_freeze = 'error'` turns
+  these into refusals.
+- **Undetermined orders are reported.** Where a result depends on an order
+  the query does not determine, a `WARNING` is raised: `array_agg`,
+  `string_agg`, the `json_agg` family, and `xmlagg` without `ORDER BY` or
+  with ties; `lag`, `lead`, `first_value`, `last_value`, and `nth_value`
+  over tying rows; an `ORDER BY … LIMIT` cutting through a tie. Ties are
+  looked for among the rows of every world, those absent from the actual
+  data included.
+- **`plain()`** marks what should be read as plain SQL on purpose and
+  silences the warning: `plain(expr)` for a value, `LIMIT plain(k)` for
+  a truncation of the actual result, `FROM plain(NULL::t)` for a table.
+
+#### Wider SQL coverage
+
+- **Window functions:** `rank()`, `dense_rank()`, `row_number()`,
+  `ntile()`, `percent_rank()`, `cume_dist()`, and aggregates over a
+  frame determined by values, are tracked in every possible world.
+  Other window functions still run, with a warning, and their results
+  are read as plain values.
+- **`ORDER BY … LIMIT` / `FETCH` / `OFFSET`** is read in every possible
+  world as a selection on rank: a row is among the first `k` in the
+  worlds where it is. `DISTINCT ON` is read as a `LIMIT 1` per group.
+- **Set operations and grouping:** `INTERSECT`, `DISTINCT ON`,
+  `GROUPING SETS` / `ROLLUP` / `CUBE`, and set operations nested in set
+  operations.
+- **Materialized views** over tracked relations keep the provenance of
+  their rows, recomputed by `REFRESH MATERIALIZED VIEW`.
+- **Outer joins:** chains of outer joins are tracked, and so are outer
+  joins of an untracked table with a tracked one, the rows of the
+  untracked table being certain.
+- **Aggregates:** grouping by, or deduplicating on, an aggregate value
+  (each row exploded into one row per value it can take); aggregates of
+  aggregate results (`avg` of a `count`, `max` of a `sum`); `ln`, `exp`,
+  `sqrt`, `power`, `round`, `floor`, `ceil`, `abs` of an aggregate
+  result; `stddev` and `variance`; floating-point arithmetic over
+  aggregates and differences of dates; `COALESCE`, `NULLIF`, `GREATEST`,
+  `LEAST`, and `CASE` over aggregates. A comparison over an aggregate
+  value in the select list, or a `COALESCE(aggregate, constant)`, is
+  exploded into one row per value it takes, as is a `sum`, `min`, or
+  `max` of aggregate results.
+- **Subqueries:** scalar subqueries of more shapes are decorrelated (an
+  expression over an aggregate, `ORDER BY … LIMIT 1`, under
+  `COALESCE`), a nested
+  `NOT EXISTS` is read as the antijoin or the division it expresses,
+  and subquery conditions whose body groups rows are tracked.
+- **Recursion over cyclic data, in every semiring.** A recursive CTE
+  using `UNION` is recorded as a system of equations between its rows,
+  which each semiring solves according to its properties at evaluation
+  time: by Dijkstra's algorithm or value iteration in absorptive
+  semirings, by Kleene star in those that have one, and with a tagged
+  refusal where no method applies. Acyclic parts stay ordinary
+  circuits; `sr_formula` prints a cyclic part as its equations, and
+  PROV-XML, where-provenance, and ProvSQL Studio read them too. A
+  recursion using `UNION ALL` is the bag recursion SQL defines, one row
+  per derivation. The `SEARCH` and `CYCLE` clauses are refused with a
+  tag; a path built as an array of the column's own type is tracked.
+- **Probabilities of recursive queries on cyclic data.** An exact
+  probability expands the equations into a Boolean circuit, which is
+  refused where it would be too large (a city's transport network). The
+  sampling methods (`'monte-carlo'`, `'stopping-rule'`, and the
+  `'additive'` and `'relative'` guarantees) then solve the equations in
+  each sampled world instead, at a cost of the order of the query's
+  provenance, exploring the recursion only as far as the requested row
+  needs.
+
+#### New semirings
+
+- **Paths in a graph.** A product of
+  provenance now keeps the order of the query (for a join, the order of
+  the `FROM` clause), and three new semirings with a non-commutative
+  multiplication read that order. `sr_regex` gives the derivations of a
+  row as a regular expression over the labels of its input tuples, with
+  a Kleene star for a recursion on cyclic data. `sr_tropical_paths` gives the least
+  cost of a derivation together with all the derivations of that cost,
+  as a regular expression; `sr_best_path` gives the least cost with one
+  derivation of that cost, the one with the fewest labels, as an array of
+  labels: on a path query, a shortest path, step by step. `sr_regex` and
+  `sr_tropical_paths` need the recursive relation at the same place of
+  every recursive `FROM` clause and do not support difference (outer
+  joins, `EXCEPT`); `sr_best_path` has neither restriction. All three
+  refuse `HAVING`. Case study 3 now uses them to follow journeys, with
+  changes, over the whole Île-de-France network.
+- **Subset, clearance, and consent.** `sr_subset` evaluates provenance
+  over the sets of labels of a user enum, with negation (`EXCEPT`,
+  `NOT EXISTS`) read exactly. `sr_clearance` returns the clearance
+  levels at which a user sees a row (with negation, a set that need not
+  be upward-closed; `visible_at` and `clearance_settling` read it);
+  `sr_consent`
+  returns the purposes an answer may serve given the purposes each
+  input tuple is consented for (`consented_for`, `consent_purposes`,
+  `consent_conflicts`). Case study 1 and the new case study 9 (a
+  sales-forecast dashboard) use them.
+
+#### Provenance mappings
+
+- **Labels of multivalued inputs.** A provenance mapping can label the
+  values of a multivalued input (one choice of a `repair_key` block), and
+  `sr_formula`, `sr_boolexpr`, `view_circuit`, and PROV-XML show them.
+  Case study 5 uses them.
+
+#### Persistence
+
+- The circuit store is **transactional**: the gates a rolled-back
+  transaction created are left as harmless orphans, and a probability it
+  wrote is cleared.
+- Per-relation metadata moved from an mmap file to a heap table,
+  `provsql.table_info`, so it follows transactions and `pg_dump`. The
+  upgrade migrates it.
+- A WAL resource manager lets **streaming replication** carry the
+  circuit store to a standby (PostgreSQL 15 and later;
+  `provsql.store_wal_logging`, which requires
+  `provsql.store_synchronous_commit`).
+- Store records replayed from the WAL before ProvSQL's worker has started
+  (at crash recovery, or when a standby starts) are kept and applied
+  once it runs.
+- `check_store()` reports inconsistencies in a database's store, and
+  `circuit_cleanup()` rebuilds it keeping only what stored tokens reach.
+- A new chapter, *Persistence, backups and replication*, explains what
+  survives a crash, how to back up the store alongside `pg_dump`, and
+  how to replicate it.
+
+#### Diagnostics
+
+- `provsql.build_id()` reports the commit the loaded library was built
+  from.
+- `provsql.verify_rewrite` checks the query after each rewriting pass,
+  and `provsql.trace_rewrite` reports which passes changed it. The
+  regression suite runs with `verify_rewrite` on in CI.
+- ProvSQL loads in PostgreSQL builds with assertions enabled.
+
+#### Fixes
+
+Among the many fixes, the ones most likely to have affected results:
+
+- **Memory corruption in rewritten outer joins and `EXCEPT`.** The join
+  entries the rewriting builds had column lists PostgreSQL does not
+  expect, which could corrupt memory and crash the server, depending on
+  the heap layout.
+- **Long aggregate values.** An aggregate whose value takes more than
+  about 4 KB as text (an `array_agg` or a `string_agg` over a large
+  group) crashed the backend; it is now recorded whatever its length.
+- **Division by zero.** In a tracked query, a division by zero in a
+  world where the divisor is zero gives `NULL` there instead of raising
+  for the whole query, and rows whose condition holds in no world are
+  dropped.
+- **Set operations** whose arms name the `provsql` column differently
+  no longer misalign their columns.
+- **`EXCEPT ALL`** over tracked relations, whose rows are not those of
+  the algebra's difference, is refused instead of answered wrongly; an
+  untracked `EXCEPT` arm now removes rows.
+- **`FILTER`** on aggregates is honoured in the circuit, and `NULL`
+  inputs of `array_agg`-like aggregates are kept.
+- **Whole-row values** of tracked relations no longer include the
+  provenance token, so equal rows compare and group as equal; a
+  `NATURAL` join or `USING` no longer joins on `provsql`.
+- **Values defined in no world.** `expected`, `variance`, quantiles,
+  covariance, and entropy return `NULL` for a value that exists in no
+  world (an aggregate over a group that is empty in every world, a
+  division by a constant zero), where some of them returned NaN or an
+  infinity. The
+  support and bounds of a `SUM` or a grouped `COUNT` are taken over the
+  worlds where it has a value. A NaN stored in the data now
+  propagates as it does in PostgreSQL instead of being skipped, a
+  `NULL` value in an aggregated row is skipped instead of making the
+  result NaN, and comparisons, `MIN` / `MAX`, and percentiles order NaN
+  as PostgreSQL does.
+- **Aggregate results stored by `INSERT … SELECT`** are stored as the
+  type of their column: an `array_agg` stored in an `integer[]` column used to hold the
+  bytes of a provenance token, and crashed the server when read.
+- **Recursive queries:** the other CTEs of a `WITH RECURSIVE` are
+  available in the body of the recursion.
+- **`AGG(DISTINCT …)` of a scalar aggregation with `HAVING`** reads its
+  own row instead of an empty one.
+- **Views defined before their tables were tracked** carry provenance;
+  a query over one used to be answered without it, and without a
+  warning.
+- **An uncorrelated `EXISTS` or `NOT EXISTS` over a `WITH` entry or a
+  derived table** is tracked, as it was over a table; it used to be
+  refused, or, over a `WITH` entry, to fail with an internal error.
+- **`GROUP BY ()`** and a `HAVING` with neither an aggregate nor a
+  `GROUP BY` are the aggregation without `GROUP BY`: one row in every
+  world, even over no input row,
+  annotated 𝟙. `GROUP BY ()` used to give the row the provenance of a
+  group, absent where the input is empty, and `SELECT 'c' FROM t HAVING
+  true` over a tracked table crashed the backend. To collapse an event
+  into one token, group on a column the `WHERE` fixes, or use
+  `SELECT DISTINCT`, as case study 8 and the conditioning chapter now do.
+- **`choose()` warns where its order is not determined**, as `array_agg`
+  does: ties on its `ORDER BY`, or no `ORDER BY`, with different values
+  in some world. This covers a scalar subquery or `LATERAL` join with
+  `ORDER BY … LIMIT 1` on tied rows, which used to pick one silently.
+- **`max(d) - min(d)` over dates** is tracked, as a difference of two
+  integers of days; it used to fail with a cast error (#106). The same
+  difference read through a subquery, whose columns are aggregate
+  results already, is computed on the values, with a warning.
+- **A locking clause** (`FOR UPDATE`, `FOR SHARE`, `SKIP LOCKED`…) in a
+  query over tracked relations is refused (`provsql-reason:
+  locking-clause`); it used to be answered, and over an outer join to
+  fail with an internal error. `FOR KEY SHARE`, which foreign-key
+  checks take, is let through.
+- **Sublinks in an outer join's `ON` condition** (`IN`, `NOT IN`,
+  `EXISTS`, `NOT EXISTS`) are tracked; they used to make PostgreSQL's
+  planner fail.
+- **Where-provenance** merges the columns of a join only on its equality
+  conditions, not on other comparisons.
+- **`identify_token`** finds tables outside the `search_path` and
+  returns them schema-qualified; it and `resolve_input` skip a table
+  dropped or exclusively locked in the meantime instead of failing or
+  waiting on it.
+- **Dropped databases:** their circuit stores are closed by the worker,
+  and an exception in the worker is reported as an error instead of
+  stopping it.
+- **Functions that sample are `VOLATILE`**, so that two calls in a query
+  are two draws and none is evaluated once at planning time; those that
+  cannot run in a parallel worker are `PARALLEL UNSAFE`.
+- Dozens of internal errors on real-world query shapes now give an
+  exact answer or a tagged refusal.
+
+#### Upgrading from 1.12
+
+Most queries that ran on 1.12 run unchanged. A few answer differently,
+because 1.13 reads them in every possible world, as the semantics has
+them, where 1.12 read them only on the actual data, the one world the
+database stores:
+
+- **`ORDER BY … LIMIT k`** (and `FETCH`, `OFFSET`)
+  returns every row that is among the first `k` in some world, each
+  annotated by that condition: possibly many more rows than `k`, and,
+  over hundreds of candidates, a circuit that costs memory and time. To
+  keep the reading of 1.12, the first `k` rows of the actual data,
+  each with its own provenance, write `LIMIT plain(k)`, as the warning on
+  such a query suggests.
+- **Rows that are answers only in other worlds are returned** with
+  their condition: the candidates of a `LIMIT`, as a selection on an
+  aggregate value already did. To keep only the rows of the actual data, filter on
+  `present(provenance())` in an enclosing query. A `LIMIT plain(k)`, or
+  a `LIMIT` without `ORDER BY`, cuts the tracked result, such rows
+  included: to cut only among the actual rows, filter on
+  `present(provenance())` in the `WHERE` of the query the `LIMIT` cuts,
+  not above it.
+- **`GROUP BY ()`** is the aggregation without `GROUP BY`: its row is
+  there in every world, annotated 𝟙. To collapse an event into one
+  token, group on a column the `WHERE` fixes, or use `SELECT DISTINCT`.
+- **More warnings**: parts of a query read as plain values, and orders
+  the query does not determine (`choose()` included), are now reported;
+  `plain()` marks what is meant, and `provsql.implicit_freeze = 'error'`
+  turns the warnings into refusals.
+- **Refusals that were answers or internal errors**: `EXCEPT ALL`,
+  locking clauses (`FOR UPDATE`, `FOR SHARE`) over tracked relations,
+  and an `INSERT … SELECT` of a `provsql` column into an untracked table
+  (store `provenance()` instead).
+- **Probabilities are written once** (see below): a script that calls
+  `set_prob` again on the same rows needs `replace_input`.
+
+#### Compatibility
+
+- **PostgreSQL 10 is no longer supported.** ProvSQL 1.13.0 supports
+  PostgreSQL 11 to 18, and has been tested on PostgreSQL 19 RC1.
+- **`set_prob` is write-once.** Writing a probability on a gate that
+  already has a different one is refused; to give a tuple a new
+  probability, use `replace_input` (or `replace_block` for a
+  `repair_key` block), which mints a fresh input gate.
+  `probability_is_set` tells whether a probability was written.
+- **`rv_sample`** returns `NULL` for a draw where the value does not
+  exist, instead of NaN.
+- **Removed functions:** `set_infos` and `set_extra` (a gate now records
+  its annotations when it is created), `epsilon` (a probability
+  threshold below which a value was read as undefined; a value is now
+  undefined only where it exists in no world), and `eval_recursive`
+  (replaced by the equation systems).
+- **New configuration parameters:** `provsql.gate_cache_size`,
+  `provsql.implicit_freeze`, `provsql.max_memory`, `provsql.max_worlds`,
+  `provsql.store_synchronous_commit`, `provsql.store_wal_logging`,
+  `provsql.trace_rewrite`, `provsql.verify_rewrite`.
+
+ProvSQL Studio 1.9.0 is released alongside.
+
 ## [1.12.0] - 2026-08-07
 
 ProvSQL 1.12.0 widens three surfaces that used to refuse work they were
