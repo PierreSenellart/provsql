@@ -1961,9 +1961,13 @@ BEGIN
                  work_name);
   PERFORM provsql.planted_scope(all_name);
 
-  -- The first round: the non-recursive term.
+  -- The first round: the non-recursive term.  A row it derives from no
+  -- tracked relation gets no token from the INSERT: it is certain, and is
+  -- given one, as the UNION driver gives it -- left NULL, a grouping above
+  -- read it as nothing and the row as absent in every world.
   EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, q0_sql);
   GET DIAGNOSTICS new_count = ROW_COUNT;
+  UPDATE provsql_rec_new SET provsql = provsql.gate_one() WHERE provsql IS NULL;
 
   LOOP
     EXIT WHEN new_count = 0;   -- a round that derives nothing ends the answer
@@ -1995,6 +1999,7 @@ BEGIN
     EXECUTE format('TRUNCATE provsql_rec_new');
     EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, q1_sql);
     GET DIAGNOSTICS new_count = ROW_COUNT;
+    UPDATE provsql_rec_new SET provsql = provsql.gate_one() WHERE provsql IS NULL;
   END LOOP;
 END
 $$ LANGUAGE plpgsql SET client_min_messages = warning;

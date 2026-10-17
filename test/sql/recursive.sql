@@ -603,3 +603,25 @@ SELECT id, rn FROM rtx_r ORDER BY id;
 DROP TABLE rtx_r;
 SELECT remove_provenance('rtx');
 DROP TABLE rtx;
+
+-- A UNION ALL recursion whose base term reads no tracked relation (here a
+-- sibling WITH entry): its row is certain, and carries the token one, as in
+-- a UNION recursion.  It had none, and a DISTINCT above read it as absent in
+-- every world: probability 0 for a row present in all of them.
+CREATE TABLE rtree(id int, parent_id int);
+INSERT INTO rtree VALUES (1, NULL), (2, 1), (3, 2);
+SELECT add_provenance('rtree');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM rtree; END $$;
+CREATE TABLE rtree_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT DISTINCT * FROM (
+          WITH RECURSIVE ids(a) AS (SELECT 1),
+               d(id) AS (SELECT a FROM ids
+                         UNION ALL
+                         SELECT t.id FROM rtree t JOIN d ON t.parent_id = d.id)
+          SELECT id FROM d) x) y;
+SELECT remove_provenance('rtree_r');
+SELECT id, p FROM rtree_r ORDER BY id;
+DROP TABLE rtree_r;
+SELECT remove_provenance('rtree');
+DROP TABLE rtree;
