@@ -44,8 +44,14 @@ To clone the development version directly:
 Prerequisites
 ^^^^^^^^^^^^^
 
-1. **PostgreSQL ≥ 11.** ProvSQL has been tested with versions 11–18 under
-   Linux, macOS (x86-64 and ARM), and Windows Subsystem for Linux.
+1. **PostgreSQL ≥ 11.** ProvSQL is tested with versions 11–18 under Linux
+   (x86-64), and with some of them under Linux (ARM), macOS (ARM), and
+   Windows Subsystem for Linux.
+   Native Windows builds of PostgreSQL (e.g., the EDB installer) are not
+   supported: ProvSQL's circuit store relies on the Unix process model,
+   in which PostgreSQL creates its processes with ``fork``, whereas on
+   Windows it starts each of them afresh. On Windows, run ProvSQL under
+   WSL, use the `Docker Container`_, or try the Playground.
 
 2. **Build tools.** ``make``, a C/C++ compiler supporting C++17, and
    PostgreSQL development headers (e.g., ``postgresql-server-dev-XX`` on

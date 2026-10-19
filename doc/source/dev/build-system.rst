@@ -602,7 +602,8 @@ Nine GitHub Actions workflows are defined:
    * - Workflow
      - What it does
    * - ``build_and_test.yml``
-     - Builds and tests on Linux with PostgreSQL 11--18 (Docker-based).
+     - Builds and tests on Linux with PostgreSQL 11--18 (Docker-based),
+       and with PostgreSQL 18 on arm64 Linux.
        Also builds and pushes the Docker image on tagged releases.
        Runs on pushes to ``master``, on pull requests, and on version tags.
    * - ``macos.yml``

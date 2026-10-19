@@ -87,6 +87,41 @@ jobs:
       # malfunction far from it.  It changes no output of a clean run.
       - run: PGUSER=postgres PGOPTIONS="-c provsql.verify_rewrite=on" bash test/kcmcp/with-tdkc.sh make installcheck PGUSER=postgres || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
 
+  # The same tests on arm64, for the latest PostgreSQL only. The
+  # pgxn/pgxn-tools image used above exists for amd64 only, so this job runs
+  # on the bare runner, with PostgreSQL from the PGDG repository. The
+  # external knowledge compilers are not installed: they are not part of
+  # ProvSQL, and the tests that need them skip cleanly.
+  test-arm64:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    name: 🐘 PostgreSQL 18 (arm64)
+    runs-on: ubuntu-24.04-arm
+    env:
+      PG_CONFIG: /usr/lib/postgresql/18/bin/pg_config
+    steps:
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-18 postgresql-server-dev-18 libpq-dev libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev python3
+      # Start from a single PostgreSQL 18 cluster on the default port,
+      # whatever clusters the image or the package installation created.
+      - run: |
+          pg_lsclusters -h | while read -r ver name _; do sudo pg_dropcluster --stop "$ver" "$name"; done
+          sudo pg_createcluster 18 main -p 5432
+          echo "shared_preload_libraries = 'provsql'" | sudo tee -a /etc/postgresql/18/main/postgresql.conf
+          sudo sed -i 's/^\(local\s.*\)peer$/\1trust/' /etc/postgresql/18/main/pg_hba.conf
+      - uses: actions/checkout@v7
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+      - run: make -j$(nproc) PG_CONFIG=$PG_CONFIG && make tdkc PG_CONFIG=$PG_CONFIG && make provsql_migrate_mmap PG_CONFIG=$PG_CONFIG && sudo make install PG_CONFIG=$PG_CONFIG
+      - name: KCMCP protocol conformance (tdkc)
+        run: make test-kcmcp PG_CONFIG=$PG_CONFIG
+      - run: sudo pg_ctlcluster 18 main start
+      - run: pg_isready -t 30
+      - run: PGUSER=postgres PGOPTIONS="-c provsql.verify_rewrite=on" bash test/kcmcp/with-tdkc.sh make installcheck PG_CONFIG=$PG_CONFIG PGUSER=postgres || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
+
   docker:
     needs: test
     # always() is needed so this condition is evaluated even when
