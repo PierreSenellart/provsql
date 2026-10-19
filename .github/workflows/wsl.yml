@@ -63,7 +63,7 @@ jobs:
       run:
         shell: wsl-bash {0}
     steps:
-      - uses: Vampire/setup-wsl@v7.0.0
+      - uses: Vampire/setup-wsl@v7.2.0
       - run: apt update
       - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all python3
       # d4 / dsharp / weightmc are exercised by the Linux matrix; the WSL
