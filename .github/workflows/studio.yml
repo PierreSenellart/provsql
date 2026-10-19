@@ -97,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [14, 15, 16]
+        pg: [14, 18]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
       - uses: actions/checkout@v7
@@ -123,8 +123,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13']
-        pg: [14, 15, 16]
+        python: ['3.11', '3.12', '3.13', '3.14', '3.15']
+        pg: [14, 18]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main
@@ -161,9 +161,15 @@ jobs:
     container: pgxn/pgxn-tools
     strategy:
       fail-fast: false
+      # The browser tests exercise the UI, which depends on neither version;
+      # the pytest matrix above covers the server side, so the oldest and
+      # newest of each suffice here.
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13']
-        pg: [14, 15, 16]
+        include:
+          - python: '3.11'
+            pg: 14
+          - python: '3.15'
+            pg: 18
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main

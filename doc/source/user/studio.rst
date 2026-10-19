@@ -57,7 +57,7 @@ takes over, or live in the setup cells of a notebook (see
 Installation
 ------------
 
-Studio targets Python ≥ 3.10. The released package is on PyPI:
+Studio targets Python ≥ 3.11. The released package is on PyPI:
 
 .. code-block:: bash
 

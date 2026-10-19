@@ -45,7 +45,7 @@ documentation for the full feature reference.
 pip install provsql-studio
 ```
 
-Requires Python 3.10+ and a PostgreSQL database with the ProvSQL
+Requires Python 3.11+ and a PostgreSQL database with the ProvSQL
 extension installed (see the
 [extension installation guide](https://provsql.org/docs/user/getting-provsql.html)).
 Studio 1.0.x targets ProvSQL extension 1.4.0 or newer; the startup
