@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: Vampire/setup-wsl@v7.2.0
       - run: apt update
-      - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all python3
+      - run: apt -y install --no-install-recommends postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all python3
       # d4 / dsharp / weightmc are exercised by the Linux matrix; the WSL
       # job's signal is "does the extension build and run under WSL", so
       # tests that need those binaries skip cleanly here.
@@ -76,18 +76,23 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - run: make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
+      # The checkout lives on the Windows drive (/mnt/d), which WSL reaches
+      # through a slow 9P file share; build and test from a copy on the
+      # distribution's own ext4 filesystem instead. /opt rather than /root,
+      # so that the postgres user running installcheck can read it.
+      - run: cp -r . /opt/provsql
+      - run: cd /opt/provsql && make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
       - name: KCMCP protocol conformance (tdkc)
-        run: make test-kcmcp
+        run: cd /opt/provsql && make test-kcmcp
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
       - run: service postgresql restart
-      - run: perl -i -pe 's/\r//g unless /\\set ECHO none/' test/expected/*.out
+      - run: cd /opt/provsql && perl -i -pe 's/\r//g unless /\\set ECHO none/' test/expected/*.out
       # tool_search_path stages a `\! printf ... > /tmp/.../graph-easy` stub
       # via psql's shell-escape. WSL's CRLF-translated .sql leaves a stray
       # \r in the redirect target, so /bin/sh tries to create the file at
       # "/tmp/provsql_tsp_test/graph-easy\r" and fails. The test is
       # validating PATH override behavior, which is environment-agnostic
       # and already exercised on Linux/macOS – skip it here.
-      - run: "sed -i '/^test: tool_search_path/d' test/schedule"
+      - run: "cd /opt/provsql && sed -i '/^test: tool_search_path/d' test/schedule"
       - run: pg_isready -t 30
-      - run: sudo -u postgres bash test/kcmcp/with-tdkc.sh make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs; false'
+      - run: cd /opt/provsql && sudo -u postgres bash test/kcmcp/with-tdkc.sh make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs; false'
