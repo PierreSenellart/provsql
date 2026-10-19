@@ -123,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.11', '3.12', '3.13', '3.14', '3.15']
+        python: ['3.11', '3.12', '3.13', '3.14']
         pg: [14, 18]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
@@ -168,7 +168,7 @@ jobs:
         include:
           - python: '3.11'
             pg: 14
-          - python: '3.15'
+          - python: '3.14'
             pg: 18
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz

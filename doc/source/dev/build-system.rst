@@ -632,8 +632,8 @@ Nine GitHub Actions workflows are defined:
        ``src/**``, ``sql/**``, ``wasm/**``, or the workflow file.
    * - ``studio.yml``
      - Lint, package smoke, notebook-drift check, and
-       pytest on a Py 3.11–3.15 × PG 14/18 matrix for ProvSQL
-       Studio, and Playwright e2e on Py 3.11 × PG 14 and Py 3.15 × PG 18.
+       pytest on a Py 3.11–3.14 × PG 14/18 matrix for ProvSQL
+       Studio, and Playwright e2e on Py 3.11 × PG 14 and Py 3.14 × PG 18.
        Runs on pushes to ``master`` and pull requests that touch
        ``studio/**``, ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, the
        workflow file, or the sources of the generated example
