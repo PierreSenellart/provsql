@@ -2,7 +2,7 @@ name: Linux
 
 on:
   push:
-    branches: ['**']
+    branches: [master]
     tags: ['v*']
     paths-ignore:
       - 'doc/**'

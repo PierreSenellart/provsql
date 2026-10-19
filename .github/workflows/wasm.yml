@@ -15,6 +15,7 @@ name: in-process store smoke
 
 on:
   push:
+    branches: [master]
     paths: ['src/**', 'sql/**', 'wasm/**', '.github/workflows/wasm.yml']
   pull_request:
     paths: ['src/**', 'sql/**', 'wasm/**', '.github/workflows/wasm.yml']
@@ -22,7 +23,6 @@ on:
 
 jobs:
   inprocess-store:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     name: in-process store (single-session smoke)
     runs-on: ubuntu-latest
     # Same PostgreSQL-install path as the main build_and_test Linux job: the

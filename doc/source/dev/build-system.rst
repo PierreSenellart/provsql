@@ -604,21 +604,22 @@ Nine GitHub Actions workflows are defined:
    * - ``build_and_test.yml``
      - Builds and tests on Linux with PostgreSQL 11--18 (Docker-based).
        Also builds and pushes the Docker image on tagged releases.
-       Runs on every push.
+       Runs on pushes to ``master``, on pull requests, and on version tags.
    * - ``macos.yml``
      - Builds and tests on macOS with Homebrew PostgreSQL.
-       Runs on every push.
+       Runs on pushes to ``master`` and on pull requests.
    * - ``wsl.yml``
      - Builds and tests on Windows Subsystem for Linux.
-       Runs on every push.
+       Runs on pushes to ``master`` and on pull requests.
    * - ``docs.yml``
      - Builds the full documentation (Doxygen + Sphinx + coherence check).
        Uses the ``pgxn/pgxn-tools`` container with
        ``postgresql-server-dev-all`` for ``pg_config``.
-       Runs on every push.
+       Runs on pushes to ``master`` and on pull requests.
    * - ``codeql.yml``
      - Static analysis via GitHub CodeQL.
-       Runs on every push.
+       Runs on pushes to ``master`` and pull requests touching
+       ``src/**`` or the workflow file, and weekly.
    * - ``pgxn.yml``
      - Publishes the release to PGXN.
        Runs only on version tags (``v*.*.*``).
@@ -626,14 +627,14 @@ Nine GitHub Actions workflows are defined:
      - In-process-store smoke: builds the extension with
        ``-DPROVSQL_INPROCESS_STORE`` and runs a single-session
        functional smoke (the model the PGlite/browser build uses).
-       Runs on every push/PR touching ``src/**``, ``sql/**``,
-       ``wasm/**``, or the workflow file.
+       Runs on pushes to ``master`` and pull requests touching
+       ``src/**``, ``sql/**``, ``wasm/**``, or the workflow file.
    * - ``studio.yml``
      - Lint, package smoke, notebook-drift check, and
        pytest+Playwright e2e on a Py 3.10/
        3.11/3.12/3.13 × PG 14/15/16 matrix for ProvSQL Studio.
-       Runs on every push that touches ``studio/**``,
-       ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, the
+       Runs on pushes to ``master`` and pull requests that touch
+       ``studio/**``, ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, the
        workflow file, or the sources of the generated example
        notebooks (``doc/source/user/*.rst``, ``doc/tutorial/setup.sql``,
        ``doc/casestudy*/setup.sql``).
