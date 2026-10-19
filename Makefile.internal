@@ -175,17 +175,20 @@ PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC -DBOOST_BIND_GLOBAL_PLACEHOLDERS
 %.o : %.cpp
 	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -MMD -MP -c -o $@ $<
 
-LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
+LINKER_FLAGS += -lstdc++ -lboost_serialization
+# GCC's link-time optimization warns about a flexible array member; Clang does
+# not know this option and warns about it instead.
+ifeq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
+LINKER_FLAGS += -Wno-lto-type-mismatch
+endif
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
 
-# Ways to pass linker flags have changed in PostgreSQL 16
-ifeq ($(shell [ $(PGVER_MAJOR) -ge 16 ]; echo $$?), 0)
-CFLAGS_SL_MODULE += $(LINKER_FLAGS)
-else
-LDFLAGS_SL += $(LINKER_FLAGS)
-endif
+# SHLIB_LINK is appended once to the end of the link command, on every
+# PostgreSQL version; CFLAGS_SL_MODULE would also go to every compile, and
+# twice to the link.
+SHLIB_LINK += $(LINKER_FLAGS)
 
 test/schedule: $(wildcard test/schedule.*)
 	cat test/schedule.common > test/schedule

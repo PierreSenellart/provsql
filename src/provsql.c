@@ -115,7 +115,7 @@ static bool provsql_update_provenance = false; ///< @c true when provenance trac
 int provsql_verbose = 0; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 /** @brief Values of @c provsql.implicit_freeze */
 enum { PROVSQL_FREEZE_WARN, PROVSQL_FREEZE_ERROR };
-int provsql_implicit_freeze = PROVSQL_FREEZE_WARN; ///< What an implicit freezing does: warn, or error; @c provsql.implicit_freeze GUC
+static int provsql_implicit_freeze = PROVSQL_FREEZE_WARN; ///< What an implicit freezing does: warn, or error; @c provsql.implicit_freeze GUC
 char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
 char *provsql_transaction_token = NULL; ///< Textual UUID of the update gate standing for the current transaction, or empty; set with @c SET @c LOCAL by @c provsql.transaction_token()
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
@@ -20511,7 +20511,7 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   na_pair_ctx pc;
   RangeTblRef *ref;
   List *colnames = NIL, *outer_cols = NIL;
-  int nrel, ncol = 0, i, k;
+  int nrel, i, k;
   bool any_tracked = false;
 
   if (q->commandType != CMD_SELECT || !q->hasSubLinks)
@@ -20601,7 +20601,6 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
     if (rc->n == 0)
       return false;
     outer_cols = lappend(outer_cols, rc);
-    ncol += rc->n;
   }
 
   /* ---- The bad pairs: the query's relations and the body's, joined on the

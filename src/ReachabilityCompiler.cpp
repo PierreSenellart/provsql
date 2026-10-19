@@ -143,7 +143,7 @@ struct LiftContext {
 struct BoolOps {
   static constexpr bool tracks_lengths = false;
   static constexpr bool has_target_set = false;
-  static constexpr bool final_collapse = false;
+  [[maybe_unused]] static constexpr bool final_collapse = false;
   using State = std::bitset<MAXD*MAXD>;
   using Entry = bool;
   /** @brief Hash functor (delegates to @c std::hash of the bitset). */
@@ -215,7 +215,7 @@ struct BoolOps {
 struct HopOps {
   static constexpr bool tracks_lengths = true;
   static constexpr bool has_target_set = false;
-  static constexpr bool final_collapse = false;
+  [[maybe_unused]] static constexpr bool final_collapse = false;
   using Entry = std::uint64_t;
   /** @brief A matrix of length-set bitmasks (unused cells stay zero). */
   struct State {

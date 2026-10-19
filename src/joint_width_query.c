@@ -949,7 +949,6 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       /* Element columns of scan i: from the first atom on it (all atoms
        * over the same relation share its columns). */
       RangeTblEntry *rte = NULL;
-      AttrNumber attno = 0;
       ListCell *c;
       bool firstc = true;
       for (a = 0; a < natoms; a++)
@@ -958,7 +957,6 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       appendStringInfoChar(&buf, '[');
       foreach (c, rte->eref->colnames) {
         char *name = strVal(lfirst(c));
-        attno++;
         if (name[0] == '\0' || strcmp(name, PROVSQL_COLUMN_NAME) == 0)
           continue;
         if (!firstc) appendStringInfoChar(&buf, ',');

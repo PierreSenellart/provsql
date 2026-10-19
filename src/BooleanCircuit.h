@@ -785,7 +785,7 @@ dDNNF parsePaniniDD(const std::string &outfilename) const;
  * @param version  Archive version (unused).
  */
 template<class Archive>
-void serialize (Archive & ar, const unsigned int version)
+void serialize (Archive & ar, [[maybe_unused]] const unsigned int version)
 {
   ar & uuid2id;
   ar & id2uuid;
