@@ -30,68 +30,107 @@ extern "C" {
 namespace {
 
 /**
- * @brief Minimal SHA-1 (RFC 3174), used for RFC 4122 version-5 UUIDs.
+ * @brief Minimal SHA-1 (RFC 3174), used for RFC 4122 version-5 UUIDs: the
+ *        compression of one 64-byte block into @p h.
  *
  * Self-contained so the content addressing builds on every supported
  * PostgreSQL version.
  */
+void sha1_block(uint32_t h[5], const unsigned char *block)
+{
+  uint32_t w[80];
+  for (int i = 0; i < 16; ++i)
+    w[i] = (static_cast<uint32_t>(block[4*i]) << 24) |
+           (static_cast<uint32_t>(block[4*i + 1]) << 16) |
+           (static_cast<uint32_t>(block[4*i + 2]) << 8) |
+           static_cast<uint32_t>(block[4*i + 3]);
+  for (int i = 16; i < 80; ++i) {
+    const uint32_t v = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
+    w[i] = (v << 1) | (v >> 31);
+  }
+  uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+  for (int i = 0; i < 80; ++i) {
+    uint32_t f, k;
+    if (i < 20) {
+      f = (b & c) | (~b & d);
+      k = 0x5A827999u;
+    } else if (i < 40) {
+      f = b ^ c ^ d;
+      k = 0x6ED9EBA1u;
+    } else if (i < 60) {
+      f = (b & c) | (b & d) | (c & d);
+      k = 0x8F1BBCDCu;
+    } else {
+      f = b ^ c ^ d;
+      k = 0xCA62C1D6u;
+    }
+    const uint32_t tmp = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+    e = d;
+    d = c;
+    c = (b << 30) | (b >> 2);
+    b = a;
+    a = tmp;
+  }
+  h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+}
+
 void sha1(const unsigned char *data, std::size_t len, unsigned char out[20])
 {
-  uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u,
-                   0xC3D2E1F0u};
-  const std::size_t total = ((len + 8) / 64 + 1) * 64;
-  std::vector<unsigned char> buf(total, 0);
-  std::copy(data, data + len, buf.begin());
-  buf[len] = 0x80;
-  const uint64_t bits = static_cast<uint64_t>(len) * 8;
-  for (int i = 0; i < 8; ++i)
-    buf[total - 1 - i] = static_cast<unsigned char>(bits >> (8 * i));
-
-  for (std::size_t chunk = 0; chunk < total; chunk += 64) {
-    uint32_t w[80];
-    for (int i = 0; i < 16; ++i)
-      w[i] = (static_cast<uint32_t>(buf[chunk + 4*i]) << 24) |
-             (static_cast<uint32_t>(buf[chunk + 4*i + 1]) << 16) |
-             (static_cast<uint32_t>(buf[chunk + 4*i + 2]) << 8) |
-             static_cast<uint32_t>(buf[chunk + 4*i + 3]);
-    for (int i = 16; i < 80; ++i) {
-      const uint32_t v = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
-      w[i] = (v << 1) | (v >> 31);
-    }
-    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
-    for (int i = 0; i < 80; ++i) {
-      uint32_t f, k;
-      if (i < 20) {
-        f = (b & c) | (~b & d);
-        k = 0x5A827999u;
-      } else if (i < 40) {
-        f = b ^ c ^ d;
-        k = 0x6ED9EBA1u;
-      } else if (i < 60) {
-        f = (b & c) | (b & d) | (c & d);
-        k = 0x8F1BBCDCu;
-      } else {
-        f = b ^ c ^ d;
-        k = 0xCA62C1D6u;
-      }
-      const uint32_t tmp = ((a << 5) | (a >> 27)) + f + e + k + w[i];
-      e = d;
-      d = c;
-      c = (b << 30) | (b >> 2);
-      b = a;
-      a = tmp;
-    }
-    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
-  }
-  for (int i = 0; i < 5; ++i) {
-    out[4*i]     = static_cast<unsigned char>(h[i] >> 24);
-    out[4*i + 1] = static_cast<unsigned char>(h[i] >> 16);
-    out[4*i + 2] = static_cast<unsigned char>(h[i] >> 8);
-    out[4*i + 3] = static_cast<unsigned char>(h[i]);
-  }
+  provsql_sha1_ctx ctx;
+  provsql_sha1_init(&ctx);
+  provsql_sha1_update(&ctx, data, len);
+  provsql_sha1_final(&ctx, out);
 }
 
 } // namespace
+
+extern "C" void provsql_sha1_init(provsql_sha1_ctx *ctx)
+{
+  static const uint32_t init[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu,
+                                   0x10325476u, 0xC3D2E1F0u};
+  std::copy(init, init + 5, ctx->h);
+  ctx->len = 0;
+  ctx->used = 0;
+}
+
+extern "C" void provsql_sha1_update(provsql_sha1_ctx *ctx,
+                                    const unsigned char *data, size_t len)
+{
+  ctx->len += len;
+  if (ctx->used > 0) {
+    const std::size_t take = std::min(len, sizeof(ctx->block) - ctx->used);
+    std::copy(data, data + take, ctx->block + ctx->used);
+    ctx->used += take;
+    data += take;
+    len -= take;
+    if (ctx->used < sizeof(ctx->block))
+      return;
+    sha1_block(ctx->h, ctx->block);
+    ctx->used = 0;
+  }
+  for (; len >= sizeof(ctx->block); data += 64, len -= 64)
+    sha1_block(ctx->h, data);
+  std::copy(data, data + len, ctx->block);
+  ctx->used = len;
+}
+
+extern "C" void provsql_sha1_final(provsql_sha1_ctx *ctx,
+                                   unsigned char out[20])
+{
+  const uint64_t bits = ctx->len * 8;
+  unsigned char pad[72] = {0x80};
+  /* 0x80, zeros up to 56 mod 64, then the length in bits, big-endian */
+  const std::size_t npad = (ctx->used < 56 ? 56 : 120) - ctx->used;
+  for (int i = 0; i < 8; ++i)
+    pad[npad + i] = static_cast<unsigned char>(bits >> (8 * (7 - i)));
+  provsql_sha1_update(ctx, pad, npad + 8);
+  for (int i = 0; i < 5; ++i) {
+    out[4*i]     = static_cast<unsigned char>(ctx->h[i] >> 24);
+    out[4*i + 1] = static_cast<unsigned char>(ctx->h[i] >> 16);
+    out[4*i + 2] = static_cast<unsigned char>(ctx->h[i] >> 8);
+    out[4*i + 3] = static_cast<unsigned char>(ctx->h[i]);
+  }
+}
 
 extern "C" void provsql_sha1(const unsigned char *data, size_t len,
                              unsigned char out[20])

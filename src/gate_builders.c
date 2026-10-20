@@ -38,12 +38,29 @@ static const unsigned char provsql_ns[UUID_LEN] = {
 };
 
 /**
+ * @brief The hash of the name being built, which takes the buffer's content
+ *        whenever it grows past @c NAME_FLUSH bytes: the name of a gate with
+ *        millions of children (the @c agg of a @c SUM over millions of rows)
+ *        is then never held whole.  Names are built one at a time, from
+ *        @c name_begin to @c name_end.
+ */
+static provsql_sha1_ctx name_hash;
+#define NAME_FLUSH 8192
+
+/** @brief Hash what @p buf holds, and empty it. */
+static void name_flush(StringInfo buf) {
+  provsql_sha1_update(&name_hash, (const unsigned char *)buf->data, buf->len);
+  resetStringInfo(buf);
+}
+
+/**
  * @brief Start the name of a gate address.
  *
  * The buffer opens with the namespace, which the version-5 UUID hashes in
- * front of the name, so that the hash runs over the buffer as it is.
+ * front of the name.
  */
 static void name_begin(StringInfo buf, const char *prefix) {
+  provsql_sha1_init(&name_hash);
   initStringInfo(buf);
   appendBinaryStringInfo(buf, (const char *)provsql_ns, UUID_LEN);
   appendStringInfoString(buf, prefix);
@@ -73,6 +90,8 @@ static void name_add_uuid_array(StringInfo buf, const pg_uuid_t *u, int n) {
     if (i > 0)
       appendStringInfoChar(buf, ',');
     name_add_uuid(buf, &u[i]);
+    if (buf->len >= NAME_FLUSH)
+      name_flush(buf);
   }
   appendStringInfoChar(buf, '}');
 }
@@ -82,7 +101,8 @@ static pg_uuid_t name_end(StringInfo buf) {
   unsigned char digest[20];
   pg_uuid_t u;
 
-  provsql_sha1((const unsigned char *)buf->data, buf->len, digest);
+  name_flush(buf);
+  provsql_sha1_final(&name_hash, digest);
   memcpy(u.data, digest, UUID_LEN);
   u.data[6] = (unsigned char)((u.data[6] & 0x0F) | 0x50);
   u.data[8] = (unsigned char)((u.data[8] & 0x3F) | 0x80);

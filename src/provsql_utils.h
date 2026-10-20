@@ -884,6 +884,32 @@ extern "C"
 void provsql_sha1(const unsigned char *data, size_t len, unsigned char out[20]);
 
 /**
+ * @brief The state of an incremental SHA-1: the digest of a text given in
+ *        pieces, without holding it whole (the name of a gate with millions
+ *        of children).
+ */
+typedef struct provsql_sha1_ctx {
+  uint32_t h[5];            ///< Hash state
+  uint64_t len;             ///< Bytes hashed so far
+  unsigned char block[64];  ///< The bytes not yet hashed, short of a block
+  size_t used;              ///< How many of @c block are used
+} provsql_sha1_ctx;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/** @brief Start an incremental SHA-1. */
+void provsql_sha1_init(provsql_sha1_ctx *ctx);
+/** @brief Hash @p len more bytes of @p data. */
+void provsql_sha1_update(provsql_sha1_ctx *ctx, const unsigned char *data,
+                         size_t len);
+/** @brief The SHA-1 of all the bytes given to @p ctx. */
+void provsql_sha1_final(provsql_sha1_ctx *ctx, unsigned char out[20]);
+#ifdef __cplusplus
+}
+#endif
+
+/**
  * @brief Pre-create ("plant") a gate at the canonical address of a multiset
  *        of tokens, for the working table of the recursive CTE being lowered.
  *
