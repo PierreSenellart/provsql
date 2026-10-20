@@ -1229,6 +1229,15 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
    * whole before anything checks it (GitHub #104). */
   const std::size_t base_rss = budget ? provsql_process_rss(getpid()) : 0;
   unsigned steps = 0;
+  /* Counted per gate and per wire: a single gate (the agg of a SUM over
+   * millions of rows) can have millions of children. */
+  auto check_budget = [&]() {
+    if(budget && ++steps % 4096 == 0) {
+      std::size_t rss = provsql_process_rss(getpid());
+      if(rss > base_rss && rss - base_rss > budget)
+        throw CircuitBudgetExceeded();
+    }
+  };
 
   /* Seed the work list with every root.  std::set deduplicates so a
    * UUID listed twice (or reached as a child of one root and the
@@ -1243,11 +1252,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
   GenericCircuit result;
 
   while(!to_process.empty()) {
-    if(budget && ++steps % 4096 == 0) {
-      std::size_t rss = provsql_process_rss(getpid());
-      if(rss > base_rss && rss - base_rss > budget)
-        throw CircuitBudgetExceeded();
-    }
+    check_budget();
     pg_uuid_t uuid = *to_process.begin();
     to_process.erase(to_process.begin());
     processed.insert(uuid);
@@ -1261,6 +1266,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
 
     std::vector<pg_uuid_t> children = getChildren(uuid);
     for(unsigned i=0; i<children.size(); ++i) {
+      check_budget();
       result.addWire(
         id,
         result.getGate(uuid2string(children[i])));
