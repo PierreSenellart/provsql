@@ -21,6 +21,7 @@
 #include <cerrno>
 #include <cmath>
 #include <map>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <sstream>
@@ -246,7 +247,11 @@ bool MMappedCircuit::hasProbAt(unsigned long idx) const
 
 double MMappedCircuit::getProb(pg_uuid_t token) const
 {
-  auto idx = mapping[token];
+  return probAt(mapping[token]);
+}
+
+double MMappedCircuit::probAt(unsigned long idx) const
+{
   if(idx == MMappedUUIDHashTable::NOTHING || !carriesProb(gates[idx].type))
     return NAN;
   if(!std::isnan(gates[idx].prob))
@@ -356,9 +361,13 @@ std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
 
 std::string MMappedCircuit::getExtra(pg_uuid_t token) const
 {
+  return extraAt(mapping[token]);
+}
+
+std::string MMappedCircuit::extraAt(unsigned long idx) const
+{
   std::string result;
 
-  auto idx = mapping[token];
   if(idx != MMappedUUIDHashTable::NOTHING) {
     for(unsigned long start=gates[idx].extra_idx, k=start, end=start+gates[idx].extra_len; k<end; ++k)
       result+=extra[k];
@@ -1284,33 +1293,70 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     }
   };
 
-  /* Seed the work list with every root.  std::set deduplicates so a
-   * UUID listed twice (or reached as a child of one root and the
-   * other's root itself) is processed only once.  Shared subgraphs
-   * therefore land on a single gate_t in `result` -- the property
-   * that lets the conditional MC sampler couple the indicator and
-   * value paths through @c Sampler::scalar_cache_ / @c bool_cache_. */
-  std::set<pg_uuid_t> to_process, processed;
+  /* Seed the work list with every root.  A UUID listed twice (or reached
+   * as a child of one root and the other's root itself) is processed only
+   * once.  Shared subgraphs therefore land on a single gate_t in `result`
+   * -- the property that lets the conditional MC sampler couple the
+   * indicator and value paths through @c Sampler::scalar_cache_ /
+   * @c bool_cache_.  The smallest UUID waiting is processed first, which
+   * fixes the numbering of the gates (a gate is numbered when first met):
+   * a min-heap, which a gate enters when first met as a child; a root met
+   * so before it is processed is in it twice, and skipped the second
+   * time. */
+  /* memcmp's order, the UUID read as two big-endian words */
+  auto word = [](const unsigned char *p) {
+    std::uint64_t w = 0;
+    for(int i = 0; i < 8; ++i)
+      w = (w << 8) | p[i];
+    return w;
+  };
+  auto greater = [&word](const pg_uuid_t &a, const pg_uuid_t &b) {
+    const std::uint64_t a1 = word(a.data), b1 = word(b.data);
+    if(a1 != b1)
+      return a1 > b1;
+    return word(a.data + 8) > word(b.data + 8);
+  };
+  std::priority_queue<pg_uuid_t, std::vector<pg_uuid_t>, decltype(greater)>
+    to_process(greater);
   for(const auto &r : roots)
-    to_process.insert(r);
+    to_process.push(r);
 
   GenericCircuit result;
+  /* The gate of each UUID met, without building its string at each wire */
+  std::unordered_map<pg_uuid_t, gate_t, UUIDHash> ids;
+  std::vector<bool> processed;
 
   while(!to_process.empty()) {
     check_budget();
-    pg_uuid_t uuid = *to_process.begin();
-    to_process.erase(to_process.begin());
-    processed.insert(uuid);
-    gate_t id = copyGate(result, uuid);
+    pg_uuid_t uuid = to_process.top();
+    to_process.pop();
+    auto [it, fresh] = ids.try_emplace(uuid);
+    if(fresh)
+      it->second = result.getGate(uuid2string(uuid));
+    const gate_t id = it->second;
+    const std::size_t i = static_cast<std::size_t>(id);
+    if(i < processed.size() && processed[i])
+      continue;
+    if(i >= processed.size())
+      processed.resize(std::max<std::size_t>(i + 1, 2 * processed.size()));
+    processed[i] = true;
 
-    std::vector<pg_uuid_t> children = getChildren(uuid);
-    for(unsigned i=0; i<children.size(); ++i) {
+    const unsigned long idx = mapping[uuid];
+    copyGateAt(result, id, idx);
+    if(idx == MMappedUUIDHashTable::NOTHING)
+      continue;
+
+    const GateInformation &gi = gates[idx];
+    for(unsigned long k = gi.children_idx; k < gi.children_idx + gi.nb_children;
+        ++k) {
       check_budget();
-      result.addWire(
-        id,
-        result.getGate(uuid2string(children[i])));
-      if(processed.find(children[i])==processed.end())
-        to_process.insert(children[i]);
+      const pg_uuid_t child = wires[k];
+      auto [ic, first] = ids.try_emplace(child);
+      if(first) {
+        ic->second = result.getGate(uuid2string(child));
+        to_process.push(child);
+      }
+      result.addWire(id, ic->second);
     }
   }
 
@@ -1319,15 +1365,25 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
 
 gate_t MMappedCircuit::copyGate(GenericCircuit &result, pg_uuid_t uuid) const
 {
-    gate_type type = getGateType(uuid);
-    gate_t id = result.setGate(uuid2string(uuid), type);
-    double prob = getProb(uuid);
+  const gate_t id = result.getGate(uuid2string(uuid));
+  copyGateAt(result, id, mapping[uuid]);
+  return id;
+}
+
+void MMappedCircuit::copyGateAt(GenericCircuit &result, gate_t id,
+                                unsigned long idx) const
+{
+    const bool absent = idx == MMappedUUIDHashTable::NOTHING;
+    gate_type type = absent ? gate_input : gates[idx].type;
+    result.setGate(id, type);
+    double prob = probAt(idx);
     if(!std::isnan(prob))
       result.setProb(id, prob);
 
     if(type==gate_mulinput || type==gate_eq || type==gate_agg
        || type==gate_cmp  || type==gate_arith || type==gate_fixpoint) {
-      auto [info1, info2] = getInfos(uuid);
+      const unsigned info1 = absent ? 0 : gates[idx].info1;
+      const unsigned info2 = absent ? 0 : gates[idx].info2;
       result.setInfos(id, info1, info2);
     } else if(type==gate_plus || type==gate_times || type==gate_assumed) {
       /* The d-DNNF certificate (DNNF_CERT_INFO in info1: deterministic
@@ -1336,7 +1392,8 @@ gate_t MMappedCircuit::copyGate(GenericCircuit &result, pg_uuid_t uuid) const
        * on a gate_assumed the route tag is in info1.  Copied only when
        * set, so unmarked gates do not bloat the in-memory infos map with
        * zeros. */
-      auto [info1, info2] = getInfos(uuid);
+      const unsigned info1 = absent ? 0 : gates[idx].info1;
+      const unsigned info2 = absent ? 0 : gates[idx].info2;
       if(info1 != 0 || info2 != 0)
         result.setInfos(id, info1, info2);
     }
@@ -1352,11 +1409,9 @@ gate_t MMappedCircuit::copyGate(GenericCircuit &result, pg_uuid_t uuid) const
        * value there, inert for evaluation); gates stored without the
        * label have none and default to 'boolean' at
        * evaluation. */
-      auto extra = getExtra(uuid);
+      auto extra = extraAt(idx);
       result.setExtra(id, extra);
     }
-
-    return id;
 }
 
 FormulaRegions MMappedCircuit::formulaRegions(

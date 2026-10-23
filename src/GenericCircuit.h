@@ -151,6 +151,15 @@ gate_t addGate() override;
 gate_t setGate(gate_type type) override;
 /** @copydoc Circuit::setGate(const uuid&, gateType) */
 gate_t setGate(const uuid &u, gate_type type) override;
+/**
+ * @brief Set the type of the existing gate @p g, as @c setGate does for a
+ *        UUID, without looking the UUID up.
+ */
+void setGate(gate_t g, gate_type type) {
+  setGateType(g, type);
+  if(type == gate_input || type == gate_update)
+    inputs.insert(g);
+}
 
 /**
  * @brief Return the set of input (leaf) gates.

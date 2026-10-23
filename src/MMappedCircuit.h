@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <string>
 #include <vector>
@@ -481,6 +482,24 @@ private:
 /** @brief Add the gate @p uuid to @p result, with what it records but its
  *  wires. */
 gate_t copyGate(GenericCircuit &result, pg_uuid_t uuid) const;
+/** @brief Give the gate @p id of @p result what the record @p idx (@c
+ *  NOTHING for a gate not stored: an input) records but its wires. */
+void copyGateAt(GenericCircuit &result, gate_t id, unsigned long idx) const;
+/** @brief @c getProb of the record @p idx. */
+double probAt(unsigned long idx) const;
+/** @brief @c getExtra of the record @p idx. */
+std::string extraAt(unsigned long idx) const;
+};
+
+/** @brief Hash of a @c pg_uuid_t, for the unordered containers. */
+struct UUIDHash {
+  /** @brief The hash of @p u: its bytes are already uniformly spread. */
+  std::size_t operator()(const pg_uuid_t &u) const {
+    std::uint64_t a, b;
+    std::memcpy(&a, u.data, sizeof a);
+    std::memcpy(&b, u.data + sizeof a, sizeof b);
+    return a ^ (b * 0x9E3779B97F4A7C15ULL);
+  }
 };
 
 /**
