@@ -317,11 +317,11 @@ void provsql_replay_spool_close(void);
 /** @brief Read one value of @p type from the background-to-main pipe. */
 #define READM(var, type) provsql_worker_read(&var, sizeof(type))
 /** @brief Read one value of @p type from the main-to-background pipe. */
-#define READB(var, type) (read(provsql_shared_state->pipembr, &var, sizeof(type))==(ssize_t)sizeof(type)) // flawfinder: ignore
+#define READB(var, type) provsql_read_all(provsql_shared_state->pipembr, &var, sizeof(type)) // flawfinder: ignore
 /** @brief Write one value of @p type to the main-to-background pipe. */
-#define WRITEB(pvar, type) (write(provsql_shared_state->pipembw, pvar, sizeof(type))!=-1)
+#define WRITEB(pvar, type) provsql_write_all(provsql_shared_state->pipembw, pvar, sizeof(type))
 /** @brief Write one value of @p type to the background-to-main pipe. */
-#define WRITEM(pvar, type) (write(provsql_shared_state->pipebmw, pvar, sizeof(type))!=-1)
+#define WRITEM(pvar, type) provsql_write_all(provsql_shared_state->pipebmw, pvar, sizeof(type))
 
 /** @brief Read exactly @p n bytes of a reply from the main-to-background pipe. */
 #define READB_BYTES(ptr, n) provsql_read_all(provsql_shared_state->pipembr, (ptr), (n)) // flawfinder: ignore
@@ -335,7 +335,7 @@ void provsql_replay_spool_close(void);
 /** @brief Append one value of @p type to the shared write buffer. */
 #define ADDWRITEM(pvar, type) (memcpy(buffer+bufferpos, pvar, sizeof(type)), bufferpos+=sizeof(type))
 /** @brief Flush the shared write buffer to the background-to-main pipe atomically. */
-#define SENDWRITEM() (write(provsql_shared_state->pipebmw, buffer, bufferpos)!=-1)
+#define SENDWRITEM() provsql_write_all(provsql_shared_state->pipebmw, buffer, bufferpos)
 
 #endif /* PROVSQL_INPROCESS_STORE */
 

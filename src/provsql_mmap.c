@@ -156,6 +156,8 @@ bool provsql_worker_read(void *dst, size_t n)
     {
       ssize_t r = read(provsql_shared_state->pipebmr, worker_buffer, // flawfinder: ignore
                        WORKER_READ_BUFFER);
+      if(r < 0 && errno == EINTR)
+        continue;
       if(r <= 0)
         return false;
       worker_buffer_pos = 0;
@@ -167,10 +169,14 @@ bool provsql_worker_read(void *dst, size_t n)
 
 bool provsql_read_all(int fd, void *dst, size_t n)
 {
+  /* A read interrupted by a signal must be tried again: given up, it
+   * leaves the rest of the message in the pipe, for the next reader. */
   char *p = dst;
   size_t remaining = n;
   while(remaining > 0) {
     ssize_t r = read(fd, p, remaining); // flawfinder: ignore
+    if(r < 0 && errno == EINTR)
+      continue;
     if(r <= 0)
       return false;
     remaining -= r;
@@ -488,7 +494,7 @@ void provsql_replay_store_message(const char *data, size_t len)
 
   while(left > 0) {
     size_t chunk = left > PIPE_BUF ? PIPE_BUF : left;
-    if(write(provsql_shared_state->pipebmw, p, chunk) == -1) {
+    if(!provsql_write_all(provsql_shared_state->pipebmw, p, chunk)) {
       provsql_shmem_unlock();
       provsql_error("Cannot replay a store message to the pipe");
     }
@@ -883,7 +889,7 @@ void provsql_internal_create_gate_with(const pg_uuid_t *token, gate_type type,
 #else
   if(total <= PIPE_BUF) {
     provsql_shmem_lock_shared();
-    if(write(provsql_shared_state->pipebmw, msg, total) != (ssize_t) total) {
+    if(!provsql_write_all(provsql_shared_state->pipebmw, msg, total)) {
       provsql_shmem_unlock();
       provsql_error("Cannot write to pipe (message type G)");
     }
@@ -894,7 +900,7 @@ void provsql_internal_create_gate_with(const pg_uuid_t *token, gate_type type,
     provsql_shmem_lock_exclusive();
     while(left > 0) {
       size_t chunk = left > PIPE_BUF ? PIPE_BUF : left;
-      if(write(provsql_shared_state->pipebmw, p, chunk) != (ssize_t) chunk) {
+      if(!provsql_write_all(provsql_shared_state->pipebmw, p, chunk)) {
         provsql_shmem_unlock();
         provsql_error("Cannot write to pipe (message type G)");
       }
@@ -982,7 +988,7 @@ static void send_unanswered(const char *msg, size_t len)
   if(len > PIPE_BUF)
     provsql_error("message type %c too long", msg[0]);
   provsql_shmem_lock_shared();
-  if(write(provsql_shared_state->pipebmw, msg, len) != (ssize_t) len) {
+  if(!provsql_write_all(provsql_shared_state->pipebmw, msg, len)) {
     provsql_shmem_unlock();
     provsql_error("Cannot write to pipe (message type %c)", msg[0]);
   }
