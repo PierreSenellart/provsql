@@ -345,6 +345,58 @@ static GenericCircuit getJointCircuitFromMMap(
 #endif /* PROVSQL_INPROCESS_STORE */
 }
 
+FormulaRegions getFormulaRegions(const std::vector<FormulaRequest> &requests,
+                                 unsigned long cap, unsigned long wide_cap)
+{
+  FormulaRegions r;
+#ifdef PROVSQL_INPROCESS_STORE
+  r = provsql_inproc_formula_regions(requests, cap, wide_cap);
+#else
+  char message_char = 'F';
+  unsigned nb = static_cast<unsigned>(requests.size());
+  STARTWRITEM();
+  ADDWRITEM(&message_char, char);
+  ADDWRITEDB();
+  ADDWRITEM(&cap, unsigned long);
+  ADDWRITEM(&wide_cap, unsigned long);
+  ADDWRITEM(&nb, unsigned);
+  for(const auto &q : requests) {
+    ADDWRITEM(&q.gate, pg_uuid_t);
+    ADDWRITEM(&q.from, unsigned long);
+    ADDWRITEM(&q.count, unsigned long);
+  }
+
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM())
+    provsql_error("Cannot write to pipe (message type F)");
+
+  unsigned long size;
+  if(!READB(size, unsigned long))
+    provsql_error("Cannot read from pipe (message type F)");
+  char *buf = new char[size];
+  if(!READB_BYTES(buf, size)) {
+    provsql_shmem_unlock();
+    delete [] buf;
+    provsql_error("Cannot read from pipe (message type F)");
+  }
+  provsql_shmem_unlock();
+
+  try {
+    provsql_check_memory();
+    boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
+    boost::archive::binary_iarchive ia(stream);
+    ia >> r;
+  } catch(...) {
+    delete [] buf;
+    throw;
+  }
+  delete [] buf;
+#endif
+
+  applyLoadTimeSimplification(r.circuit);
+  return r;
+}
+
 GenericCircuit getJointCircuit(
   const std::vector<pg_uuid_t> &tokens,
   std::vector<gate_t> &gates)

@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "GenericCircuit.h"
+#include "FormulaRegions.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
 
@@ -462,6 +463,24 @@ GenericCircuit createGenericCircuit(pg_uuid_t token,
  */
 GenericCircuit createGenericCircuit(
     const std::vector<pg_uuid_t> &roots, std::size_t budget = 0) const;
+
+/**
+ * @brief The regions of @p requests, for @c sr_formula_rows (see
+ *        @c FormulaRegions).
+ *
+ * @param requests The gates, or ranges of their children, asked for.
+ * @param cap      Size, in symbols, past which a gate is named.
+ * @param wide_cap Size past which a named gate's row is split into one
+ *                 row per child.
+ */
+FormulaRegions formulaRegions(const std::vector<FormulaRequest> &requests,
+                              unsigned long cap,
+                              unsigned long wide_cap) const;
+
+private:
+/** @brief Add the gate @p uuid to @p result, with what it records but its
+ *  wires. */
+gate_t copyGate(GenericCircuit &result, pg_uuid_t uuid) const;
 };
 
 /**
@@ -495,6 +514,10 @@ GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token,
 /** @brief Multi-root variant (single-process replacement for @c 'j'). */
 GenericCircuit provsql_inproc_joint_circuit(
   const std::vector<pg_uuid_t> &roots, std::size_t budget);
+/** @brief Single-process replacement for @c 'F'. */
+FormulaRegions provsql_inproc_formula_regions(
+  const std::vector<FormulaRequest> &requests, unsigned long cap,
+  unsigned long wide_cap);
 #endif
 
 

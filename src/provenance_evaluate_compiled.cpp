@@ -72,6 +72,7 @@ PG_FUNCTION_INFO_V1(sr_formula_rows);
 #include <unordered_set>
 
 #include "CertifiedDDMaterialize.h"
+#include "CircuitFromMMap.h"
 #include "Expectation.h"
 #include "having_semantics.hpp"
 #include "provenance_evaluate_compiled.hpp"
@@ -1108,175 +1109,57 @@ namespace {
 /**
  * @brief The rows of @c sr_formula_rows, produced one at a time.
  *
- * The comparisons on aggregates are written as @c sr_formula writes them
- * where that fits in a row, as they are otherwise (see
- * @c expand_comparisons).  The formula of each gate is then estimated, in
- * bytes, bottom-up: a gate whose
- * formula exceeds @c max_size, its named descendants written as their
- * names, is named (@c #1, @c #2, ...) and its formula given in a row of
- * its own, the gates above reading its name; the root is always named.  A
- * named gate whose row would still exceed several times @c max_size (a sum
- * of millions of small contributions) is summarised in its row, each
- * child given a row of its own (@c #k.1, @c #k.2, ...).  No row is then
- * much longer than @c max_size, except for a value no gate splits (an
- * equation system).
+ * The circuit is not loaded whole: each row is written from its region,
+ * the gates below its own down to the named ones, which the store answers
+ * (@c FormulaRegions); the rows of the children of a wide gate are asked
+ * for @c BATCH at a time.  A row thus costs what it writes, and the memory
+ * used does not depend on the size of the circuit.
+ *
+ * The size of a formula is counted in symbols, a gate for one, written out
+ * at each use, a named descendant for one.  A gate of more than
+ * @c max_size is named (@c #1, @c #2, ...), the root always; its row is
+ * written with its named descendants as their names.  A named gate whose
+ * row would still exceed @c SLACK times @c max_size (a sum of millions of
+ * small contributions) is summarised in its row, each child given a row of
+ * its own (@c #k.1, @c #k.2, ...).
+ *
+ * The comparisons on aggregates in a region are written as @c sr_formula
+ * writes them where that fits in a row, as they are otherwise (see
+ * @c expand_comparisons).
  */
 class FormulaRows {
-  GenericCircuit c;
-  gate_t root;
+  constants_t constants;
+  Oid table;
   std::size_t max_size;
-  /** Values of the leaves and of the HAVING conditions */
-  std::unordered_map<gate_t, std::string> base;
-  /** Estimated length of the formula of each gate reachable from the root,
-   *  its named descendants written as their names */
-  std::vector<std::size_t> size;
-  /** Names of the named gates met so far */
-  std::unordered_map<gate_t, std::string> names;
+  /** Names of the named gates met so far, by UUID */
+  std::unordered_map<std::string, std::string> names;
   std::size_t next_name = 1;
   /** A gate's own row (@c child unset), or the row of the child of a wide
-   *  gate at position @c child */
+   *  gate at position @c child, out of @c nb */
   struct Item {
-    gate_t g;
+    std::string uuid;
     std::size_t child;
+    std::size_t nb;
   };
   static constexpr std::size_t OWN = std::numeric_limits<std::size_t>::max();
-  /** Estimated length of a name */
-  static constexpr std::size_t NAME = 4;
   /** How much longer than @c max_size the row of a named gate may be
    *  before it is split into one row per child */
   static constexpr std::size_t SLACK = 4;
+  /** Rows of the children of a wide gate asked for at once */
+  static constexpr std::size_t BATCH = 4096;
   std::deque<Item> todo;
 
-  static std::size_t add(std::size_t a, std::size_t b) {
-    const std::size_t cap = std::numeric_limits<std::size_t>::max() / 4;
-    return a > cap - std::min(b, cap) ? cap : a + b;
-  }
-  std::size_t &sz(gate_t g) {
-    return size[static_cast<std::size_t>(g)];
-  }
-
-  /* Estimates of the formulas, bottom-up, a wire closing a cycle counting
-   * for one, a named child for its name. */
-  void compute_sizes() {
-    const std::size_t n = c.getNbGates();
-    size.assign(n, 0);
-    std::vector<char> state(n, 0);
-    std::vector<gate_t> stack{root};
-    while(!stack.empty()) {
-      provsql_poll_interrupt();
-      const gate_t u = stack.back();
-      const std::size_t ui = static_cast<std::size_t>(u);
-      if(state[ui] == 2) {
-        stack.pop_back();
-        continue;
-      }
-      const auto t = c.getGateType(u);
-      auto it = base.find(u);
-      if(state[ui] == 0) {
-        state[ui] = 1;
-        if(it != base.end() || c.getWires(u).empty()
-           || t == gate_fixpoint) {
-          std::size_t s;
-          if(it != base.end())
-            s = it->second.size();
-          else if(t == gate_input || t == gate_mulinput)
-            s = 11;
-          else if(t == gate_value)
-            s = c.getExtra(u).size();
-          else
-            s = 4;
-          size[ui] = std::max<std::size_t>(s, 1);
-          state[ui] = 2;
-          stack.pop_back();
-          continue;
-        }
-        bool pushed = false;
-        for(const auto w : c.getWires(u))
-          if(state[static_cast<std::size_t>(w)] == 0) {
-            stack.push_back(w);
-            pushed = true;
-          }
-        if(pushed)
-          continue;
-      }
-      std::size_t s = 2;
-      for(const auto w : c.getWires(u)) {
-        const std::size_t wi = static_cast<std::size_t>(w);
-        s = add(s, add(state[wi] != 2 ? 1 : size[wi] > max_size ? NAME
-                                                               : size[wi], 3));
-      }
-      size[ui] = s;
-      state[ui] = 2;
-      stack.pop_back();
-    }
-  }
-
-  bool named(gate_t g) {
-    return g == root || sz(g) > max_size;
-  }
-  /* The name of a named gate, given when first met, its row then queued */
-  const std::string &name_of(gate_t g) {
-    auto it = names.find(g);
-    if(it == names.end()) {
-      it = names.emplace(g, "#" + std::to_string(next_name++)).first;
-      todo.push_back({g, OWN});
-    }
-    return it->second;
-  }
-
-  /* The formula of @p g, the named gates below it read as their names */
-  std::string render(gate_t g) {
-    semiring::Formula sr;
-    auto b = base.find(g);
-    if(b != base.end())
-      return sr.to_text(b->second);
-    std::unordered_map<gate_t, std::string> m;
-    std::unordered_set<gate_t> seen{g};
-    std::vector<gate_t> stack;
-    const auto &w = c.getWires(g);
-    for(auto it = w.rbegin(); it != w.rend(); ++it)
-      stack.push_back(*it);
-    while(!stack.empty()) {
-      provsql_poll_interrupt();
-      const gate_t u = stack.back();
-      stack.pop_back();
-      if(!seen.insert(u).second)
-        continue;
-      if(size[static_cast<std::size_t>(u)] > 0 && named(u)) {
-        m.emplace(u, name_of(u));
-        continue;
-      }
-      auto bu = base.find(u);
-      if(bu != base.end()) {
-        m.emplace(u, bu->second);
-        continue;
-      }
-      const auto &wu = c.getWires(u);
-      for(auto it = wu.rbegin(); it != wu.rend(); ++it)
-        stack.push_back(*it);
-    }
-    c.evaluate(g, m, sr);
-    return sr.to_text(std::move(m.at(g)));
-  }
-
-  /* The row of a wide gate, its children as #k.1 ... #k.n */
-  std::string summary(gate_t g, const std::string &nm) {
-    const auto n = c.getWires(g).size();
-    const std::vector<std::string> v{nm + ".1", "…", nm + "." + std::to_string(n)};
-    semiring::Formula sr;
-    std::string r;
-    switch(c.getGateType(g)) {
-    case gate_plus:
-      r = sr.plus(v);
-      break;
-    case gate_times:
-      r = sr.times(v);
-      break;
-    default:
-      r = sr.agg(getAggregationOperator(c.getInfos(g).first), v);
-    }
-    return sr.to_text(std::move(r)) + " (" + std::to_string(n) + " terms)";
-  }
+  /** A loaded region, with the values of its leaves and of its expanded
+   *  comparisons */
+  struct Region {
+    FormulaRegions r;
+    std::unordered_map<gate_t, std::string> base;
+    std::unordered_set<std::string> stubs;
+  };
+  /** The children of the wide gate being written, @c batch_from onwards */
+  Region batch;
+  std::size_t batch_from = 0;
+  bool batch_loaded = false;
 
   /** Thrown by @c CappedFormula past its cap */
   struct TooLarge {};
@@ -1309,7 +1192,7 @@ public:
 
   /* The number of contributors to the aggregates the comparison @p g
    * reads */
-  std::size_t contributors(gate_t g) {
+  static std::size_t contributors(const GenericCircuit &c, gate_t g) {
     std::size_t k = 0;
     std::unordered_set<gate_t> seen;
     std::vector<gate_t> stack(c.getWires(g).begin(), c.getWires(g).end());
@@ -1327,47 +1210,126 @@ public:
     return k;
   }
 
-  /* The comparisons on aggregates written as sr_formula writes them, a sum
-   * over the possible worlds of each group, unless that sum could be longer
-   * than a row: they are then written as they are, the sum being
-   * exponential in the size of the group.  The worlds are enumerated before
-   * any of the sum is written, so the expansion is tried only when there
-   * are few enough of them; and it is given up, the circuit restored, as
-   * soon as a value of it is longer than a row. */
-  void expand_comparisons() {
+  /* The comparisons on aggregates below @p root written as sr_formula
+   * writes them, a sum over the possible worlds of each group, unless that
+   * sum could be longer than a row: they are then written as they are, the
+   * sum being exponential in the size of the group.  The worlds are
+   * enumerated before any of the sum is written, so the expansion is tried
+   * only when there are few enough of them; and it is given up, the region
+   * restored, as soon as a value of it is longer than a row.  A comparison
+   * whose aggregate is a named gate, not in the region, is not expanded. */
+  void expand_comparisons(Region &g, gate_t root) {
+    GenericCircuit &c = g.r.circuit;
     const auto cmps = provsql_having_detail::collect_sp_cmp_gates(c, root);
     if(cmps.empty())
       return;
-    const std::size_t cap = SLACK * max_size;
+    /* A row of max_size symbols, at a few bytes each */
+    const std::size_t cap = 8 * SLACK * max_size;
     std::size_t k = 0;
-    for(const auto g : cmps)
-      k += contributors(g);
+    for(const auto x : cmps)
+      k += contributors(c, x);
     if(k >= 8 * sizeof(std::size_t) || (std::size_t(1) << k) > cap
        || (provsql_max_worlds > 0
            && (std::size_t(1) << k) > (std::size_t) provsql_max_worlds))
       return;
     GenericCircuit saved_circuit = c;
-    auto saved_base = base;
+    auto saved_base = g.base;
     try {
-      provsql_having(c, root, base, CappedFormula(cap));
+      provsql_having(c, root, g.base, CappedFormula(cap));
     } catch(const TooLarge &) {
       c = std::move(saved_circuit);
-      base = std::move(saved_base);
+      g.base = std::move(saved_base);
     }
+  }
+
+  /* Ask the store for @p q, and read the labels of the leaves */
+  void load(Region &g, const FormulaRequest &q) {
+    g.r = getFormulaRegions({q}, max_size, SLACK * max_size);
+    g.base.clear();
+    g.stubs.clear();
+    for(const auto &s : g.r.stubs)
+      g.stubs.insert(s.uuid);
+    const bool drop_table =
+      join_with_temp_uuids(table, g.r.circuit.getMappableUUIDs());
+    semiring::Formula sr;
+    initialize_provenance_mapping<std::string>(constants, g.r.circuit, g.base,
+      [&sr](const char *v) { return sr.parse_leaf(v); }, drop_table);
+  }
+
+  /* The name of a named gate, given when first met, its row then queued */
+  const std::string &name_of(const std::string &uuid) {
+    auto it = names.find(uuid);
+    if(it == names.end()) {
+      it = names.emplace(uuid, "#" + std::to_string(next_name++)).first;
+      todo.push_back({uuid, OWN, 0});
+    }
+    return it->second;
+  }
+
+  /* The formula of @p g in its region, the named gates read as names */
+  std::string render(Region &reg, gate_t g) {
+    GenericCircuit &c = reg.r.circuit;
+    semiring::Formula sr;
+    const std::string gu = c.getUUID(g);
+    if(reg.stubs.count(gu))
+      return name_of(gu);
+    auto b = reg.base.find(g);
+    if(b != reg.base.end())
+      return sr.to_text(b->second);
+    std::unordered_map<gate_t, std::string> m;
+    std::unordered_set<gate_t> seen{g};
+    std::vector<gate_t> stack;
+    const auto &w = c.getWires(g);
+    for(auto it = w.rbegin(); it != w.rend(); ++it)
+      stack.push_back(*it);
+    while(!stack.empty()) {
+      provsql_poll_interrupt();
+      const gate_t u = stack.back();
+      stack.pop_back();
+      if(!seen.insert(u).second)
+        continue;
+      const std::string uu = c.getUUID(u);
+      if(!uu.empty() && reg.stubs.count(uu)) {
+        m.emplace(u, name_of(uu));
+        continue;
+      }
+      auto bu = reg.base.find(u);
+      if(bu != reg.base.end()) {
+        m.emplace(u, bu->second);
+        continue;
+      }
+      const auto &wu = c.getWires(u);
+      for(auto it = wu.rbegin(); it != wu.rend(); ++it)
+        stack.push_back(*it);
+    }
+    c.evaluate(g, m, sr);
+    return sr.to_text(std::move(m.at(g)));
+  }
+
+  /* The row of a wide gate, its children as #k.1 ... #k.n */
+  static std::string summary(const FormulaStub &s, const std::string &nm) {
+    const auto n = s.nb_children;
+    const std::vector<std::string> v{nm + ".1", "…", nm + "." + std::to_string(n)};
+    semiring::Formula sr;
+    std::string r;
+    switch(s.type) {
+    case gate_plus:
+      r = sr.plus(v);
+      break;
+    case gate_times:
+      r = sr.times(v);
+      break;
+    default:
+      r = sr.agg(getAggregationOperator(s.info1), v);
+    }
+    return sr.to_text(std::move(r)) + " (" + std::to_string(n) + " terms)";
   }
 
 public:
   FormulaRows(const constants_t &constants, pg_uuid_t token, Oid table,
               std::size_t max_size)
-    : c(getGenericCircuit(token)), max_size(max_size) {
-    root = c.getGate(uuid2string(token));
-    const bool drop_table = join_with_temp_uuids(table, c.getMappableUUIDs());
-    semiring::Formula sr;
-    initialize_provenance_mapping<std::string>(constants, c, base,
-      [&sr](const char *v) { return sr.parse_leaf(v); }, drop_table);
-    expand_comparisons();
-    compute_sizes();
-    name_of(root);
+    : constants(constants), table(table), max_size(max_size) {
+    name_of(uuid2string(token));
   }
 
   /** The next row, as (name, formula); false when there is none left. */
@@ -1375,28 +1337,45 @@ public:
     if(todo.empty())
       return false;
     Item &item = todo.front();
-    const gate_t g = item.g;
     if(item.child == OWN) {
-      name = names.at(g);
-      const auto t = c.getGateType(g);
-      if(base.find(g) == base.end() && c.getWires(g).size() > 1
-         && (t == gate_plus || t == gate_times || t == gate_agg)
-         && sz(g) / SLACK > max_size) {
-        formula = summary(g, name);
-        item.child = 0;
-      } else {
-        todo.pop_front();
-        formula = render(g);
+      const std::string uuid = item.uuid;
+      name = names.at(uuid);
+      Region reg;
+      load(reg, {string2uuid(uuid), 0, 0});
+      if(reg.stubs.count(uuid)) {
+        for(const auto &s : reg.r.stubs)
+          if(s.uuid == uuid) {
+            formula = summary(s, name);
+            item.child = 0;
+            item.nb = s.nb_children;
+          }
+        return true;
       }
+      todo.pop_front();
+      const gate_t g = reg.r.circuit.getGate(uuid);
+      expand_comparisons(reg, g);
+      formula = render(reg, g);
       return true;
     }
+
+    const std::string uuid = item.uuid;
     const std::size_t i = item.child++;
-    const auto &w = c.getWires(g);
-    const gate_t ch = w[i];
-    name = names.at(g) + "." + std::to_string(i + 1);
-    if(i + 1 == w.size())
+    const std::size_t nb = item.nb;
+    if(!batch_loaded || i >= batch_from + batch.r.children.size()) {
+      load(batch, {string2uuid(uuid), i, std::min(BATCH, nb - i)});
+      batch_from = i;
+      batch_loaded = true;
+      for(const auto &ch : batch.r.children)
+        if(!batch.stubs.count(ch))
+          expand_comparisons(batch, batch.r.circuit.getGate(ch));
+    }
+    name = names.at(uuid) + "." + std::to_string(i + 1);
+    const std::string ch = batch.r.children.at(i - batch_from);
+    if(i + 1 == nb) {
       todo.pop_front();
-    formula = named(ch) ? name_of(ch) : render(ch);
+      batch_loaded = false;
+    }
+    formula = render(batch, batch.r.circuit.getGate(ch));
     return true;
   }
 };
@@ -1422,7 +1401,7 @@ Datum sr_formula_rows(PG_FUNCTION_ARGS)
       SRF_RETURN_DONE(funcctx);
     const pg_uuid_t token = *PG_GETARG_UUID_P(0);
     const Oid table = PG_ARGISNULL(1) ? InvalidOid : PG_GETARG_OID(1);
-    const int32 max_size = PG_ARGISNULL(2) ? 400 : PG_GETARG_INT32(2);
+    const int32 max_size = PG_ARGISNULL(2) ? 50 : PG_GETARG_INT32(2);
     if(max_size < 1)
       provsql_error("sr_formula_rows: max_size must be positive");
 

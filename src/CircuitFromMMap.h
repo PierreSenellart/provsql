@@ -17,6 +17,7 @@ extern "C" {
 
 #include "BooleanCircuit.h"
 #include "GenericCircuit.h"
+#include "FormulaRegions.h"
 
 /**
  * @brief Build a @c BooleanCircuit from the mmap store rooted at @p token.
@@ -70,6 +71,18 @@ BooleanCircuit getBooleanCircuit(
  * @return       An in-memory @c GenericCircuit.
  */
 GenericCircuit getGenericCircuit(pg_uuid_t token);
+
+/**
+ * @brief The regions of @p requests, for @c sr_formula_rows (see
+ *        @c FormulaRegions), with the load-time simplification applied.
+ *
+ * @param requests The gates, or ranges of their children, asked for.
+ * @param cap      Size, in symbols, past which a gate is named.
+ * @param wide_cap Size past which a named gate's row is split into one
+ *                 row per child.
+ */
+FormulaRegions getFormulaRegions(const std::vector<FormulaRequest> &requests,
+                                 unsigned long cap, unsigned long wide_cap);
 
 /**
  * @brief Simplify a loaded circuit for a probability readout.

@@ -21,6 +21,8 @@
 #include <cerrno>
 #include <cmath>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <string>
 
@@ -544,6 +546,14 @@ GenericCircuit provsql_inproc_joint_circuit(
 {
   return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(roots, budget);
 }
+
+FormulaRegions provsql_inproc_formula_regions(
+  const std::vector<FormulaRequest> &requests, unsigned long cap,
+  unsigned long wide_cap)
+{
+  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->formulaRegions(
+    requests, cap, wide_cap);
+}
 #endif
 
 extern "C" void provsql_store_flush(void)
@@ -950,6 +960,41 @@ static void dispatch(char c, Oid db_oid, Oid db_tablespace)
       break;
     }
 
+    case 'F':
+    {
+      /* The regions of a few rows of sr_formula_rows */
+      unsigned long cap, wide_cap;
+      unsigned nb;
+      if(!READM(cap, unsigned long) || !READM(wide_cap, unsigned long)
+         || !READM(nb, unsigned))
+        provsql_error("Cannot read from pipe (message type F)");
+      std::vector<FormulaRequest> requests(nb);
+      for(unsigned i = 0; i < nb; ++i)
+        if(!READM(requests[i].gate, pg_uuid_t)
+           || !READM(requests[i].from, unsigned long)
+           || !READM(requests[i].count, unsigned long))
+          provsql_error("Cannot read from pipe (message type F)");
+
+#ifdef PROVSQL_INPROCESS_STORE
+      provsql_error("message type F is not used by the in-process store");
+#else
+      std::vector<char> buf;
+      {
+        boost::iostreams::stream<
+          boost::iostreams::back_insert_device<std::vector<char>>> out(buf);
+        boost::archive::binary_oarchive oa(out);
+        const FormulaRegions regions =
+          circuit->formulaRegions(requests, cap, wide_cap);
+        oa << regions;
+        out.flush();
+      }
+      unsigned long size = buf.size();
+      if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(buf.data(), size))
+        provsql_error("Cannot write to pipe (message type F)");
+#endif
+      break;
+    }
+
     default:
       provsql_error("Wrong message type: %c", c);
     }
@@ -1256,13 +1301,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     pg_uuid_t uuid = *to_process.begin();
     to_process.erase(to_process.begin());
     processed.insert(uuid);
-    std::string f{uuid2string(uuid)};
-
-    gate_type type = getGateType(uuid);
-    gate_t id = result.setGate(f, type);
-    double prob = getProb(uuid);
-    if(!std::isnan(prob))
-      result.setProb(id, prob);
+    gate_t id = copyGate(result, uuid);
 
     std::vector<pg_uuid_t> children = getChildren(uuid);
     for(unsigned i=0; i<children.size(); ++i) {
@@ -1273,6 +1312,18 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
       if(processed.find(children[i])==processed.end())
         to_process.insert(children[i]);
     }
+  }
+
+  return result;
+}
+
+gate_t MMappedCircuit::copyGate(GenericCircuit &result, pg_uuid_t uuid) const
+{
+    gate_type type = getGateType(uuid);
+    gate_t id = result.setGate(uuid2string(uuid), type);
+    double prob = getProb(uuid);
+    if(!std::isnan(prob))
+      result.setProb(id, prob);
 
     if(type==gate_mulinput || type==gate_eq || type==gate_agg
        || type==gate_cmp  || type==gate_arith || type==gate_fixpoint) {
@@ -1304,7 +1355,137 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }
+
+    return id;
+}
+
+FormulaRegions MMappedCircuit::formulaRegions(
+  const std::vector<FormulaRequest> &requests, unsigned long cap,
+  unsigned long wide_cap) const
+{
+  FormulaRegions r;
+  constexpr unsigned long NOTHING = MMappedUUIDHashTable::NOTHING;
+
+  /* The size of the formula of each gate met, by its index, counted up to
+   * wide_cap + 1 only: past it, the rest of the children are not looked at.
+   * A wire closing a cycle counts for one. */
+  std::unordered_map<unsigned long, unsigned long> size;
+  struct Frame {
+    unsigned long idx;
+    unsigned long k;    ///< Next child to count
+    unsigned long acc;  ///< Size so far
+  };
+  auto size_of = [&](unsigned long root) -> unsigned long {
+    if(root == NOTHING)
+      return 1;
+    auto it = size.find(root);
+    if(it != size.end())
+      return it->second;
+    std::unordered_map<unsigned long, bool> on_stack;
+    std::vector<Frame> stack{{root, 0, 1}};
+    on_stack[root] = true;
+    while(!stack.empty()) {
+      Frame &f = stack.back();
+      const GateInformation &gi = gates[f.idx];
+      bool pushed = false;
+      /* An equation system is rendered whole: its unknowns have no formula
+       * of their own */
+      if(gi.type != gate_fixpoint)
+        while(f.k < gi.nb_children && f.acc <= wide_cap) {
+          const unsigned long c = mapping[wires[gi.children_idx + f.k]];
+          unsigned long s;
+          if(c == NOTHING)
+            s = 1;
+          else if(on_stack.count(c))
+            s = 1;
+          else {
+            auto ic = size.find(c);
+            if(ic == size.end()) {
+              stack.push_back({c, 0, 1});
+              on_stack[c] = true;
+              pushed = true;
+              break;
+            }
+            s = ic->second;
+          }
+          f.acc += s > cap ? 1 : s;
+          ++f.k;
+        }
+      if(pushed)
+        continue;
+      const unsigned long done = std::min(f.acc, wide_cap + 1);
+      size[f.idx] = done;
+      on_stack.erase(f.idx);
+      stack.pop_back();
+    }
+    return size.at(root);
+  };
+
+  std::unordered_set<unsigned long> stubbed;
+  std::unordered_set<std::string> included;
+  auto stub = [&](pg_uuid_t u, unsigned long idx) {
+    if(!stubbed.insert(idx).second)
+      return;
+    const GateInformation &gi = gates[idx];
+    r.circuit.setGate(uuid2string(u), gate_input);
+    r.stubs.push_back({uuid2string(u), gi.type, gi.info1, gi.info2,
+                       gi.nb_children});
+  };
+  /* The region of @p u: it, and the gates below down to the named ones,
+   * stubs (all of them below an equation system) */
+  auto include = [&](pg_uuid_t u) {
+    std::vector<std::pair<pg_uuid_t, bool> > todo{{u, false}};
+    while(!todo.empty()) {
+      auto [v, whole] = todo.back();
+      todo.pop_back();
+      const std::string vs = uuid2string(v);
+      if(!included.insert(vs).second)
+        continue;
+      const gate_t id = copyGate(r.circuit, v);
+      const unsigned long idx = mapping[v];
+      if(idx == NOTHING)
+        continue;
+      const GateInformation &gi = gates[idx];
+      whole = whole || gi.type == gate_fixpoint;
+      for(unsigned long k = 0; k < gi.nb_children; ++k) {
+        const pg_uuid_t w = wires[gi.children_idx + k];
+        const unsigned long wi = mapping[w];
+        r.circuit.addWire(id, r.circuit.getGate(uuid2string(w)));
+        if(!whole && wi != NOTHING && size_of(wi) > cap)
+          stub(w, wi);
+        else
+          todo.push_back({w, whole});
+      }
+    }
+  };
+
+  for(const auto &q : requests) {
+    const unsigned long idx = mapping[q.gate];
+    if(q.count == 0) {
+      if(idx != NOTHING) {
+        const GateInformation &gi = gates[idx];
+        if(gi.nb_children > 1 && size_of(idx) > wide_cap
+           && (gi.type == gate_plus || gi.type == gate_times
+               || gi.type == gate_agg)) {
+          stub(q.gate, idx);
+          continue;
+        }
+      }
+      include(q.gate);
+    } else if(idx != NOTHING) {
+      const GateInformation &gi = gates[idx];
+      for(unsigned long k = q.from; k < q.from + q.count && k < gi.nb_children;
+          ++k) {
+        const pg_uuid_t w = wires[gi.children_idx + k];
+        const unsigned long wi = mapping[w];
+        r.children.push_back(uuid2string(w));
+        if(wi != NOTHING && size_of(wi) > cap)
+          stub(w, wi);
+        else
+          include(w);
+      }
+    }
   }
 
-  return result;
+  return r;
 }
