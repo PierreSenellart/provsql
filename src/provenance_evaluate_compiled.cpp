@@ -60,12 +60,16 @@ PG_FUNCTION_INFO_V1(plain_truth);
 PG_FUNCTION_INFO_V1(subset_labels);
 PG_FUNCTION_INFO_V1(subset_settling);
 PG_FUNCTION_INFO_V1(subset_member);
+PG_FUNCTION_INFO_V1(sr_formula_rows);
 }
 
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <deque>
+#include <limits>
+#include <unordered_set>
 
 #include "CertifiedDDMaterialize.h"
 #include "Expectation.h"
@@ -1097,4 +1101,390 @@ Datum subset_member(PG_FUNCTION_ARGS)
   if(mode == "consent")
     PG_RETURN_BOOL((mask & bit) && (mask & semiring::Subset::UNRESTRICTED));
   PG_RETURN_BOOL(mask & bit);
+}
+
+namespace {
+
+/**
+ * @brief The rows of @c sr_formula_rows, produced one at a time.
+ *
+ * The comparisons on aggregates are written as @c sr_formula writes them
+ * where that fits in a row, as they are otherwise (see
+ * @c expand_comparisons).  The formula of each gate is then estimated, in
+ * bytes, bottom-up: a gate whose
+ * formula exceeds @c max_size, its named descendants written as their
+ * names, is named (@c #1, @c #2, ...) and its formula given in a row of
+ * its own, the gates above reading its name; the root is always named.  A
+ * named gate whose row would still exceed several times @c max_size (a sum
+ * of millions of small contributions) is summarised in its row, each
+ * child given a row of its own (@c #k.1, @c #k.2, ...).  No row is then
+ * much longer than @c max_size, except for a value no gate splits (an
+ * equation system).
+ */
+class FormulaRows {
+  GenericCircuit c;
+  gate_t root;
+  std::size_t max_size;
+  /** Values of the leaves and of the HAVING conditions */
+  std::unordered_map<gate_t, std::string> base;
+  /** Estimated length of the formula of each gate reachable from the root,
+   *  its named descendants written as their names */
+  std::vector<std::size_t> size;
+  /** Names of the named gates met so far */
+  std::unordered_map<gate_t, std::string> names;
+  std::size_t next_name = 1;
+  /** A gate's own row (@c child unset), or the row of the child of a wide
+   *  gate at position @c child */
+  struct Item {
+    gate_t g;
+    std::size_t child;
+  };
+  static constexpr std::size_t OWN = std::numeric_limits<std::size_t>::max();
+  /** Estimated length of a name */
+  static constexpr std::size_t NAME = 4;
+  /** How much longer than @c max_size the row of a named gate may be
+   *  before it is split into one row per child */
+  static constexpr std::size_t SLACK = 4;
+  std::deque<Item> todo;
+
+  static std::size_t add(std::size_t a, std::size_t b) {
+    const std::size_t cap = std::numeric_limits<std::size_t>::max() / 4;
+    return a > cap - std::min(b, cap) ? cap : a + b;
+  }
+  std::size_t &sz(gate_t g) {
+    return size[static_cast<std::size_t>(g)];
+  }
+
+  /* Estimates of the formulas, bottom-up, a wire closing a cycle counting
+   * for one, a named child for its name. */
+  void compute_sizes() {
+    const std::size_t n = c.getNbGates();
+    size.assign(n, 0);
+    std::vector<char> state(n, 0);
+    std::vector<gate_t> stack{root};
+    while(!stack.empty()) {
+      provsql_poll_interrupt();
+      const gate_t u = stack.back();
+      const std::size_t ui = static_cast<std::size_t>(u);
+      if(state[ui] == 2) {
+        stack.pop_back();
+        continue;
+      }
+      const auto t = c.getGateType(u);
+      auto it = base.find(u);
+      if(state[ui] == 0) {
+        state[ui] = 1;
+        if(it != base.end() || c.getWires(u).empty()
+           || t == gate_fixpoint) {
+          std::size_t s;
+          if(it != base.end())
+            s = it->second.size();
+          else if(t == gate_input || t == gate_mulinput)
+            s = 11;
+          else if(t == gate_value)
+            s = c.getExtra(u).size();
+          else
+            s = 4;
+          size[ui] = std::max<std::size_t>(s, 1);
+          state[ui] = 2;
+          stack.pop_back();
+          continue;
+        }
+        bool pushed = false;
+        for(const auto w : c.getWires(u))
+          if(state[static_cast<std::size_t>(w)] == 0) {
+            stack.push_back(w);
+            pushed = true;
+          }
+        if(pushed)
+          continue;
+      }
+      std::size_t s = 2;
+      for(const auto w : c.getWires(u)) {
+        const std::size_t wi = static_cast<std::size_t>(w);
+        s = add(s, add(state[wi] != 2 ? 1 : size[wi] > max_size ? NAME
+                                                               : size[wi], 3));
+      }
+      size[ui] = s;
+      state[ui] = 2;
+      stack.pop_back();
+    }
+  }
+
+  bool named(gate_t g) {
+    return g == root || sz(g) > max_size;
+  }
+  /* The name of a named gate, given when first met, its row then queued */
+  const std::string &name_of(gate_t g) {
+    auto it = names.find(g);
+    if(it == names.end()) {
+      it = names.emplace(g, "#" + std::to_string(next_name++)).first;
+      todo.push_back({g, OWN});
+    }
+    return it->second;
+  }
+
+  /* The formula of @p g, the named gates below it read as their names */
+  std::string render(gate_t g) {
+    semiring::Formula sr;
+    auto b = base.find(g);
+    if(b != base.end())
+      return sr.to_text(b->second);
+    std::unordered_map<gate_t, std::string> m;
+    std::unordered_set<gate_t> seen{g};
+    std::vector<gate_t> stack;
+    const auto &w = c.getWires(g);
+    for(auto it = w.rbegin(); it != w.rend(); ++it)
+      stack.push_back(*it);
+    while(!stack.empty()) {
+      provsql_poll_interrupt();
+      const gate_t u = stack.back();
+      stack.pop_back();
+      if(!seen.insert(u).second)
+        continue;
+      if(size[static_cast<std::size_t>(u)] > 0 && named(u)) {
+        m.emplace(u, name_of(u));
+        continue;
+      }
+      auto bu = base.find(u);
+      if(bu != base.end()) {
+        m.emplace(u, bu->second);
+        continue;
+      }
+      const auto &wu = c.getWires(u);
+      for(auto it = wu.rbegin(); it != wu.rend(); ++it)
+        stack.push_back(*it);
+    }
+    c.evaluate(g, m, sr);
+    return sr.to_text(std::move(m.at(g)));
+  }
+
+  /* The row of a wide gate, its children as #k.1 ... #k.n */
+  std::string summary(gate_t g, const std::string &nm) {
+    const auto n = c.getWires(g).size();
+    const std::vector<std::string> v{nm + ".1", "…", nm + "." + std::to_string(n)};
+    semiring::Formula sr;
+    std::string r;
+    switch(c.getGateType(g)) {
+    case gate_plus:
+      r = sr.plus(v);
+      break;
+    case gate_times:
+      r = sr.times(v);
+      break;
+    default:
+      r = sr.agg(getAggregationOperator(c.getInfos(g).first), v);
+    }
+    return sr.to_text(std::move(r)) + " (" + std::to_string(n) + " terms)";
+  }
+
+  /** Thrown by @c CappedFormula past its cap */
+  struct TooLarge {};
+  /** @c Formula, refusing a value longer than @c cap */
+  class CappedFormula : public semiring::Formula {
+    std::size_t cap;
+    std::string check(std::string v) const {
+      if(v.size() > cap)
+        throw TooLarge();
+      return v;
+    }
+public:
+    explicit CappedFormula(std::size_t cap) : cap(cap) {}
+    value_type plus(const std::vector<value_type> &v) const override {
+      return check(Formula::plus(v));
+    }
+    value_type times(const std::vector<value_type> &v) const override {
+      return check(Formula::times(v));
+    }
+    value_type plus_of(const std::vector<const value_type *> &v) const override {
+      return check(Formula::plus_of(v));
+    }
+    value_type times_of(const std::vector<const value_type *> &v) const override {
+      return check(Formula::times_of(v));
+    }
+    value_type monus(value_type x, value_type y) const override {
+      return check(Formula::monus(std::move(x), std::move(y)));
+    }
+  };
+
+  /* The number of contributors to the aggregates the comparison @p g
+   * reads */
+  std::size_t contributors(gate_t g) {
+    std::size_t k = 0;
+    std::unordered_set<gate_t> seen;
+    std::vector<gate_t> stack(c.getWires(g).begin(), c.getWires(g).end());
+    while(!stack.empty()) {
+      const gate_t u = stack.back();
+      stack.pop_back();
+      if(!seen.insert(u).second)
+        continue;
+      if(c.getGateType(u) == gate_agg)
+        k += c.getWires(u).size();
+      else
+        for(const auto w : c.getWires(u))
+          stack.push_back(w);
+    }
+    return k;
+  }
+
+  /* The comparisons on aggregates written as sr_formula writes them, a sum
+   * over the possible worlds of each group, unless that sum could be longer
+   * than a row: they are then written as they are, the sum being
+   * exponential in the size of the group.  The worlds are enumerated before
+   * any of the sum is written, so the expansion is tried only when there
+   * are few enough of them; and it is given up, the circuit restored, as
+   * soon as a value of it is longer than a row. */
+  void expand_comparisons() {
+    const auto cmps = provsql_having_detail::collect_sp_cmp_gates(c, root);
+    if(cmps.empty())
+      return;
+    const std::size_t cap = SLACK * max_size;
+    std::size_t k = 0;
+    for(const auto g : cmps)
+      k += contributors(g);
+    if(k >= 8 * sizeof(std::size_t) || (std::size_t(1) << k) > cap
+       || (provsql_max_worlds > 0
+           && (std::size_t(1) << k) > (std::size_t) provsql_max_worlds))
+      return;
+    GenericCircuit saved_circuit = c;
+    auto saved_base = base;
+    try {
+      provsql_having(c, root, base, CappedFormula(cap));
+    } catch(const TooLarge &) {
+      c = std::move(saved_circuit);
+      base = std::move(saved_base);
+    }
+  }
+
+public:
+  FormulaRows(const constants_t &constants, pg_uuid_t token, Oid table,
+              std::size_t max_size)
+    : c(getGenericCircuit(token)), max_size(max_size) {
+    root = c.getGate(uuid2string(token));
+    const bool drop_table = join_with_temp_uuids(table, c.getMappableUUIDs());
+    semiring::Formula sr;
+    initialize_provenance_mapping<std::string>(constants, c, base,
+      [&sr](const char *v) { return sr.parse_leaf(v); }, drop_table);
+    expand_comparisons();
+    compute_sizes();
+    name_of(root);
+  }
+
+  /** The next row, as (name, formula); false when there is none left. */
+  bool next(std::string &name, std::string &formula) {
+    if(todo.empty())
+      return false;
+    Item &item = todo.front();
+    const gate_t g = item.g;
+    if(item.child == OWN) {
+      name = names.at(g);
+      const auto t = c.getGateType(g);
+      if(base.find(g) == base.end() && c.getWires(g).size() > 1
+         && (t == gate_plus || t == gate_times || t == gate_agg)
+         && sz(g) / SLACK > max_size) {
+        formula = summary(g, name);
+        item.child = 0;
+      } else {
+        todo.pop_front();
+        formula = render(g);
+      }
+      return true;
+    }
+    const std::size_t i = item.child++;
+    const auto &w = c.getWires(g);
+    const gate_t ch = w[i];
+    name = names.at(g) + "." + std::to_string(i + 1);
+    if(i + 1 == w.size())
+      todo.pop_front();
+    formula = named(ch) ? name_of(ch) : render(ch);
+    return true;
+  }
+};
+
+void delete_formula_rows(void *arg)
+{
+  delete static_cast<FormulaRows *>(arg);
+}
+
+}
+
+/**
+ * @brief The formula of a token as rows (name, formula), each bounded in
+ *        size: @c sr_formula with the large sub-terms named.
+ */
+Datum sr_formula_rows(PG_FUNCTION_ARGS)
+{
+  FuncCallContext *funcctx;
+
+  if(SRF_IS_FIRSTCALL()) {
+    funcctx = SRF_FIRSTCALL_INIT();
+    if(PG_ARGISNULL(0))
+      SRF_RETURN_DONE(funcctx);
+    const pg_uuid_t token = *PG_GETARG_UUID_P(0);
+    const Oid table = PG_ARGISNULL(1) ? InvalidOid : PG_GETARG_OID(1);
+    const int32 max_size = PG_ARGISNULL(2) ? 400 : PG_GETARG_INT32(2);
+    if(max_size < 1)
+      provsql_error("sr_formula_rows: max_size must be positive");
+
+    /* The descriptor allocated where it lasts for all the rows */
+    MemoryContext old = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+    TupleDesc tupdesc;
+    if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      provsql_error("sr_formula_rows must return a record");
+    funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+    MemoryContextSwitchTo(old);
+
+    FormulaRows *rows = nullptr;
+    try {
+      provsql_interrupt_scope interrupt_scope;
+      constants_t constants = get_constants(true);
+      rows = new FormulaRows(constants, token, table, max_size);
+    } catch(const CircuitRefusal &r) {
+      provsql_cancel_if_interrupted();
+      provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
+    } catch(const std::exception &e) {
+      provsql_cancel_if_interrupted();
+      provsql_error("sr_formula_rows: %s", e.what());
+    } catch(...) {
+      provsql_cancel_if_interrupted();
+      provsql_error("sr_formula_rows: Unknown exception");
+    }
+    funcctx->user_fctx = rows;
+    MemoryContextCallback *cb = static_cast<MemoryContextCallback *>(
+      MemoryContextAlloc(funcctx->multi_call_memory_ctx,
+                         sizeof(MemoryContextCallback)));
+    cb->func = delete_formula_rows;
+    cb->arg = rows;
+    MemoryContextRegisterResetCallback(funcctx->multi_call_memory_ctx, cb);
+  }
+
+  funcctx = SRF_PERCALL_SETUP();
+  FormulaRows *rows = static_cast<FormulaRows *>(funcctx->user_fctx);
+  std::string name, formula;
+  bool more = false;
+  Datum values[2];
+  try {
+    provsql_interrupt_scope interrupt_scope;
+    more = rows->next(name, formula);
+    if(more) {
+      if(provsql_max_memory > 0)
+        provsql_check_memory();
+      values[0] = text_datum(name);
+      values[1] = text_datum(formula);
+    }
+  } catch(const CircuitRefusal &r) {
+    provsql_cancel_if_interrupted();
+    provsql_unsupported(r.scope(), r.tag(), "%s", r.what());
+  } catch(const std::exception &e) {
+    provsql_cancel_if_interrupted();
+    provsql_error("sr_formula_rows: %s", e.what());
+  } catch(...) {
+    provsql_cancel_if_interrupted();
+    provsql_error("sr_formula_rows: Unknown exception");
+  }
+  if(!more)
+    SRF_RETURN_DONE(funcctx);
+  bool nulls[2] = {false, false};
+  SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(
+                    heap_form_tuple(funcctx->tuple_desc, values, nulls)));
 }
