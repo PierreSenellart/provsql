@@ -283,6 +283,9 @@ void provsql_buffer_ensure(size_t need);
 
 /** @brief Read exactly @p n bytes from @p fd into @p dst; @c false on EOF/error. */
 bool provsql_read_all(int fd, void *dst, size_t n);
+/** @brief Write the @p n bytes of @p src to @p fd, however many @c write
+ *  calls it takes; @c false on error. */
+bool provsql_write_all(int fd, const void *src, size_t n);
 
 /** Shared write buffer used with @c STARTWRITEM / @c ADDWRITEM / @c SENDWRITEM. */
 extern char buffer[PIPE_BUF];
@@ -325,7 +328,7 @@ void provsql_replay_spool_close(void);
 /** @brief Read exactly @p n bytes of a request from the background-to-main pipe. */
 #define READM_BYTES(ptr, n) provsql_worker_read((ptr), (n))
 /** @brief Write @p n reply bytes to the main-to-background pipe. */
-#define WRITEB_BYTES(ptr, n) (write(provsql_shared_state->pipembw, (ptr), (n))!=-1)
+#define WRITEB_BYTES(ptr, n) provsql_write_all(provsql_shared_state->pipembw, (ptr), (n))
 
 /** @brief Reset the shared write buffer for a new batched write. */
 #define STARTWRITEM() (bufferpos=0)

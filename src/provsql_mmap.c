@@ -179,6 +179,25 @@ bool provsql_read_all(int fd, void *dst, size_t n)
   return true;
 }
 
+bool provsql_write_all(int fd, const void *src, size_t n)
+{
+  /* A write to a pipe interrupted by a signal returns what it wrote so
+   * far: the rest must be written too, or the reader waits for it forever. */
+  const char *p = src;
+  size_t remaining = n;
+  while(remaining > 0) {
+    ssize_t r = write(fd, p, remaining);
+    if(r < 0) {
+      if(errno == EINTR)
+        continue;
+      return false;
+    }
+    remaining -= r;
+    p += r;
+  }
+  return true;
+}
+
 #if PG_VERSION_NUM >= 190000
 /* PostgreSQL 19 changed the default background-worker SIGTERM handler
  * from bgworker_die() (immediate FATAL from the signal handler) to the
