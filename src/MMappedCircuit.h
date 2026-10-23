@@ -491,17 +491,6 @@ double probAt(unsigned long idx) const;
 std::string extraAt(unsigned long idx) const;
 };
 
-/** @brief Hash of a @c pg_uuid_t, for the unordered containers. */
-struct UUIDHash {
-  /** @brief The hash of @p u: its bytes are already uniformly spread. */
-  std::size_t operator()(const pg_uuid_t &u) const {
-    std::uint64_t a, b;
-    std::memcpy(&a, u.data, sizeof a);
-    std::memcpy(&b, u.data + sizeof a, sizeof b);
-    return a ^ (b * 0x9E3779B97F4A7C15ULL);
-  }
-};
-
 /**
  * @brief Thrown by @c MMappedCircuit::createGenericCircuit when the circuit
  *        it builds takes the process past the memory budget it was given

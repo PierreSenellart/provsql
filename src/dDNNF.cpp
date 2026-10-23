@@ -569,11 +569,7 @@ dDNNF dDNNF::condition(gate_t var, bool value) const {
   result.setGateType(var, value ? BooleanGate::AND : BooleanGate::OR);
   result.probability_cache[var] = value?1.:0.;
   result.inputs.erase(var);
-  auto it = id2uuid.find(var);
-  if(it!=id2uuid.end()) {
-    result.uuid2id.erase(it->second);
-    result.id2uuid.erase(var);
-  }
+  result.dropName(var);
 
   return result;
 }
@@ -691,11 +687,7 @@ void dDNNF::simplify() {
     if(!used[i]) {
       inputs.erase(gate_t{i});
       probability_cache.erase(gate_t{i});
-      auto it = id2uuid.find(gate_t{i});
-      if(it!=id2uuid.end()) {
-        uuid2id.erase(it->second);
-        id2uuid.erase(it);
-      }
+      dropName(gate_t{i});
       continue;
     }
 
@@ -712,12 +704,7 @@ void dDNNF::simplify() {
         probability_cache.erase(it1);
       }
 
-      auto it2 = id2uuid.find(gate_t{i});
-      if(it2!=id2uuid.end()) {
-        id2uuid[gate_t{newi}] = it2->second;
-        uuid2id[it2->second] = gate_t{newi};
-        id2uuid.erase(it2);
-      }
+      moveName(gate_t{i}, gate_t{newi});
 
       if(root==gate_t{i})
         root=gate_t{newi};
@@ -735,6 +722,10 @@ void dDNNF::simplify() {
   gates.resize(newi);
   wires.resize(newi);
   prob.resize(newi);
+  if(name_kind.size() > newi) {
+    name_kind.resize(newi);
+    id2uuid.resize(newi);
+  }
 
   for(auto &w: wires)
     for(size_t i=0; i<w.size(); ++i)
@@ -822,9 +813,8 @@ std::string dDNNF::toNNF(
   // original UUID) when available, else the d-DNNF's own gate id + 1.
   auto var_of = [&](gate_t g) -> int {
     if(var_of_uuid) {
-      auto u = id2uuid.find(g);
-      if(u != id2uuid.end()) {
-        int v = var_of_uuid(u->second);
+      if(nameKind(g) != NO_NAME) {
+        int v = var_of_uuid(getUUID(g));
         if(v > 0)
           return v;
       }
@@ -947,10 +937,7 @@ std::string dDNNF::toDot() const
     case BooleanGate::IN: {
       shape = "box";
       fill = ", style=filled, fillcolor=\"#e6f0fa\"";
-      std::string u;
-      auto it = id2uuid.find(g);
-      if(it != id2uuid.end())
-        u = it->second;
+      const std::string u = getUUID(g);
       std::string sh = u.size() > 8 ? u.substr(0, 8) : u;
       std::ostringstream lab;
       lab << sh << "\\np=" << std::fixed << std::setprecision(3) << prob[id];

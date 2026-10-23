@@ -33,7 +33,7 @@
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/vector.hpp>
 
-#include "Circuit.h"
+#include "Circuit.hpp"
 #include "semiring/Semiring.h"
 
 extern "C" {
@@ -572,8 +572,7 @@ gate_t addAnonymousInputGate(double p) {
   setGateType(id, gate_input);
   setProb(id, p);
   std::string u = "dec-in-" + std::to_string(static_cast<size_t>(id));
-  uuid2id[u] = id;
-  id2uuid[id] = u;
+  bindName(id, u);
   inputs.insert(id);
   return id;
 }
@@ -599,8 +598,7 @@ gate_t addAnonymousMulinputGate(gate_t key, double p,
   setInfos(id, value_index, 0);
   getWires(id).push_back(key);
   std::string u = "dec-mul-" + std::to_string(static_cast<size_t>(id));
-  uuid2id[u] = id;
-  id2uuid[id] = u;
+  bindName(id, u);
   return id;
 }
 
@@ -612,7 +610,7 @@ gate_t addAnonymousMulinputGate(gate_t key, double p,
  * pushing a @c PLUS / @c TIMES inside a mixture's two scalar branches:
  * each branch needs a fresh @c gate_arith child carrying the lifted
  * operation, and those children must round-trip through downstream
- * @c id2uuid / @c uuid2id lookups (Studio's simplified subgraph,
+ * @c getUUID / @c getGate lookups (Studio's simplified subgraph,
  * @c to_provxml).  A unique synthetic UUID is minted for the same
  * reason as @c addAnonymousInputGate.
  */
@@ -623,8 +621,7 @@ gate_t addAnonymousArithGate(provsql_arith_op op,
   setInfos(id, static_cast<int>(op), 0);
   getWires(id) = std::move(wires_);
   std::string u = "dec-arith-" + std::to_string(static_cast<size_t>(id));
-  uuid2id[u] = id;
-  id2uuid[id] = u;
+  bindName(id, u);
   return id;
 }
 
@@ -644,8 +641,7 @@ gate_t addAnonymousGate(gate_type type, std::vector<gate_t> wires_) {
   setGateType(id, type);
   getWires(id) = std::move(wires_);
   std::string u = "dec-gate-" + std::to_string(static_cast<size_t>(id));
-  uuid2id[u] = id;
-  id2uuid[id] = u;
+  bindName(id, u);
   return id;
 }
 
@@ -667,8 +663,7 @@ gate_t addAnonymousValueGate(const std::string &text) {
   setGateType(id, gate_value);
   setExtra(id, text);
   std::string u = "dec-value-" + std::to_string(static_cast<size_t>(id));
-  uuid2id[u] = id;
-  id2uuid[id] = u;
+  bindName(id, u);
   return id;
 }
 
@@ -772,6 +767,9 @@ void serialize (Archive & ar, const unsigned int version)
 {
   ar & uuid2id;
   ar & id2uuid;
+  ar & name_kind;
+  ar & name2id;
+  ar & id2name;
   ar & gates;
   ar & wires;
   ar & infos;

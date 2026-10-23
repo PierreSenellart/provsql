@@ -181,8 +181,7 @@ bool GenericCircuit::foldSemiringIdentities()
     }
     for (const auto &kv : redirect) {
       gate_t g = kv.first, target = kv.second;
-      auto uit = id2uuid.find(g);
-      if (uit != id2uuid.end()) uuid2id[uit->second] = target;
+      pointName(g, target);
       if (boolean_assumed_gates.count(g)) boolean_assumed_gates.insert(target);
       if (absorptive_assumed_gates.count(g))
         absorptive_assumed_gates.insert(target);
@@ -206,10 +205,8 @@ void GenericCircuit::redirectGates(std::unordered_map<gate_t, gate_t> subst)
       auto it = subst.find(w);
       if (it != subst.end()) w = it->second;
     }
-  for (const auto &kv : subst) {
-    auto uit = id2uuid.find(kv.first);
-    if (uit != id2uuid.end()) uuid2id[uit->second] = kv.second;
-  }
+  for (const auto &kv : subst)
+    pointName(kv.first, kv.second);
 }
 
 bool GenericCircuit::applyFoldRuleSweep(bool boolean_level)

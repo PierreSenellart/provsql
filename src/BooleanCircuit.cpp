@@ -1009,11 +1009,7 @@ BooleanCircuit::tseytinVariableMapping() const {
   // and the variable indices (id + 1) come out sorted and stable.
   for(gate_t in : inputs) {
     auto id = static_cast<std::underlying_type<gate_t>::type>(in);
-    std::string u;
-    auto it = id2uuid.find(in);
-    if(it != id2uuid.end())
-      u = it->second;
-    mapping.push_back({static_cast<int>(id) + 1, u, getProb(in)});
+    mapping.push_back({static_cast<int>(id) + 1, getUUID(in), getProb(in)});
   }
   return mapping;
 }

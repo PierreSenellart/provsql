@@ -789,6 +789,9 @@ void serialize (Archive & ar, [[maybe_unused]] const unsigned int version)
 {
   ar & uuid2id;
   ar & id2uuid;
+  ar & name_kind;
+  ar & name2id;
+  ar & id2name;
   ar & gates;
   ar & wires;
   ar & inputs;

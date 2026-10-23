@@ -1303,37 +1303,24 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
    * a min-heap, which a gate enters when first met as a child; a root met
    * so before it is processed is in it twice, and skipped the second
    * time. */
-  /* memcmp's order, the UUID read as two big-endian words */
-  auto word = [](const unsigned char *p) {
-    std::uint64_t w = 0;
-    for(int i = 0; i < 8; ++i)
-      w = (w << 8) | p[i];
-    return w;
+  auto greater = [](const gate_uuid &a, const gate_uuid &b) {
+    return b < a;
   };
-  auto greater = [&word](const pg_uuid_t &a, const pg_uuid_t &b) {
-    const std::uint64_t a1 = word(a.data), b1 = word(b.data);
-    if(a1 != b1)
-      return a1 > b1;
-    return word(a.data + 8) > word(b.data + 8);
-  };
-  std::priority_queue<pg_uuid_t, std::vector<pg_uuid_t>, decltype(greater)>
+  std::priority_queue<gate_uuid, std::vector<gate_uuid>, decltype(greater)>
     to_process(greater);
   for(const auto &r : roots)
-    to_process.push(r);
+    to_process.push(gate_uuid::fromBytes(r.data));
 
   GenericCircuit result;
-  /* The gate of each UUID met, without building its string at each wire */
-  std::unordered_map<pg_uuid_t, gate_t, UUIDHash> ids;
   std::vector<bool> processed;
 
   while(!to_process.empty()) {
     check_budget();
-    pg_uuid_t uuid = to_process.top();
+    const gate_uuid key = to_process.top();
     to_process.pop();
-    auto [it, fresh] = ids.try_emplace(uuid);
-    if(fresh)
-      it->second = result.getGate(uuid2string(uuid));
-    const gate_t id = it->second;
+    pg_uuid_t uuid;
+    key.toBytes(uuid.data);
+    const gate_t id = result.getGate(key);
     const std::size_t i = static_cast<std::size_t>(id);
     if(i < processed.size() && processed[i])
       continue;
@@ -1350,13 +1337,11 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     for(unsigned long k = gi.children_idx; k < gi.children_idx + gi.nb_children;
         ++k) {
       check_budget();
-      const pg_uuid_t child = wires[k];
-      auto [ic, first] = ids.try_emplace(child);
-      if(first) {
-        ic->second = result.getGate(uuid2string(child));
+      const gate_uuid child = gate_uuid::fromBytes(wires[k].data);
+      auto [c, first] = result.findOrAddGate(child);
+      if(first)
         to_process.push(child);
-      }
-      result.addWire(id, ic->second);
+      result.addWire(id, c);
     }
   }
 
@@ -1365,7 +1350,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
 
 gate_t MMappedCircuit::copyGate(GenericCircuit &result, pg_uuid_t uuid) const
 {
-  const gate_t id = result.getGate(uuid2string(uuid));
+  const gate_t id = result.getGate(gate_uuid::fromBytes(uuid.data));
   copyGateAt(result, id, mapping[uuid]);
   return id;
 }
@@ -1477,12 +1462,13 @@ FormulaRegions MMappedCircuit::formulaRegions(
   };
 
   std::unordered_set<unsigned long> stubbed;
-  std::unordered_set<std::string> included;
+  std::unordered_set<gate_uuid, gate_uuid_hash> included;
   auto stub = [&](pg_uuid_t u, unsigned long idx) {
     if(!stubbed.insert(idx).second)
       return;
     const GateInformation &gi = gates[idx];
-    r.circuit.setGate(uuid2string(u), gate_input);
+    r.circuit.setGate(r.circuit.getGate(gate_uuid::fromBytes(u.data)),
+                      gate_input);
     r.stubs.push_back({uuid2string(u), gi.type, gi.info1, gi.info2,
                        gi.nb_children});
   };
@@ -1493,8 +1479,7 @@ FormulaRegions MMappedCircuit::formulaRegions(
     while(!todo.empty()) {
       auto [v, whole] = todo.back();
       todo.pop_back();
-      const std::string vs = uuid2string(v);
-      if(!included.insert(vs).second)
+      if(!included.insert(gate_uuid::fromBytes(v.data)).second)
         continue;
       const gate_t id = copyGate(r.circuit, v);
       const unsigned long idx = mapping[v];
@@ -1505,7 +1490,7 @@ FormulaRegions MMappedCircuit::formulaRegions(
       for(unsigned long k = 0; k < gi.nb_children; ++k) {
         const pg_uuid_t w = wires[gi.children_idx + k];
         const unsigned long wi = mapping[w];
-        r.circuit.addWire(id, r.circuit.getGate(uuid2string(w)));
+        r.circuit.addWire(id, r.circuit.getGate(gate_uuid::fromBytes(w.data)));
         if(!whole && wi != NOTHING && size_of(wi) > cap)
           stub(w, wi);
         else
