@@ -65,6 +65,11 @@ void provsql_buffer_ensure(size_t need)
   }
 }
 
+bool provsql_store_cancel_requested(void)
+{
+  return QueryCancelPending || ProcDiePending;
+}
+
 /* No background worker in the single-process build. */
 
 #else
@@ -204,6 +209,37 @@ bool provsql_write_all(int fd, const void *src, size_t n)
   return true;
 }
 
+void provsql_request_start(void)
+{
+  pg_atomic_write_u32(&provsql_shared_state->cancel_request, 0);
+}
+
+bool provsql_wait_reply(void)
+{
+  struct pollfd pfd;
+  bool cancelled = false;
+
+  pfd.fd = provsql_shared_state->pipembr;
+  pfd.events = POLLIN;
+  for(;;) {
+    int r;
+    if(!cancelled && (QueryCancelPending || ProcDiePending)) {
+      cancelled = true;
+      pg_atomic_write_u32(&provsql_shared_state->cancel_request, 1);
+    }
+    /* A signal may not interrupt poll(): looked at again every 100 ms */
+    r = poll(&pfd, 1, cancelled ? -1 : 100);
+    /* Readable, or an error the read reports */
+    if(r > 0 || (r < 0 && errno != EINTR))
+      return cancelled;
+  }
+}
+
+bool provsql_store_cancel_requested(void)
+{
+  return pg_atomic_read_u32(&provsql_shared_state->cancel_request) != 0;
+}
+
 #if PG_VERSION_NUM >= 190000
 /* PostgreSQL 19 changed the default background-worker SIGTERM handler
  * from bgworker_die() (immediate FATAL from the signal handler) to the
@@ -236,7 +272,7 @@ PGDLLEXPORT void provsql_mmap_worker(Datum ignored)
   close(provsql_shared_state->pipembr);
   /* From here on, WAL replay writes to the pipe; what it wrote before is in
      the spool, which is applied first. */
-  provsql_shmem_lock_exclusive();
+  provsql_shmem_lock_exclusive_wait();
   provsql_take_replay_spool();
   provsql_shared_state->worker_ready = true;
   provsql_shmem_unlock();
@@ -461,7 +497,7 @@ void provsql_replay_store_message(const char *data, size_t len)
      the message goes back down the same pipe a backend would use.  The
      lock is held across the whole write so the (possibly chunked)
      message stays one message. */
-  provsql_shmem_lock_exclusive();
+  provsql_shmem_lock_exclusive_wait();
 
   /* After a crash, PostgreSQL starts the background workers only once
      recovery is over: nothing reads the pipe, which fills, and a message

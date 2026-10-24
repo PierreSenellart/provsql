@@ -582,9 +582,10 @@ extern "C" void provsql_store_flush(void)
  * it is sent.  With a @p budget (bytes, 0 for none: what the requesting
  * statement has left of @c provsql.max_memory), building and serialising it
  * may not make this process grow by more; past it, the answer is
- * @c PROVSQL_CIRCUIT_OVER_BUDGET and no circuit.  The memory is given back
- * afterwards, so that one large request does not stay resident in the
- * worker.
+ * @c PROVSQL_CIRCUIT_OVER_BUDGET and no circuit; if the requesting statement
+ * is cancelled meanwhile, it is @c PROVSQL_CIRCUIT_CANCELLED.  The memory is
+ * given back afterwards, so that one large request does not stay resident
+ * in the worker.
  */
 static void send_circuit(const MMappedCircuit *circuit,
                          const std::vector<pg_uuid_t> &roots,
@@ -596,10 +597,14 @@ static void send_circuit(const MMappedCircuit *circuit,
 
   try {
     {
+      const GenericCircuit gc = circuit->createGenericCircuit(roots, budget);
+      /* Not serialised for a statement cancelled while it was built */
+      if(provsql_store_cancel_requested())
+        throw CircuitCancelled();
       boost::iostreams::stream<
         boost::iostreams::back_insert_device<std::vector<char>>> out(buf);
       boost::archive::binary_oarchive oa(out);
-      oa << circuit->createGenericCircuit(roots, budget);
+      oa << gc;
       out.flush();
     }
     size = buf.size();
@@ -610,12 +615,16 @@ static void send_circuit(const MMappedCircuit *circuit,
     }
   } catch(const CircuitBudgetExceeded &) {
     size = PROVSQL_CIRCUIT_OVER_BUDGET;
+  } catch(const CircuitCancelled &) {
+    size = PROVSQL_CIRCUIT_CANCELLED;
   }
-  if(size == PROVSQL_CIRCUIT_OVER_BUDGET)
+  const bool no_circuit = size == PROVSQL_CIRCUIT_OVER_BUDGET ||
+                          size == PROVSQL_CIRCUIT_CANCELLED;
+  if(no_circuit)
     std::vector<char>().swap(buf);
 
   if(!WRITEB(&size, unsigned long) ||
-     (size != PROVSQL_CIRCUIT_OVER_BUDGET && !WRITEB_BYTES(buf.data(), size)))
+     (!no_circuit && !WRITEB_BYTES(buf.data(), size)))
     provsql_error("Cannot write to pipe (message type %c)", message_char);
 
   std::vector<char>().swap(buf);
@@ -1284,12 +1293,17 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
   const std::size_t base_rss = budget ? provsql_process_rss(getpid()) : 0;
   unsigned steps = 0;
   /* Counted per gate and per wire: a single gate (the agg of a SUM over
-   * millions of rows) can have millions of children. */
+   * millions of rows) can have millions of children.  A cancel of the
+   * statement that asked for the circuit is looked for at the same pace. */
   auto check_budget = [&]() {
-    if(budget && ++steps % 4096 == 0) {
-      std::size_t rss = provsql_process_rss(getpid());
-      if(rss > base_rss && rss - base_rss > budget)
-        throw CircuitBudgetExceeded();
+    if(++steps % 4096 == 0) {
+      if(provsql_store_cancel_requested())
+        throw CircuitCancelled();
+      if(budget) {
+        std::size_t rss = provsql_process_rss(getpid());
+        if(rss > base_rss && rss - base_rss > budget)
+          throw CircuitBudgetExceeded();
+      }
     }
   };
 

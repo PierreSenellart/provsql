@@ -124,6 +124,10 @@ typedef struct provsqlSharedState
                           ///< False until then, after a crash restart
                           ///< included, when the worker starts only after
                           ///< recovery (see @c provsql_replay_store_message).
+  pg_atomic_uint32 cancel_request; ///< Set by the backend holding @c lock
+                          ///< when its statement is cancelled while it
+                          ///< waits for a circuit: the worker then stops
+                          ///< building it (see @c provsql_wait_reply).
 } provsqlSharedState;
 
 #endif /* PROVSQL_INPROCESS_STORE */
@@ -134,14 +138,41 @@ extern provsqlSharedState *provsql_shared_state;
 /**
  * @brief Acquire the ProvSQL LWLock in exclusive mode.
  *
+ * A backend may wait long for it, behind the building of a large circuit
+ * for another: outside a ProvSQL evaluation, a cancel, a
+ * @c statement_timeout or a terminate then stops the statement during the
+ * wait, as it would anywhere else.  Within one (a @c provsql_interrupt_scope),
+ * whose C++ frames an error would jump over, the wait goes on.
+ *
  * Callers must pair this with @c provsql_shmem_unlock().
  */
 void provsql_shmem_lock_exclusive(void);
 
 /**
+ * @brief Acquire the ProvSQL LWLock in exclusive mode, waiting whatever
+ *        happens: for the background worker, WAL replay, and the KCMCP
+ *        supervisor, which have no statement to cancel.
+ *
+ * Callers must pair this with @c provsql_shmem_unlock().
+ */
+void provsql_shmem_lock_exclusive_wait(void);
+
+/**
+ * @brief Acquire the ProvSQL LWLock in exclusive mode, unless the statement
+ *        is cancelled (or the backend terminated) during the wait.
+ *
+ * For a C++ caller, which then throws.
+ *
+ * @return whether the lock was taken; if so, callers must pair this with
+ *         @c provsql_shmem_unlock().
+ */
+bool provsql_shmem_lock_exclusive_unless_cancelled(void);
+
+/**
  * @brief Acquire the ProvSQL LWLock in shared mode.
  *
- * Multiple backends may hold the shared lock simultaneously.
+ * Multiple backends may hold the shared lock simultaneously.  A cancel
+ * stops the wait as for @c provsql_shmem_lock_exclusive().
  * Callers must pair this with @c provsql_shmem_unlock().
  */
 void provsql_shmem_lock_shared(void);

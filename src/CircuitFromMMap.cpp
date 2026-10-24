@@ -66,6 +66,52 @@ static unsigned long circuit_budget()
   throw CircuitBudgetExceeded();   /* not reached */
 }
 
+/** @brief Stop for a cancel (or a terminate) of the statement, received
+ *  while its circuit was loaded: as the evaluation loops do, by a throw
+ *  that the entry point turns into PostgreSQL's own error. */
+[[noreturn]] static void circuit_load_cancelled()
+{
+  provsql_interrupted = true;
+  throw CircuitException("Interrupted");
+}
+
+#ifndef PROVSQL_INPROCESS_STORE
+/**
+ * @brief Read the worker's answer to a @c 'g' / @c 'j' request just sent,
+ *        and release the store lock.
+ *
+ * @return The serialised circuit, of @p size bytes, to be freed by the
+ *         caller; what stops the load (the budget, a cancel) is thrown.
+ */
+static char *readCircuitReply(unsigned long &size, char message_char)
+{
+  const bool cancelled = provsql_wait_reply();
+
+  if(!READB(size, unsigned long))
+    provsql_error("Cannot read from pipe (message type %c)", message_char);
+  if(size == PROVSQL_CIRCUIT_OVER_BUDGET ||
+     size == PROVSQL_CIRCUIT_CANCELLED) {
+    provsql_shmem_unlock();
+    if(cancelled)
+      circuit_load_cancelled();
+    circuit_over_budget();
+  }
+
+  char *buf = new char[size];
+  if(!READB_BYTES(buf, size)) {
+    provsql_shmem_unlock();
+    delete [] buf;
+    provsql_error("Cannot read from pipe (message type %c)", message_char);
+  }
+  provsql_shmem_unlock();
+
+  if(cancelled) {
+    delete [] buf;
+    circuit_load_cancelled();
+  }
+  return buf;
+}
+
 /**
  * @brief Read and deserialise a circuit rooted at @p token from the mmap worker.
  * @tparam C           Circuit type to deserialise (@c BooleanCircuit or @c GenericCircuit).
@@ -84,25 +130,14 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   ADDWRITEM(&token, pg_uuid_t);
   ADDWRITEM(&budget, unsigned long);
 
-  provsql_shmem_lock_exclusive();
+  if(!provsql_shmem_lock_exclusive_unless_cancelled())
+    circuit_load_cancelled();
+  provsql_request_start();
   if(!SENDWRITEM())
     provsql_error("Cannot write to pipe (message type %c)", message_char);
 
   unsigned long size;
-  if(!READB(size, unsigned long))
-    provsql_error("Cannot read from pipe (message type %c)", message_char);
-  if(size == PROVSQL_CIRCUIT_OVER_BUDGET) {
-    provsql_shmem_unlock();
-    circuit_over_budget();
-  }
-
-  char *buf = new char[size];
-  if(!READB_BYTES(buf, size)) {
-    provsql_shmem_unlock();
-    delete [] buf;
-    provsql_error("Cannot read from pipe (message type %c)", message_char);
-  }
-  provsql_shmem_unlock();
+  char *buf = readCircuitReply(size, message_char);
 
   C c;
   try {
@@ -120,6 +155,7 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 
   return c;
 }
+#endif
 
 BooleanCircuit getBooleanCircuit(
   GenericCircuit &gc,
@@ -255,6 +291,8 @@ GenericCircuit getGenericCircuit(pg_uuid_t token)
     gc = provsql_inproc_generic_circuit(token, circuit_budget());
   } catch(const CircuitBudgetExceeded &) {
     circuit_over_budget();
+  } catch(const CircuitCancelled &) {
+    circuit_load_cancelled();
   }
 #else
   GenericCircuit gc = getCircuitFromMMap<GenericCircuit>(token, 'g');
@@ -294,6 +332,8 @@ static GenericCircuit getJointCircuitFromMMap(
     return provsql_inproc_joint_circuit(tokens, circuit_budget());
   } catch(const CircuitBudgetExceeded &) {
     circuit_over_budget();
+  } catch(const CircuitCancelled &) {
+    circuit_load_cancelled();
   }
 #else
   char message_char = 'j';
@@ -307,25 +347,14 @@ static GenericCircuit getJointCircuitFromMMap(
   unsigned long budget = circuit_budget();
   ADDWRITEM(&budget, unsigned long);
 
-  provsql_shmem_lock_exclusive();
+  if(!provsql_shmem_lock_exclusive_unless_cancelled())
+    circuit_load_cancelled();
+  provsql_request_start();
   if(!SENDWRITEM())
     provsql_error("Cannot write to pipe (message type j)");
 
   unsigned long size;
-  if(!READB(size, unsigned long))
-    provsql_error("Cannot read from pipe (message type j)");
-  if(size == PROVSQL_CIRCUIT_OVER_BUDGET) {
-    provsql_shmem_unlock();
-    circuit_over_budget();
-  }
-
-  char *buf = new char[size];
-  if(!READB_BYTES(buf, size)) {
-    provsql_shmem_unlock();
-    delete [] buf;
-    provsql_error("Cannot read from pipe (message type j)");
-  }
-  provsql_shmem_unlock();
+  char *buf = readCircuitReply(size, message_char);
 
   GenericCircuit c;
   try {
@@ -366,10 +395,13 @@ FormulaRegions getFormulaRegions(const std::vector<FormulaRequest> &requests,
     ADDWRITEM(&q.count, unsigned long);
   }
 
-  provsql_shmem_lock_exclusive();
+  if(!provsql_shmem_lock_exclusive_unless_cancelled())
+    circuit_load_cancelled();
+  provsql_request_start();
   if(!SENDWRITEM())
     provsql_error("Cannot write to pipe (message type F)");
 
+  const bool cancelled = provsql_wait_reply();
   unsigned long size;
   if(!READB(size, unsigned long))
     provsql_error("Cannot read from pipe (message type F)");
@@ -380,6 +412,10 @@ FormulaRegions getFormulaRegions(const std::vector<FormulaRequest> &requests,
     provsql_error("Cannot read from pipe (message type F)");
   }
   provsql_shmem_unlock();
+  if(cancelled) {
+    delete [] buf;
+    circuit_load_cancelled();
+  }
 
   try {
     provsql_check_memory();

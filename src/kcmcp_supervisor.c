@@ -80,7 +80,7 @@ static void publish_endpoint(const char *endpoint)
 {
   if (provsql_shared_state == NULL)
     return;
-  provsql_shmem_lock_exclusive();
+  provsql_shmem_lock_exclusive_wait();
   strlcpy(provsql_shared_state->kcmcp_endpoint, endpoint,
           sizeof(provsql_shared_state->kcmcp_endpoint));
   provsql_shmem_unlock();

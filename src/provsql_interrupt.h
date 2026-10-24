@@ -39,6 +39,13 @@ extern "C" {
 extern bool provsql_interrupted;
 
 /**
+ * @brief Whether a @c provsql_interrupt_scope is alive: within a ProvSQL
+ *        evaluation, where an error raised by @c longjmp would skip C++
+ *        frames.
+ */
+bool provsql_in_evaluation(void);
+
+/**
  * @brief SIGINT handler setting @c provsql_interrupted, and PG's cancel
  *        flags as PG's own @c StatementCancelHandler does.
  */

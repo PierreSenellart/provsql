@@ -287,6 +287,28 @@ bool provsql_read_all(int fd, void *dst, size_t n);
  *  calls it takes; @c false on error. */
 bool provsql_write_all(int fd, const void *src, size_t n);
 
+/**
+ * @brief Start a request that may keep the worker busy (the building of a
+ *        circuit): no cancel is pending for it yet.  Under the store lock.
+ */
+void provsql_request_start(void);
+
+/**
+ * @brief Wait, under the store lock, until the worker's reply to this
+ *        backend's request can be read.
+ *
+ * A blocked @c read() would not see a cancel, a @c statement_timeout or a
+ * terminate: the signal handlers restart it, and interrupts are held with
+ * the lock anyway.  The pipe is polled instead; on a cancel, the worker is
+ * asked to stop (@c provsql_store_cancel_requested), and the reply, which
+ * then comes soon, is still waited for: the caller reads it in full, so
+ * that the next request does not take it for its own, and only then, the
+ * lock released, gives up.
+ *
+ * @return whether the statement was cancelled or the backend terminated.
+ */
+bool provsql_wait_reply(void);
+
 /** Shared write buffer used with @c STARTWRITEM / @c ADDWRITEM / @c SENDWRITEM. */
 extern char buffer[PIPE_BUF];
 /** Current write position within @c buffer. */
@@ -349,5 +371,13 @@ void provsql_replay_spool_close(void);
  * every message.
  */
 #define ADDWRITEDB() (ADDWRITEM(&MyDatabaseId, Oid), ADDWRITEM(&MyDatabaseTableSpace, Oid))
+
+/**
+ * @brief Whether the circuit being built should be given up: in the worker,
+ *        the backend that asked for it was cancelled (see
+ *        @c provsql_wait_reply); in the single-process build, where the
+ *        backend builds it itself, its statement was.
+ */
+bool provsql_store_cancel_requested(void);
 
 #endif /* PROVSQL_COLUMN_NAME */

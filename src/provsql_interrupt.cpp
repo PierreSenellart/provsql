@@ -26,6 +26,11 @@ extern "C" {
 
 unsigned provsql_poll_count = 0;
 
+/** The scopes alive, and the statement they were opened in: a scope left
+ *  by a longjmp (an error raised within it) is not counted past it */
+static int scope_depth = 0;
+static TimestampTz scope_statement = 0;
+
 /** The resource limit the evaluation stopped at, if any: its tag, message
  *  and hint, raised by provsql_cancel_if_interrupted */
 static bool limit_hit = false;
@@ -124,13 +129,26 @@ provsql_interrupt_scope::provsql_interrupt_scope()
     baseline_statement = statement;
     baseline_rss = current_rss();
   }
+  if (statement != scope_statement) {
+    scope_statement = statement;
+    scope_depth = 0;
+  }
+  ++scope_depth;
 }
 
 provsql_interrupt_scope::~provsql_interrupt_scope()
 {
+  if (scope_depth > 0)
+    --scope_depth;
   /* The flag stays: the catch that follows reads it */
   signal(SIGINT, prev_);
   signal(SIGTERM, prev_term_);
+}
+
+bool provsql_in_evaluation(void)
+{
+  return scope_depth > 0 &&
+         scope_statement == GetCurrentStatementStartTimestamp();
 }
 
 size_t provsql_memory_used(void)

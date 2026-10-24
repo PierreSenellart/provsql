@@ -10,16 +10,28 @@
  * - @c provsql_memsize(): returns the size of the shared segment.
  * - @c provsql_shmem_request(): requests shared memory on PG ≥ 15.
  * - @c provsql_shmem_lock_exclusive() / @c provsql_shmem_lock_shared() /
- *   @c provsql_shmem_unlock(): thin wrappers around
- *   @c LWLockAcquire() / @c LWLockRelease().
+ *   @c provsql_shmem_unlock(): wrappers around the @c LWLock functions, the
+ *   wait for the lock stopped by a cancel.
  */
 #include <unistd.h>
 
 #include "postgres.h"
+#include "miscadmin.h"
+#include "pgstat.h"                  /* PG_WAIT_EXTENSION */
+#include "storage/latch.h"
 #include "storage/shmem.h"
 
 #include "provsql_shmem.h"
 #include "provsql_mmap.h"
+
+#if PG_VERSION_NUM < 120000
+/* WL_EXIT_ON_PM_DEATH appeared in PostgreSQL 12; before, a dead postmaster
+ * wakes the wait, and the lock, tried again, is what the caller waits for. */
+#define WL_EXIT_ON_PM_DEATH WL_POSTMASTER_DEATH
+#endif
+
+/* In provsql_interrupt.cpp, whose header is C++ */
+extern bool provsql_in_evaluation(void);
 
 shmem_startup_hook_type prev_shmem_startup = NULL;
 #if (PG_VERSION_NUM >= 150000)
@@ -119,6 +131,8 @@ void provsql_shmem_request(void) {}
 
 /* One backend: nothing to serialise. */
 void provsql_shmem_lock_exclusive(void) {}
+void provsql_shmem_lock_exclusive_wait(void) {}
+bool provsql_shmem_lock_exclusive_unless_cancelled(void) { return true; }
 void provsql_shmem_lock_shared(void) {}
 void provsql_shmem_unlock(void) {}
 
@@ -162,6 +176,7 @@ void provsql_shmem_startup(void)
   provsql_shared_state->pipembw=pipes_m_to_b[1];
   provsql_shared_state->kcmcp_endpoint[0]='\0';
   provsql_shared_state->worker_ready=false;
+  pg_atomic_init_u32(&provsql_shared_state->cancel_request, 0);
 }
 
 Size provsql_memsize(void)
@@ -181,14 +196,61 @@ void provsql_shmem_request(void)
   RequestNamedLWLockTranche("provsql", 1);
 }
 
+/**
+ * @brief Take the lock in @p mode, unless a cancel or a terminate arrives
+ *        first: then return @c false, without it.
+ *
+ * @c LWLockAcquire sleeps until the lock is free, deaf to interrupts.  The
+ * lock is tried instead, between waits on the latch, which a cancel sets:
+ * short ones first, as the lock is mostly held briefly.
+ */
+static bool lock_unless_cancelled(LWLockMode mode)
+{
+  long timeout = 1;
+
+  while(!LWLockConditionalAcquire(provsql_shared_state->lock, mode)) {
+    if(QueryCancelPending || ProcDiePending)
+      return false;
+    (void) WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+                     timeout, PG_WAIT_EXTENSION);
+    ResetLatch(MyLatch);
+    if(timeout < 10)
+      timeout *= 2;
+  }
+  return true;
+}
+
+/** @brief Take the lock in @p mode, a cancel stopping the wait outside a
+ *  ProvSQL evaluation (see @c provsql_shmem_lock_exclusive). */
+static void lock_cancellable(LWLockMode mode)
+{
+  if(!provsql_in_evaluation()) {
+    if(lock_unless_cancelled(mode))
+      return;
+    CHECK_FOR_INTERRUPTS();
+    /* Not raised, interrupts being held: wait as LWLockAcquire does */
+  }
+  LWLockAcquire(provsql_shared_state->lock, mode);
+}
+
 void provsql_shmem_lock_exclusive(void)
+{
+  lock_cancellable(LW_EXCLUSIVE);
+}
+
+void provsql_shmem_lock_exclusive_wait(void)
 {
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 }
 
+bool provsql_shmem_lock_exclusive_unless_cancelled(void)
+{
+  return lock_unless_cancelled(LW_EXCLUSIVE);
+}
+
 void provsql_shmem_lock_shared(void)
 {
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  lock_cancellable(LW_SHARED);
 }
 
 void provsql_shmem_unlock(void)

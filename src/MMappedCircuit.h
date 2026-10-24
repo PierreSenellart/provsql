@@ -437,7 +437,8 @@ inline unsigned long getNbGates() const {
  * @param token  UUID of the root gate.
  * @param budget Bytes the process's resident memory may grow by while the
  *               circuit is built, 0 for no limit; past it,
- *               @c CircuitBudgetExceeded is thrown.
+ *               @c CircuitBudgetExceeded is thrown.  On a cancel
+ *               (@c provsql_store_cancel_requested), @c CircuitCancelled is.
  * @return       An in-memory @c GenericCircuit containing the sub-circuit.
  */
 GenericCircuit createGenericCircuit(pg_uuid_t token,
@@ -507,6 +508,22 @@ public:
  *  place of a circuit, when building it went past the budget the request
  *  carried. */
 constexpr unsigned long PROVSQL_CIRCUIT_OVER_BUDGET = ~0UL;
+
+/**
+ * @brief Thrown by @c MMappedCircuit::createGenericCircuit when the
+ *        statement that asked for the circuit is cancelled
+ *        (@c provsql_store_cancel_requested).
+ */
+class CircuitCancelled : public std::exception {
+public:
+  const char *what() const noexcept override {
+    return "the statement was cancelled";
+  }
+};
+
+/** @brief The size the worker answers a @c 'g' / @c 'j' request with, in
+ *  place of a circuit, when the requesting statement was cancelled. */
+constexpr unsigned long PROVSQL_CIRCUIT_CANCELLED = ~0UL - 1;
 
 #ifdef PROVSQL_INPROCESS_STORE
 /**

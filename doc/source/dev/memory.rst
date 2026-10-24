@@ -125,6 +125,15 @@ and no circuit, which the backend raises as a ``memory-limit`` error.
 The worker gives the memory back (``malloc_trim``) after each such
 answer, so that one large circuit does not stay resident in it.
 
+A cancel, a ``statement_timeout`` or a terminate of the statement stops the
+loading too.  The backend waits for the answer by polling the pipe
+(``provsql_wait_reply``), not in a blocking ``read()``, which the signal
+would not interrupt; on a cancel, it sets ``cancel_request`` in shared
+memory, which the worker looks at as often as at its memory, and answers
+``PROVSQL_CIRCUIT_CANCELLED`` without a circuit.  The backend still reads
+the answer in full, since the next request would otherwise take it for its
+own, and raises the cancel once the lock is released.
+
 The worker reads the pipe one ``PIPE_BUF``-sized buffer at a time
 (:cfunc:`provsql_worker_read`) and parses messages from it, so that it
 keeps up with the backends that feed it.
@@ -147,6 +156,8 @@ The :cfunc:`provsqlSharedState` structure contains:
   pipe.
 - **pipembr / pipembw** -- file descriptors for the worker-to-backend
   pipe.
+- **cancel_request** -- set by the backend whose circuit is being
+  loaded when its statement is cancelled (see above).
 
 Lifecycle:
 
@@ -157,7 +168,15 @@ Lifecycle:
 
 Locking helpers (:cfunc:`provsql_shmem_lock_exclusive`,
 :cfunc:`provsql_shmem_lock_shared`, :cfunc:`provsql_shmem_unlock`) wrap
-the ``LWLock`` API.
+the ``LWLock`` API.  A backend can wait long for the lock, behind the
+loading of a large circuit for another, and ``LWLockAcquire`` does not
+let a cancel through: the helpers try the lock between short waits on the
+latch, which a cancel sets, and raise the cancel, except within a ProvSQL
+evaluation, where the error would jump over C++ frames.  There, the
+circuit loads take the lock with
+``provsql_shmem_lock_exclusive_unless_cancelled`` and throw.  The
+background worker, WAL replay and the KCMCP supervisor, which have no
+statement to cancel, use ``provsql_shmem_lock_exclusive_wait``.
 
 
 Mmap-Backed Data Structures
