@@ -55,9 +55,14 @@ SELECT (f).name, (f).formula
 FROM (SELECT sr_formula_rows(t, 'fr_map', 5) AS f FROM fr_sum LIMIT 4) x;
 SELECT f.name, f.formula
 FROM fr_sum, sr_formula_rows(t, 'fr_map', 5) f WHERE f.name = '#1.300';
+-- The aggregate of a subquery, taken in the same query.
+SELECT f.name, f.formula
+FROM (SELECT SUM(v) AS t FROM fr_r WHERE id <= 2) x,
+     sr_formula_rows(x.t, 'fr_map') f;
 
--- No token, no rows; max_size must be positive.
-SELECT count(*) AS null_token FROM sr_formula_rows(NULL, 'fr_map');
+-- No token, no rows; max_size must be positive; a value is not a token.
+SELECT count(*) AS null_token FROM sr_formula_rows(NULL::uuid, 'fr_map');
 SELECT * FROM sr_formula_rows(gate_one(), NULL, 0);
+SELECT * FROM sr_formula_rows(1.5, 'fr_map');
 
 DROP TABLE fr_small, fr_limit, fr_cmp, fr_sum, fr_map, fr_r, fr_s;

@@ -9,6 +9,6 @@
 SET search_path TO provsql;
 
 CREATE FUNCTION sr_formula_rows(
-  token UUID, token2value regclass = NULL, max_size INT = 50)
+  token ANYELEMENT, token2value regclass = NULL, max_size INT = 50)
   RETURNS TABLE(name TEXT, formula TEXT) AS
   'provsql', 'sr_formula_rows' LANGUAGE C PARALLEL SAFE STABLE;

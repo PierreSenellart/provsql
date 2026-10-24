@@ -133,11 +133,12 @@ when they are few enough for rows of that size; otherwise it is written
 as the comparison itself, e.g., ``[#2 > 𝟙*2]`` with the sum as ``#2``.
 The rows are computed one at a time, each reading only the part of the
 circuit it writes.  Called in the select list, so that ``LIMIT`` stops it
-early, it gives the first rows of a formula of any size:
+early, it gives the first rows of a formula of any size (:sqlfunc:`plain`
+keeps the ``LIMIT`` out of the provenance of ``total``):
 
 .. code-block:: postgresql
 
-    SELECT sr_formula_rows(t, 'rs_map') FROM total LIMIT 10;
+    SELECT sr_formula_rows(t, 'rs_map') FROM total LIMIT plain(10);
 
 In the ``FROM`` clause, PostgreSQL computes all the rows before it applies
 the ``LIMIT``.

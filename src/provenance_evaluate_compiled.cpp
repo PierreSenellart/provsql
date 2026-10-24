@@ -52,6 +52,7 @@ extern "C" {
 #include "compatibility.h"   /* TYPALIGN_CHAR fallback for PG < 13 */
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
+#include "agg_token.h"
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 PG_FUNCTION_INFO_V1(provenance_evaluate_tropical_paths);
@@ -1399,7 +1400,19 @@ Datum sr_formula_rows(PG_FUNCTION_ARGS)
     funcctx = SRF_FIRSTCALL_INIT();
     if(PG_ARGISNULL(0))
       SRF_RETURN_DONE(funcctx);
-    const pg_uuid_t token = *PG_GETARG_UUID_P(0);
+    /* The token is an ANYELEMENT, as for sr_formula, so that an aggregate
+     * of a subquery comes as its agg_token, not as its value */
+    constants_t constants = get_constants(true);
+    const Oid type = get_fn_expr_argtype(fcinfo->flinfo, 0);
+    pg_uuid_t token;
+    if(type == constants.OID_TYPE_AGG_TOKEN)
+      token = *DatumGetUUIDP(DirectFunctionCall1(
+        uuid_in, CStringGetDatum(((agg_token *) PG_GETARG_POINTER(0))->tok)));
+    else if(type == UUIDOID || type == constants.OID_TYPE_RANDOM_VARIABLE)
+      token = *PG_GETARG_UUID_P(0);
+    else
+      provsql_error("sr_formula_rows: the token must be a uuid, an agg_token "
+                    "or a random_variable, not %s", format_type_be(type));
     const Oid table = PG_ARGISNULL(1) ? InvalidOid : PG_GETARG_OID(1);
     const int32 max_size = PG_ARGISNULL(2) ? 50 : PG_GETARG_INT32(2);
     if(max_size < 1)
@@ -1416,7 +1429,6 @@ Datum sr_formula_rows(PG_FUNCTION_ARGS)
     FormulaRows *rows = nullptr;
     try {
       provsql_interrupt_scope interrupt_scope;
-      constants_t constants = get_constants(true);
       rows = new FormulaRows(constants, token, table, max_size);
     } catch(const CircuitRefusal &r) {
       provsql_cancel_if_interrupted();

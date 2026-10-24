@@ -11884,9 +11884,13 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
  * Rows are produced one at a time, each loading from the circuit store
  * only what it writes, so a formula too large for @c sr_formula can be
  * read in part: called in the select list, a @c LIMIT stops it early.
+ *
+ * @param token a provenance token, an aggregate or a random variable
+ * @param token2value mapping table from input tokens to their names
+ * @param max_size the most symbols a row writes before naming sub-formulas
  */
 CREATE FUNCTION sr_formula_rows(
-  token UUID, token2value regclass = NULL, max_size INT = 50)
+  token ANYELEMENT, token2value regclass = NULL, max_size INT = 50)
   RETURNS TABLE(name TEXT, formula TEXT) AS
   'provsql', 'sr_formula_rows' LANGUAGE C PARALLEL SAFE STABLE;
 

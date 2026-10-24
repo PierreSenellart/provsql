@@ -44,7 +44,11 @@ name|formula
 name|formula
 #1.300|(r12 ⊗ s25)*12
 (1 row)
+name|formula|provsql
+#1|r1*1+r2*2|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
 null_token
 0
 (1 row)
 ERROR:  ProvSQL: sr_formula_rows: max_size must be positive
+ERROR:  ProvSQL: sr_formula_rows: the token must be a uuid, an agg_token or a random_variable, not numeric
