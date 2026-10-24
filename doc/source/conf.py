@@ -179,7 +179,7 @@ _SQL_FUNC_MAP = {
     'banzhaf_all_vars':         '/doxygen-sql/html/group__probability.html#ga661df5e48131390dea4fb75a094e14d0',
     'expected':                 '/doxygen-sql/html/group__probability.html#ga7124b41224adc29ff5405d5ad6db277e',
     'sr_formula':               '/doxygen-sql/html/group__compiled__semirings.html#gae49f63c94b0094be6756f2f42d4caecd',
-    'sr_formula_rows':          '/doxygen-sql/html/group__compiled__semirings.html#gad6b4be624a6251750c523a338c26bf8f',
+    'sr_formula_rows':          '/doxygen-sql/html/group__compiled__semirings.html#ga10604bb3ee0b70e69bc217a11008ce66',
     'sr_boolean':               '/doxygen-sql/html/group__compiled__semirings.html#gae51f497a4bfdf9eb41b12f524c85336d',
     'nonzero':                  '/doxygen-sql/html/group__compiled__semirings.html#ga56e444f359bb6eb41c060bde058b7e95',
     'present':                  '/doxygen-sql/html/group__compiled__semirings.html#ga7f46e475d4a8a199db9a366ac1246a2f',

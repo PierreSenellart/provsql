@@ -11876,11 +11876,11 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
  *
  * The formula @c sr_formula writes, cut into rows: a sub-formula of more
  * than @p max_size symbols (each leaf, operator or constant counting for
- * one) is named (@c #2, @c #3…) and given a row of its own, where the
+ * one) is named (@c \#2, @c \#3…) and given a row of its own, where the
  * rows that use it read its name.  A sum, product or aggregate whose row
  * would still be more than four times that long is written
- * <tt>#k.1+…+#k.n (n terms)</tt>, with its own operator, and each term
- * @c #k.i has a row.  The first row, @c #1, is the formula of the token.
+ * <tt>\#k.1+…+\#k.n (n terms)</tt>, with its own operator, and each term
+ * @c \#k.i has a row.  The first row, @c \#1, is the formula of the token.
  * Rows are produced one at a time, each loading from the circuit store
  * only what it writes, so a formula too large for @c sr_formula can be
  * read in part: called in the select list, a @c LIMIT stops it early.
