@@ -1,0 +1,50 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|name|formula|same
+1|#1|r1 ⊗ r1|t
+2|#1|r2 ⊗ r2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+name|formula
+#1|r12 ⊗ [(#2 + 1) ≤ 𝟙*3]
+#2|r1*1+r2*1+r3*1+r4*1+r5*1+r6*1+r7*1+r8*1+r9*1+r10*1+r11*1
+(2 rows)
+remove_provenance
+
+(1 row)
+name|formula|same
+#1|(r1 ⊗ r2 ⊗ (𝟙 ⊖ r3)) ⊕ (r3 ⊗ (𝟙 ⊖ (r1 ⊕ r2))) ⊕ (r1 ⊗ r3 ⊗ (𝟙 ⊖ r2)) ⊕ (r2 ⊗ r3 ⊗ (𝟙 ⊖ r1)) ⊕ (r1 ⊗ r2 ⊗ r3)|t
+(1 row)
+name|formula
+#1|[#2 > 𝟙*2]
+#2|r4*4+r5*5+r6*6+r7*7+r8*8+r9*9+r10*10+r11*11+r12*12
+(2 rows)
+remove_provenance
+
+(1 row)
+nb_rows
+301
+(1 row)
+name|formula
+#1|#1.1+…+#1.300 (300 terms)
+#1.1|(r1 ⊗ s1)*1
+#1.2|(r2 ⊗ s1)*2
+#1.3|(r3 ⊗ s1)*3
+(4 rows)
+name|formula
+#1.300|(r12 ⊗ s25)*12
+(1 row)
+null_token
+0
+(1 row)
+ERROR:  ProvSQL: sr_formula_rows: max_size must be positive

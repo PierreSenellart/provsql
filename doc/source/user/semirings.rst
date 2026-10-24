@@ -111,6 +111,37 @@ prints on the circuit's nodes:
 
 This mirrors :sqlfunc:`sr_boolexpr`'s ``x<id>`` fallback.
 
+A formula can be too large to read, or to return at all: the sum of an
+aggregate over a large join has a term per pair of tuples, and a
+condition on an aggregate is written as a disjunction over its possible
+worlds.  :sqlfunc:`sr_formula_rows` writes the same formula as rows of
+bounded size.  A sub-formula of more than ``max_size`` symbols (50 by
+default) is named and given a row of its own, the first row being the
+formula of the token.  A sum or product with too many terms for one row
+is listed by the names of its terms, each with a row:
+
+.. code-block:: postgresql
+
+    CREATE TABLE total AS SELECT SUM(r.v) AS t FROM r, s;
+    SELECT f.name, f.formula FROM total, sr_formula_rows(t, 'rs_map') f;
+    -- #1   | #1.1+…+#1.300 (300 terms)
+    -- #1.1 | (r1 ⊗ s1)*1
+    -- …
+
+A condition on an aggregate is expanded into its possible worlds only
+when they are few enough for rows of that size; otherwise it is written
+as the comparison itself, e.g., ``[#2 > 𝟙*2]`` with the sum as ``#2``.
+The rows are computed one at a time, each reading only the part of the
+circuit it writes.  Called in the select list, so that ``LIMIT`` stops it
+early, it gives the first rows of a formula of any size:
+
+.. code-block:: postgresql
+
+    SELECT sr_formula_rows(t, 'rs_map') FROM total LIMIT 10;
+
+In the ``FROM`` clause, PostgreSQL computes all the rows before it applies
+the ``LIMIT``.
+
 Counting Semiring (m-semiring)
 -------------------------------
 

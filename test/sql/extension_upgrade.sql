@@ -305,6 +305,9 @@ SET provsql.active = on;
 SELECT dangling_indices, unreferenced, bad_wires, bad_extra FROM check_store();
 DROP TABLE upgrade_tx;
 
+-- 1.14.0 surface check: sr_formula_rows, the formula as rows, exists.
+SELECT name, formula FROM sr_formula_rows(gate_one());
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_untracked,
            upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,

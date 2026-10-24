@@ -137,3 +137,6 @@ t
 dangling_indices|unreferenced|bad_wires|bad_extra
 0|0|0|0
 (1 row)
+name|formula
+#1|𝟙
+(1 row)

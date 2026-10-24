@@ -11871,6 +11871,25 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
+/**
+ * @brief The formula of a token as rows of bounded size
+ *
+ * The formula @c sr_formula writes, cut into rows: a sub-formula of more
+ * than @p max_size symbols (each leaf, operator or constant counting for
+ * one) is named (@c #2, @c #3…) and given a row of its own, where the
+ * rows that use it read its name.  A sum, product or aggregate whose row
+ * would still be more than four times that long is written
+ * <tt>#k.1+…+#k.n (n terms)</tt>, with its own operator, and each term
+ * @c #k.i has a row.  The first row, @c #1, is the formula of the token.
+ * Rows are produced one at a time, each loading from the circuit store
+ * only what it writes, so a formula too large for @c sr_formula can be
+ * read in part: called in the select list, a @c LIMIT stops it early.
+ */
+CREATE FUNCTION sr_formula_rows(
+  token UUID, token2value regclass = NULL, max_size INT = 50)
+  RETURNS TABLE(name TEXT, formula TEXT) AS
+  'provsql', 'sr_formula_rows' LANGUAGE C PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance over the counting semiring (ℕ) */
 CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)
   RETURNS INT AS
