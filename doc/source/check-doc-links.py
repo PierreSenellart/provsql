@@ -177,6 +177,8 @@ INTERNAL_FUNCTIONS = {
     'reset_constants_cache', 'get_nb_gates',
     # Internal circuit inspection
     'sub_circuit_for_where', 'sub_circuit_with_desc',
+    # Row type returned by sub_circuit_with_desc
+    'gate_with_desc',
     # Internal gate manipulation (set_* are dangerous for users)
     # Internal plumbing for the safe-query optimisation: callers go
     # through add_provenance / remove_provenance / repair_key and the
