@@ -636,6 +636,25 @@
     ta.style.height = Math.max(ta.scrollHeight, 34) + 'px';
   }
 
+  // Long lines wrap, so a textarea's fitted height depends on its width:
+  // refit when the width changes (window resize, zoom, a first paint at a
+  // provisional width). Height changes are ignored, autosize makes them.
+  const widthObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver((entries) => {
+        for (const e of entries) {
+          const w = e.contentRect.width;
+          if (w > 0 && w !== e.target._fittedWidth) {
+            e.target._fittedWidth = w;
+            autosize(e.target);
+          }
+        }
+      })
+    : null;
+  function unobserveCellDom(div) {
+    if (!widthObserver) return;
+    div.querySelectorAll('textarea').forEach((ta) => widthObserver.unobserve(ta));
+  }
+
   function buildCellDom(cell) {
     const div = document.createElement('div');
     div.className = `nb-cell nb-cell--${cell.type}`;
@@ -769,6 +788,7 @@
       div.querySelector('.nb-cell__run').addEventListener('click', () => runCell(cell));
       // Initial paint (after insertion, so scrollHeight is real).
       requestAnimationFrame(refresh);
+      if (widthObserver) widthObserver.observe(ta);
     } else if (cell.type === 'markdown') {
       const view = div.querySelector('.nb-cell__md');
       const ta = div.querySelector('.nb-cell__mdta');
@@ -792,6 +812,7 @@
       view.addEventListener('dblclick', startEdit);
       ta.addEventListener('blur', endEdit);
       ta.addEventListener('input', () => autosize(ta));
+      if (widthObserver) widthObserver.observe(ta);
       ta.addEventListener('keydown', (e) => {
         if (((e.ctrlKey || e.metaKey) || e.shiftKey) && e.key === 'Enter') {
           e.preventDefault();
@@ -939,6 +960,7 @@
         if ((cell.source || '').trim()
             && !window.confirm('Delete this cell?')) return;
         cells.splice(idx, 1);
+        unobserveCellDom(div);
         div.remove();
         if (!cells.length) appendCell('sql');
       }
@@ -1885,7 +1907,8 @@
     if (idx < 0) return;
     lastDeleted = { cell, index: idx };
     cells.splice(idx, 1);
-    cellEl(cell)?.remove();
+    const div = cellEl(cell);
+    if (div) { unobserveCellDom(div); div.remove(); }
     if (!cells.length) appendCell('sql');
     selectCell(cells[Math.min(idx, cells.length - 1)]);
     scheduleAutosave();
@@ -2335,6 +2358,7 @@
 
   function renderAll() {
     const root = cellsEl();
+    if (widthObserver) widthObserver.disconnect();
     root.innerHTML = '';
     mdRenders = [];  // collect this paint's async markdown renders (for scroll restore)
     for (const c of cells) root.appendChild(buildCellDom(c));
