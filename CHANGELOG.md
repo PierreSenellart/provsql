@@ -5,6 +5,90 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.13.1] - 2026-11-01
+
+ProvSQL 1.13.1 is a bug-fix release for **bounded and interruptible
+evaluation**. A provenance circuit loaded for evaluation could exceed
+`provsql.max_memory` before the limit was checked, a signal arriving
+during an exchange with the circuit-store worker could leave a backend
+waiting forever, and a cancel or `statement_timeout` did not reach a
+backend waiting on that worker. All three are fixed, circuits load
+faster and in less memory, and a new function, `sr_formula_rows`, gives
+the formula of a token whose `sr_formula` is too large to be produced
+as a single string. It also fixes two outer-join and `HAVING` shapes
+that were rejected.
+
+###### Memory limit and cancellation
+
+- **`provsql.max_memory` is enforced while the circuit is read.** The
+  store worker checked the budget once per gate, so a single gate with
+  a very large number of wires (an aggregate over millions of rows, for
+  instance) could be read in full before the check. It now checks per
+  wire, and hashes gate names incrementally instead of building the
+  whole name of a large gate first. The query fails with SQLSTATE
+  `54000` instead of the backend being killed by the operating system.
+- **A signal no longer breaks an exchange with the store worker.** A
+  read or write on the pipe between a backend and the worker that was
+  interrupted by a signal was not retried: a circuit could be sent only
+  in part, leaving the backend waiting for an answer that would never
+  come, or a message could be left half-read. Both directions now retry
+  until the message is complete.
+- **Cancel and `statement_timeout` stop a backend waiting on the
+  store.** A backend waiting for the worker's answer, or for the lock
+  that serializes access to it, now notices a cancel request or a
+  statement timeout and raises the usual error.
+
+###### Faster circuit loading
+
+- Circuits are loaded with a heap-based work list, one store lookup per
+  gate and one hash per wire, and gate UUIDs are kept as 16 bytes
+  instead of strings, which lowers both the time and the memory of
+  every evaluation over a large circuit.
+
+###### `sr_formula_rows`
+
+- **`sr_formula_rows(token, mapping, max_size)`** returns the formula of
+  `sr_formula` as a set of `(name, formula)` rows of bounded size. Row
+  `#1` is the formula of the token; a sub-formula of more than
+  `max_size` symbols (50 by default) is named `#2`, `#3`… and given a
+  row of its own, and a sum or product with many terms is written with
+  an ellipsis and its number of terms, its terms becoming rows
+  `#k.1`, `#k.2`… Rows are produced one at a time, each reading only
+  the part of the circuit it needs, so `LIMIT`, a cursor, or paging
+  bound the work. Like `sr_formula`, it accepts any token type, so the
+  aggregate of a subquery can be passed directly.
+
+###### Query rewriting
+
+- **Outer joins over an input that holds an outer join.** When the
+  input of an outer join contains an outer join itself, and an
+  aggregate over it, the arms of the lowering read it from a shared
+  CTE; a comparison on that aggregate is now recognized there, and an
+  unmatched row yields one null-padded row, not one per value the
+  aggregate takes.
+- **A join beside an outer join that reads a `WITH` entry** of the
+  statement is now rewritten correctly when it is moved into a
+  subquery.
+- **`HAVING` added to any condition.** When the rewriting adds a
+  condition to an existing `HAVING`, it now wraps any Boolean condition
+  (a function call, a `CASE`…), not only comparisons and Boolean
+  operators.
+- The set-operation column loop is bounded by an `AttrNumber`, and the
+  safe-query column table is sized in `Size`.
+
+###### Platforms
+
+- Compiler and linker warnings of the macOS and PostgreSQL 18 builds
+  are fixed. PostgreSQL 18 is now tested on arm64 Linux in CI, and the
+  documentation lists the tested platforms (native Windows is not
+  supported; WSL is).
+
+###### Upgrading
+
+`ALTER EXTENSION provsql UPDATE` from 1.13.0 only creates
+`sr_formula_rows`. No gate type, type, operator, cast, or aggregate
+changes, and the circuit store format is unchanged.
+
 ## [1.13.0] - 2026-10-17
 
 ProvSQL 1.13.0 is a hardening and performance release. Over two months,
