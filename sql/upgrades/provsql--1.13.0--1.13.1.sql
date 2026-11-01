@@ -1,5 +1,5 @@
 -- ----------------------------------------------------------------------
--- provsql 1.13.0 -> 1.14.0
+-- provsql 1.13.0 -> 1.13.1
 --
 -- sr_formula_rows: the formula of a token as rows of bounded size, the
 -- large sub-formulas named and given rows of their own, produced one at
