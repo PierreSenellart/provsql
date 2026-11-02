@@ -379,12 +379,18 @@ def _md_safe_math(s: str) -> str:
     (GFM) and *then* runs KaTeX on the result, so marked first strips a
     backslash before ASCII punctuation -- turning ``\\#`` into ``#`` (a bare
     TeX parameter char KaTeX then renders as a red error), ``\\{`` into
-    ``{``, ``\\\\`` into ``\\`` … Doubling the backslash before any
-    punctuation char makes GFM hand KaTeX the original command. Backslash +
-    letter (``\\Pr``, ``\\text``) is not GFM-escaped, so it is left alone."""
+    ``{``, ``\\\\`` into ``\\`` … -- and it still parses emphasis there,
+    so the two bare ``_`` of ``x_{i} … y_{j}`` become ``<em>``, splitting
+    the ``$$…$$`` across DOM nodes so KaTeX no longer finds the delimiters.
+    Doubling the backslash before any punctuation char, and escaping the
+    bare emphasis / strikethrough markers ``_ * ~``, makes GFM hand KaTeX
+    the original source. Backslash + letter (``\\Pr``, ``\\text``) is not
+    GFM-escaped, so it is left alone."""
     # GFM un-escapes a backslash before any ASCII punctuation char; that set
     # includes ``_``, which a ``\\w``-based class would wrongly exempt.
-    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\\\\\1", s)
+    return re.sub(r"\\([!-/:-@\[-`{-~])|([_*~])",
+                  lambda m: ("\\\\" + m.group(1)) if m.group(1)
+                  else "\\" + m.group(2), s)
 
 
 def rst_prose_to_markdown_cells(prose_segments: list[str],
