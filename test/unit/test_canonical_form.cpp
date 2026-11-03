@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <functional>
@@ -316,6 +317,112 @@ static void testDeepChain() {
   assert(maximalIslandRoots(c, prev).size() == 1);
 }
 
+static GateSet subByDefinition(const BooleanCircuit &c, gate_t root,
+                               const GateSet &nodes, gate_t g) {
+  GateSet avoid;
+  if(g != root) {
+    std::vector<gate_t> stack{root};
+    avoid.insert(root);
+    while(!stack.empty()) {
+      gate_t x = stack.back();
+      stack.pop_back();
+      for(gate_t u : c.getWires(x))
+        if(u != g && avoid.insert(u).second)
+          stack.push_back(u);
+    }
+  }
+  GateSet sub;
+  for(gate_t u : nodes)
+    if(!avoid.count(u))
+      sub.insert(u);
+  return sub;
+}
+
+static std::vector<gate_t> frontierByDefinition(const BooleanCircuit &c,
+                                                gate_t root) {
+  const GateSet nodes = reachableNodes(c, root);
+  std::vector<gate_t> roots;
+  std::vector<GateSet> subs;
+  for(gate_t g : nodes) {
+    const BooleanGate t = c.getGateType(g);
+    if(g == root || c.getWires(g).empty()
+       || (t != BooleanGate::AND && t != BooleanGate::OR
+           && t != BooleanGate::NOT))
+      continue;
+    GateSet sub = subByDefinition(c, root, nodes, g);
+    bool island = true;
+    for(gate_t w : sub)
+      for(gate_t u : c.getWires(w))
+        if(!sub.count(u))
+          island = false;
+    if(island) {
+      roots.push_back(g);
+      subs.push_back(std::move(sub));
+    }
+  }
+  std::vector<gate_t> fstar;
+  for(size_t i = 0; i < roots.size(); ++i) {
+    bool maximal = true;
+    for(size_t j = 0; j < roots.size(); ++j)
+      if(j != i && subs[j].count(roots[i]))
+        maximal = false;
+    if(maximal)
+      fstar.push_back(roots[i]);
+  }
+  std::sort(fstar.begin(), fstar.end());
+  return fstar;
+}
+
+static void testFrontierAgainstDefinitions() {
+  std::mt19937 rng(20261103);
+  size_t nonempty = 0;
+  const size_t trials = 4000;
+  for(size_t trial = 0; trial < trials; ++trial) {
+    BooleanCircuit c;
+    std::vector<gate_t> made;
+    const int inputs = 1 + static_cast<int>(rng() % 5);
+    for(int i = 0; i < inputs; ++i)
+      made.push_back(c.setGate("x" + std::to_string(i), BooleanGate::IN, 0.5));
+    const int gates = 1 + static_cast<int>(rng() % 25);
+    for(int i = 0; i < gates; ++i) {
+      const unsigned kind = rng() % 3;
+      const BooleanGate t = kind == 0 ? BooleanGate::AND
+                            : kind == 1 ? BooleanGate::OR : BooleanGate::NOT;
+      gate_t g = c.setGate(t);
+      const int arity = t == BooleanGate::NOT ? 1 : 1 + static_cast<int>(rng() % 4);
+      const size_t window = rng() % 2 == 0 ? made.size()
+                            : std::min<size_t>(made.size(), 3);
+      for(int a = 0; a < arity; ++a)
+        c.addWire(g, made[made.size() - 1 - rng() % window]);
+      made.push_back(g);
+    }
+    const gate_t root = made.back();
+    std::vector<gate_t> got = maximalIslandRoots(c, root);
+    std::sort(got.begin(), got.end());
+    const std::vector<gate_t> want = frontierByDefinition(c, root);
+    assert(got == want);
+    if(!want.empty())
+      ++nonempty;
+  }
+  assert(nonempty * 5 > trials);
+}
+
+static void testFrontierChildrenOnlyExample() {
+  BooleanCircuit c;
+  gate_t x = c.setGate("x", BooleanGate::IN, 0.5);
+  gate_t b = c.setGate(BooleanGate::NOT);
+  c.addWire(b, x);
+  gate_t v = c.setGate(BooleanGate::NOT);
+  c.addWire(v, b);
+  gate_t w = c.setGate(BooleanGate::NOT);
+  c.addWire(w, x);
+  gate_t r = c.setGate(BooleanGate::OR);
+  c.addWire(r, v);
+  c.addWire(r, w);
+  assert(maximalIslandRoots(c, r).empty());
+  assert(frontierByDefinition(c, r).empty());
+}
+
 void provsql_tdkc_poll() {}
 
 static void testMoveDoesNotCopy() {
@@ -583,6 +690,8 @@ int main() {
   testCacheEndToEnd();
   testResidualMatchesCircuit();
   testDeepChain();
+  testFrontierAgainstDefinitions();
+  testFrontierChildrenOnlyExample();
   std::cout << "all tests passed" << std::endl;
   return 0;
 }

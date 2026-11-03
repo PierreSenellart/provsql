@@ -239,107 +239,88 @@ std::vector<gate_t> maximalIslandRoots(const BooleanCircuit &c, gate_t root)
   if(n <= 1)
     return {};
 
-  std::vector<std::vector<idx_t> > consumers(n);
-  std::vector<idx_t> indeg(n, 0);
-  for(idx_t i = 0; i < n; ++i)
-    for(gate_t u : c.getWires(nodes[i])) {
-      idx_t j = index.at(u);
-      consumers[j].push_back(i);
-      ++indeg[j];
-    }
-
-  std::vector<idx_t> topo;
-  topo.reserve(n);
-  topo.push_back(root_idx);
-  for(size_t k = 0; k < topo.size(); ++k) {
-    idx_t v = topo[k];
-    for(gate_t u : c.getWires(nodes[v])) {
-      idx_t j = index.at(u);
-      if(--indeg[j] == 0)
-        topo.push_back(j);
-    }
+  std::vector<std::vector<idx_t> > kids(n);
+  for(idx_t i = 0; i < n; ++i) {
+    const auto &wires = c.getWires(nodes[i]);
+    kids[i].reserve(wires.size());
+    for(gate_t u : wires)
+      kids[i].push_back(index.at(u));
   }
-  assert(topo.size() == n);
 
-  int levels = 1;
-  while((idx_t(1) << levels) < n)
-    ++levels;
-  std::vector<std::vector<idx_t> > up(levels,
-                                      std::vector<idx_t>(n, root_idx));
-  std::vector<idx_t> idom(n, root_idx);
-  std::vector<uint64_t> depth(n, 0);
+  std::vector<uint64_t> start(n, 0), end(n, 0), last(n, 0);
+  std::vector<bool> marked(n, false);
+  std::vector<idx_t> finished;
+  finished.reserve(n);
+  uint64_t t = 0;
 
-  auto nca = [&](idx_t a, idx_t b) {
-    if(depth[a] < depth[b])
-      std::swap(a, b);
-    uint64_t diff = depth[a] - depth[b];
-    for(int k = 0; diff != 0; ++k, diff >>= 1)
-      if(diff & 1)
-        a = up[k][a];
-    if(a == b)
-      return a;
-    for(int k = levels - 1; k >= 0; --k)
-      if(up[k][a] != up[k][b]) {
-        a = up[k][a];
-        b = up[k][b];
+  struct Frame {
+    idx_t v;
+    size_t next_child;
+  };
+  std::vector<Frame> stack;
+
+  auto visit = [&](idx_t x) {
+    ++t;
+    last[x] = t;
+    if(!marked[x]) {
+      marked[x] = true;
+      start[x] = t;
+      stack.push_back(Frame{x, 0});
+    }
+  };
+
+  visit(root_idx);
+  while(!stack.empty()) {
+    const idx_t v = stack.back().v;
+    if(stack.back().next_child < kids[v].size()) {
+      const idx_t u = kids[v][stack.back().next_child++];
+      visit(u);
+    } else {
+      stack.pop_back();
+      if(!kids[v].empty()) {
+        ++t;
+        last[v] = t;
       }
-    return up[0][a];
-  };
-
-  for(size_t k = 1; k < topo.size(); ++k) {
-    idx_t v = topo[k];
-    bool first = true;
-    idx_t d = root_idx;
-    for(idx_t p : consumers[v]) {
-      d = first ? p : nca(d, p);
-      first = false;
+      end[v] = t;
+      finished.push_back(v);
     }
-    idom[v] = d;
-    depth[v] = depth[d] + 1;
-    up[0][v] = d;
-    for(int l = 1; l < levels; ++l)
-      up[l][v] = up[l-1][up[l-1][v]];
   }
+  assert(finished.size() == n);
 
-  const uint64_t NO_REQ = std::numeric_limits<uint64_t>::max();
-  std::vector<uint64_t> req(n, NO_REQ);
-  for(idx_t w = 0; w < n; ++w)
-    for(gate_t cu : c.getWires(nodes[w])) {
-      idx_t u = index.at(cu);
-      uint64_t limit = depth[nca(u, w)];
-      if(limit < req[w])
-        req[w] = limit;
+  const uint64_t NO_DATE = std::numeric_limits<uint64_t>::max();
+  std::vector<uint64_t> lo(n, NO_DATE), hi(n, 0);
+  for(idx_t v : finished)
+    for(idx_t u : kids[v]) {
+      lo[v] = std::min(lo[v], std::min(start[u], lo[u]));
+      hi[v] = std::max(hi[v], std::max(last[u], hi[u]));
     }
 
-  std::vector<idx_t> by_depth(topo.rbegin(), topo.rend());
-  std::vector<bool> failed(n, false);
-  for(idx_t v : by_depth) {
-    if(req[v] == NO_REQ || req[v] >= depth[v])
+  std::vector<bool> in_r(n, false);
+  for(idx_t v = 0; v < n; ++v) {
+    if(v == root_idx || kids[v].empty())
       continue;
-    failed[v] = true;
-    idx_t p = idom[v];
-    if(req[v] < req[p])
-      req[p] = req[v];
+    const auto type = c.getGateType(nodes[v]);
+    if(type != BooleanGate::AND && type != BooleanGate::OR &&
+       type != BooleanGate::NOT)
+      continue;
+    in_r[v] = start[v] < lo[v] && hi[v] < end[v];
   }
 
-  auto isIslandRoot = [&](idx_t v) {
-    if(v == root_idx || failed[v])
-      return false;
-    const auto t = c.getGateType(nodes[v]);
-    if(t != BooleanGate::AND && t != BooleanGate::OR &&
-       t != BooleanGate::NOT)
-      return false;
-    return !c.getWires(nodes[v]).empty();
-  };
-
-  std::vector<bool> covered(n, false);
+  std::vector<bool> reached(n, false);
+  std::vector<idx_t> queue{root_idx};
+  reached[root_idx] = true;
   std::vector<gate_t> result;
-  for(size_t k = 1; k < topo.size(); ++k) {
-    idx_t v = topo[k];
-    idx_t p = idom[v];
-    covered[v] = covered[p] || (p != root_idx && isIslandRoot(p));
-    if(!covered[v] && isIslandRoot(v))
-      result.push_back(nodes[v]);
+  for(size_t head = 0; head < queue.size(); ++head) {
+    const idx_t x = queue[head];
+    if(in_r[x]) {
+      result.push_back(nodes[x]);
+      continue;
+    }
+    for(idx_t u : kids[x])
+      if(!reached[u]) {
+        reached[u] = true;
+        queue.push_back(u);
+      }
   }
   return result;
 }
