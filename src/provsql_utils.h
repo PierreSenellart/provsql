@@ -647,7 +647,7 @@ extern int provsql_mobius_max_cnf;
  * code paths). */
 extern bool provsql_simplify_on_load;
 
-extern bool provsql_canonical_cache;
+extern bool provsql_prob_cache;
 
 /** @brief Run the hybrid evaluator (simplifier + per-cmp island
  *         decomposer) before dispatching a probability_evaluate query.

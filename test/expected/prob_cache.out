@@ -1,5 +1,5 @@
 \set ECHO none
-canonical_cache_reset
+prob_cache_reset
 
 (1 row)
 remove_provenance
@@ -76,7 +76,7 @@ p_pair
 stats_after_pair
 {"hits": 7, "misses": 3, "entries": 3, "inserts": 3, "evictions": 0, "rejections": 0}
 (1 row)
-canonical_cache_reset
+prob_cache_reset
 
 (1 row)
 p_berlin_uncached
@@ -85,6 +85,6 @@ p_berlin_uncached
 stats_cache_off
 {"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
 (1 row)
-canonical_cache_reset
+prob_cache_reset
 
 (1 row)

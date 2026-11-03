@@ -136,7 +136,7 @@ bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a gua
 int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route: it declines (falling through to joint-width / the ladder) once its compile has built more than this many gates, bounding the \f$O(|D|^k)\f$ blow-up of a high-level safe query on large data; @c provsql.mobius_max_gates GUC
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
-bool provsql_canonical_cache = true;
+bool provsql_prob_cache = true;
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
@@ -38978,7 +38978,7 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.canonical_cache",
+  DefineCustomBoolVariable("provsql.prob_cache",
                            "Cache compiled circuit representations keyed "
                            "by canonical form.",
                            "When on (default), the d-DNNF-producing "
@@ -38993,7 +38993,7 @@ void _PG_init(void) {
                            "re-instantiated instead of recompiling. Set "
                            "off to force a fresh compilation on every "
                            "call (e.g. when benchmarking compilers).",
-                           &provsql_canonical_cache,
+                           &provsql_prob_cache,
                            true,
                            PGC_USERSET,
                            0,

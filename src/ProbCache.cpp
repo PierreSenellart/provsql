@@ -1,4 +1,4 @@
-#include "CanonicalCache.h"
+#include "ProbCache.h"
 
 #include <cassert>
 
@@ -6,10 +6,10 @@ namespace provsql {
 
 namespace {
 
-constexpr size_t MAX_CANONICAL_CACHE_SIZE = 1536u << 20;
-constexpr size_t MAX_CANONICAL_ENTRY_SIZE = MAX_CANONICAL_CACHE_SIZE / 4;
+constexpr size_t MAX_PROB_CACHE_SIZE = 1536u << 20;
+constexpr size_t MAX_PROB_CACHE_ENTRY_SIZE = MAX_PROB_CACHE_SIZE / 4;
 
-size_t estimateEntryBytes(const dDNNF &dd, const CanonicalCache::Entry &e)
+size_t estimateEntryBytes(const dDNNF &dd, const ProbCache::Entry &e)
 {
   size_t wires = 0, uuid_bytes = 0;
   for(gate_t g{0}; g < dd.getNbGates(); ++g) {
@@ -29,7 +29,7 @@ std::string islandLeafUuid(size_t i)
   return "provsql:island:" + std::to_string(i);
 }
 
-double instantiateAndEvaluate(const CanonicalCache::Entry &e,
+double instantiateAndEvaluate(const ProbCache::Entry &e,
                               const std::vector<double> &leaf_probs)
 {
   assert(leaf_probs.size() == e.leaf_gate.size());
@@ -41,10 +41,10 @@ double instantiateAndEvaluate(const CanonicalCache::Entry &e,
 }
 
 void tryCacheCompiled(
-  CanonicalCache &cache, const CanonicalForm &key, dDNNF &dd,
+  ProbCache &cache, const CanonicalForm &key, dDNNF &dd,
   const std::function<std::string(const CanonicalLeaf &)> &leaf_uuid)
 {
-  CanonicalCache::Entry e;
+  ProbCache::Entry e;
   e.form = key.form;
   e.leaf_gate.assign(key.leaves.size(), gate_t{0});
   e.leaf_present.assign(key.leaves.size(), 0);
@@ -119,13 +119,13 @@ gate_t materialiseComponent(
 
 }
 
-CanonicalCache &CanonicalCache::instance()
+ProbCache &ProbCache::instance()
 {
-  static CanonicalCache cache;
+  static ProbCache cache;
   return cache;
 }
 
-const CanonicalCache::Entry *CanonicalCache::find(const CanonicalForm &key)
+const ProbCache::Entry *ProbCache::find(const CanonicalForm &key)
 {
   auto it = map_.find(key.form);
   if(it == map_.end()) {
@@ -137,15 +137,15 @@ const CanonicalCache::Entry *CanonicalCache::find(const CanonicalForm &key)
   return &*it->second;
 }
 
-bool CanonicalCache::admits(size_t bytes)
+bool ProbCache::admits(size_t bytes)
 {
-  if(bytes <= MAX_CANONICAL_ENTRY_SIZE)
+  if(bytes <= MAX_PROB_CACHE_ENTRY_SIZE)
     return true;
   ++stats_.rejections;
   return false;
 }
 
-bool CanonicalCache::insert(const CanonicalForm &key, Entry entry)
+bool ProbCache::insert(const CanonicalForm &key, Entry entry)
 {
   auto it = map_.find(key.form);
   if(it != map_.end()) {
@@ -156,7 +156,7 @@ bool CanonicalCache::insert(const CanonicalForm &key, Entry entry)
   lru_.push_front(std::move(entry));
   map_[key.form] = lru_.begin();
   ++stats_.inserts;
-  while(bytes_ > MAX_CANONICAL_CACHE_SIZE && lru_.size() > 1) {
+  while(bytes_ > MAX_PROB_CACHE_SIZE && lru_.size() > 1) {
     bytes_ -= lru_.back().bytes;
     map_.erase(lru_.back().form);
     lru_.pop_back();
@@ -165,23 +165,23 @@ bool CanonicalCache::insert(const CanonicalForm &key, Entry entry)
   return true;
 }
 
-void CanonicalCache::reset()
+void ProbCache::reset()
 {
   lru_.clear();
   map_.clear();
   bytes_ = 0;
-  stats_ = CanonicalCacheStats{};
+  stats_ = ProbCacheStats{};
 }
 
-CanonicalCacheStats CanonicalCache::stats() const
+ProbCacheStats ProbCache::stats() const
 {
-  CanonicalCacheStats s = stats_;
+  ProbCacheStats s = stats_;
   s.entries = lru_.size();
   s.bytes = bytes_;
   return s;
 }
 
-bool canonicalCacheEligible(const BooleanCircuit &c, gate_t root)
+bool probCacheEligible(const BooleanCircuit &c, gate_t root)
 {
   for(gate_t g : reachableNodes(c, root)) {
     switch(c.getGateType(g)) {
@@ -203,10 +203,10 @@ bool canonicalCacheEligible(const BooleanCircuit &c, gate_t root)
 namespace {
 
 double cachedComponent(const BooleanCircuit &c, gate_t root,
-                       const CanonicalCompileFn &compile,
+                       const ProbCacheCompileFn &compile,
                        bool *ran_compiler)
 {
-  CanonicalCache &cache = CanonicalCache::instance();
+  ProbCache &cache = ProbCache::instance();
   const IslandKey key = computeIslandKey(c, root);
 
   std::unordered_map<gate_t, size_t, hash_gate_t> island_index;
@@ -273,9 +273,9 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
 
 }
 
-double canonicalCachedProbability(const BooleanCircuit &c, gate_t root,
-                                  const CanonicalCompileFn &compile,
-                                  bool *ran_compiler)
+double probCachedProbability(const BooleanCircuit &c, gate_t root,
+                             const ProbCacheCompileFn &compile,
+                             bool *ran_compiler)
 {
   if(ran_compiler)
     *ran_compiler = false;

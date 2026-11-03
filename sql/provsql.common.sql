@@ -11573,13 +11573,13 @@ CREATE OR REPLACE FUNCTION circuit_island_key(token UUID)
   RETURNS TEXT AS
   'provsql','circuit_island_key' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION canonical_cache_stats()
+CREATE OR REPLACE FUNCTION prob_cache_stats()
   RETURNS jsonb AS
-  'provsql','canonical_cache_stats' LANGUAGE C;
+  'provsql','prob_cache_stats' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION canonical_cache_reset()
+CREATE OR REPLACE FUNCTION prob_cache_reset()
   RETURNS void AS
-  'provsql','canonical_cache_reset' LANGUAGE C;
+  'provsql','prob_cache_reset' LANGUAGE C;
 
 /**
  * @brief Return the DIMACS CNF (Tseytin transformation) of the provenance circuit

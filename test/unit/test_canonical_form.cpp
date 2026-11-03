@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "CircuitCanonicalForm.h"
-#include "CanonicalCache.h"
+#include "ProbCache.h"
 #include "TreeDecomposition.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
@@ -182,24 +182,24 @@ static void testCacheEndToEnd() {
     return pa * (pb + pc - pb * pc);
   };
 
-  CanonicalCache::instance().reset();
+  ProbCache::instance().reset();
 
   gate_t r1;
   BooleanCircuit c1 = build("t1_", 0.5, 0.4, 0.3, r1);
-  assert(canonicalCacheEligible(c1, r1));
+  assert(probCacheEligible(c1, r1));
   bool compiled1 = false;
-  double p1 = canonicalCachedProbability(c1, r1, compile, &compiled1);
+  double p1 = probCachedProbability(c1, r1, compile, &compiled1);
   assert(compiled1);
   assert(std::fabs(p1 - expected(0.5, 0.4, 0.3)) < 1e-12);
 
   gate_t r2;
   BooleanCircuit c2 = build("t2_", 0.9, 0.2, 0.7, r2);
   bool compiled2 = true;
-  double p2 = canonicalCachedProbability(c2, r2, compile, &compiled2);
+  double p2 = probCachedProbability(c2, r2, compile, &compiled2);
   assert(!compiled2);
   assert(std::fabs(p2 - expected(0.9, 0.2, 0.7)) < 1e-12);
 
-  auto st = CanonicalCache::instance().stats();
+  auto st = ProbCache::instance().stats();
   assert(st.hits > 0);
   assert(st.inserts > 0);
 
@@ -214,7 +214,7 @@ static void testCacheEndToEnd() {
   gate_t o3 = c3.setGate(BooleanGate::OR);
   c3.addWire(o3, g3); c3.addWire(o3, n3);
   bool compiled3 = false;
-  double p3 = canonicalCachedProbability(c3, o3, compile, &compiled3);
+  double p3 = probCachedProbability(c3, o3, compile, &compiled3);
   assert(std::fabs(p3 - (1 - (1 - 0.125) * 0.5)) < 1e-12);
 
   BooleanCircuit c4;
@@ -228,7 +228,7 @@ static void testCacheEndToEnd() {
   gate_t o4 = c4.setGate(BooleanGate::OR);
   c4.addWire(o4, g4); c4.addWire(o4, n4);
   bool compiled4 = true;
-  double p4 = canonicalCachedProbability(c4, o4, compile, &compiled4);
+  double p4 = probCachedProbability(c4, o4, compile, &compiled4);
   assert(!compiled4);
   assert(std::fabs(p4 - (1 - (1 - 0.48) * (1 - 0.9))) < 1e-12);
 }
@@ -264,13 +264,13 @@ static void testResidualMatchesCircuit() {
     return c;
   };
 
-  CanonicalCache::instance().reset();
+  ProbCache::instance().reset();
   gate_t r1;
   BooleanCircuit c1 = buildOr(0.3, 0.6, r1);
   IslandKey k1 = computeIslandKey(c1, r1);
   assert(k1.islands.empty());
   assert(k1.residual.form == "(OR V V)");
-  double p1 = canonicalCachedProbability(c1, r1, compile);
+  double p1 = probCachedProbability(c1, r1, compile);
   assert(std::fabs(p1 - (1 - 0.7 * 0.4)) < 1e-12);
 
   gate_t r2;
@@ -278,23 +278,23 @@ static void testResidualMatchesCircuit() {
   IslandKey k2 = computeIslandKey(c2, r2);
   assert(k2.islands.size() == 2);
   assert(k2.residual.form == "(OR V V)");
-  CanonicalCacheStats before = CanonicalCache::instance().stats();
-  double p2 = canonicalCachedProbability(c2, r2, compile);
-  CanonicalCacheStats after = CanonicalCache::instance().stats();
+  ProbCacheStats before = ProbCache::instance().stats();
+  double p2 = probCachedProbability(c2, r2, compile);
+  ProbCacheStats after = ProbCache::instance().stats();
   assert(after.inserts == before.inserts + 1);
   assert(after.hits == before.hits + 2);
   assert(std::fabs(p2 - (1 - (1 - 0.2) * (1 - 0.18))) < 1e-12);
 
-  CanonicalCache::instance().reset();
+  ProbCache::instance().reset();
   gate_t r3;
   BooleanCircuit c3 = buildOrOfAnds(0.7, 0.1, 0.3, 0.8, r3);
-  double p3 = canonicalCachedProbability(c3, r3, compile);
+  double p3 = probCachedProbability(c3, r3, compile);
   assert(std::fabs(p3 - (1 - (1 - 0.07) * (1 - 0.24))) < 1e-12);
 
   gate_t r4;
   BooleanCircuit c4 = buildOr(0.25, 0.45, r4);
   bool compiled4 = true;
-  double p4 = canonicalCachedProbability(c4, r4, compile, &compiled4);
+  double p4 = probCachedProbability(c4, r4, compile, &compiled4);
   assert(!compiled4);
   assert(std::fabs(p4 - (1 - 0.75 * 0.55)) < 1e-12);
 }
@@ -327,21 +327,21 @@ static void testMoveDoesNotCopy() {
   assert(target.getNbGates() == 3);
   assert(source.getNbGates() == 0);
 
-  CanonicalCache::Entry first;
+  ProbCache::Entry first;
   first.dd = std::move(target);
-  CanonicalCache::Entry second = std::move(first);
+  ProbCache::Entry second = std::move(first);
   assert(second.dd.getNbGates() == 3);
   assert(first.dd.getNbGates() == 0);
 }
 
 static void testAdmits() {
-  CanonicalCache::instance().reset();
-  CanonicalCache &cache = CanonicalCache::instance();
+  ProbCache::instance().reset();
+  ProbCache &cache = ProbCache::instance();
   assert(cache.admits(1u << 20));
   assert(cache.stats().rejections == 0);
   assert(!cache.admits(size_t{1} << 40));
   assert(cache.stats().rejections == 1);
-  CanonicalCache::instance().reset();
+  ProbCache::instance().reset();
 }
 
 int main() {

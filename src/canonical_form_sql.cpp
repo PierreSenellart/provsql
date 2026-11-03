@@ -13,13 +13,13 @@ extern "C" {
 
 PG_FUNCTION_INFO_V1(circuit_canonical_form);
 PG_FUNCTION_INFO_V1(circuit_island_key);
-PG_FUNCTION_INFO_V1(canonical_cache_stats);
-PG_FUNCTION_INFO_V1(canonical_cache_reset);
+PG_FUNCTION_INFO_V1(prob_cache_stats);
+PG_FUNCTION_INFO_V1(prob_cache_reset);
 }
 
 #include "c_cpp_compatibility.h"
 #include "BooleanCircuit.h"
-#include "CanonicalCache.h"
+#include "ProbCache.h"
 #include "CircuitCanonicalForm.h"
 #include "CircuitFromMMap.h"
 #include "provsql_utils_cpp.h"
@@ -93,11 +93,11 @@ Datum circuit_island_key(PG_FUNCTION_ARGS)
   PG_RETURN_NULL();
 }
 
-Datum canonical_cache_stats(PG_FUNCTION_ARGS)
+Datum prob_cache_stats(PG_FUNCTION_ARGS)
 {
   try {
-    provsql::CanonicalCacheStats s =
-      provsql::CanonicalCache::instance().stats();
+    provsql::ProbCacheStats s =
+      provsql::ProbCache::instance().stats();
     std::ostringstream out;
     out << '{'
         << "\"hits\":" << s.hits
@@ -112,15 +112,15 @@ Datum canonical_cache_stats(PG_FUNCTION_ARGS)
       jsonb_in, CStringGetDatum(pstrdup(out.str().c_str())));
     PG_RETURN_DATUM(json_datum);
   } catch(const std::exception &e) {
-    provsql_error("canonical_cache_stats: %s", e.what());
+    provsql_error("prob_cache_stats: %s", e.what());
   } catch(...) {
-    provsql_error("canonical_cache_stats: Unknown exception");
+    provsql_error("prob_cache_stats: Unknown exception");
   }
   PG_RETURN_NULL();
 }
 
-Datum canonical_cache_reset(PG_FUNCTION_ARGS)
+Datum prob_cache_reset(PG_FUNCTION_ARGS)
 {
-  provsql::CanonicalCache::instance().reset();
+  provsql::ProbCache::instance().reset();
   PG_RETURN_VOID();
 }

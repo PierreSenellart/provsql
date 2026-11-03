@@ -68,7 +68,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
-#include "CanonicalCache.h"
+#include "ProbCache.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
@@ -1311,9 +1311,9 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if(provsql_canonical_cache && canonicalCacheEligible(ctx.c, ctx.gate)) {
+    if(provsql_prob_cache && probCacheEligible(ctx.c, ctx.gate)) {
       ctx.actual_method = "tree-decomposition";
-      return canonicalCachedProbability(
+      return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
@@ -1365,9 +1365,9 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if(provsql_canonical_cache && canonicalCacheEligible(ctx.c, ctx.gate)) {
+    if(provsql_prob_cache && probCacheEligible(ctx.c, ctx.gate)) {
       ctx.actual_method = "compilation";
-      return canonicalCachedProbability(
+      return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
