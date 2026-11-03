@@ -57,11 +57,17 @@ mutable ProbCacheStats stats_;
 using ProbCacheCompileFn =
   std::function<dDNNF(const BooleanCircuit &, gate_t)>;
 
+struct ProbCacheOptions {
+  bool use_cache = true;
+  bool fold = false;
+};
+
 bool probCacheEligible(const BooleanCircuit &c, gate_t root);
 
 double probCachedProbability(const BooleanCircuit &c, gate_t root,
                              const ProbCacheCompileFn &compile,
-                             bool *ran_compiler = nullptr);
+                             bool *ran_compiler = nullptr,
+                             const ProbCacheOptions &options = ProbCacheOptions());
 
 }
 

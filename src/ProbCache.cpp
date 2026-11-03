@@ -1,6 +1,8 @@
 #include "ProbCache.h"
 
+#include <algorithm>
 #include <cassert>
+#include <numeric>
 
 namespace provsql {
 
@@ -8,6 +10,7 @@ namespace {
 
 constexpr size_t MAX_PROB_CACHE_SIZE = 1536u << 20;
 constexpr size_t MAX_PROB_CACHE_ENTRY_SIZE = MAX_PROB_CACHE_SIZE / 4;
+constexpr unsigned MAX_FOLD_DEPTH = 64;
 
 size_t estimateEntryBytes(const dDNNF &dd, const ProbCache::Entry &e)
 {
@@ -271,15 +274,150 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
   return dd.probabilityEvaluation();
 }
 
+double evaluateComponent(const BooleanCircuit &c, gate_t root,
+                         const ProbCacheCompileFn &compile,
+                         bool *ran_compiler, bool use_cache)
+{
+  if(use_cache)
+    return cachedComponent(c, root, compile, ran_compiler);
+  if(ran_compiler)
+    *ran_compiler = true;
+  return compile(c, root).probabilityEvaluation();
+}
+
+std::vector<std::vector<gate_t> > independentGroups(
+  const BooleanCircuit &c, const std::vector<gate_t> &children)
+{
+  std::vector<size_t> parent(children.size());
+  std::iota(parent.begin(), parent.end(), size_t{0});
+  auto find = [&parent](size_t x) {
+    while(parent[x] != x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+
+  std::unordered_map<gate_t, size_t, CanonicalGateHash> owner;
+  std::vector<gate_t> stack;
+  for(size_t i = 0; i < children.size(); ++i) {
+    stack.push_back(children[i]);
+    while(!stack.empty()) {
+      const gate_t g = stack.back();
+      stack.pop_back();
+      const auto &wires = c.getWires(g);
+      if(wires.empty() && c.getGateType(g) != BooleanGate::IN)
+        continue;
+      const auto entry = owner.emplace(g, i);
+      if(!entry.second) {
+        parent[find(i)] = find(entry.first->second);
+        continue;
+      }
+      stack.insert(stack.end(), wires.begin(), wires.end());
+    }
+  }
+
+  std::unordered_map<size_t, size_t> position;
+  std::vector<std::vector<gate_t> > groups;
+  for(size_t i = 0; i < children.size(); ++i) {
+    const auto entry = position.emplace(find(i), groups.size());
+    if(entry.second)
+      groups.emplace_back();
+    groups[entry.first->second].push_back(children[i]);
+  }
+  return groups;
+}
+
+gate_t materialiseGroup(const BooleanCircuit &c, BooleanGate type,
+                        const std::vector<gate_t> &children,
+                        BooleanCircuit &out)
+{
+  std::unordered_map<gate_t, gate_t, CanonicalGateHash> old2new;
+  std::vector<gate_t> nodes;
+  std::vector<gate_t> stack(children.begin(), children.end());
+  while(!stack.empty()) {
+    const gate_t g = stack.back();
+    stack.pop_back();
+    if(!old2new.emplace(g, gate_t{0}).second)
+      continue;
+    nodes.push_back(g);
+    const auto &wires = c.getWires(g);
+    stack.insert(stack.end(), wires.begin(), wires.end());
+  }
+  std::sort(nodes.begin(), nodes.end());
+
+  for(gate_t g : nodes)
+    old2new[g] = c.getGateType(g) == BooleanGate::IN
+                 ? out.setGate(c.getUUID(g), BooleanGate::IN, c.getProb(g))
+                 : out.setGate(c.getGateType(g));
+  for(gate_t g : nodes)
+    if(c.getGateType(g) != BooleanGate::IN)
+      for(gate_t u : c.getWires(g))
+        out.addWire(old2new.at(g), old2new.at(u));
+
+  const gate_t root = out.setGate(type);
+  for(gate_t child : children)
+    out.addWire(root, old2new.at(child));
+  return root;
+}
+
+double foldedProbability(const BooleanCircuit &c, gate_t g,
+                         const ProbCacheCompileFn &compile,
+                         bool *ran_compiler, bool use_cache, unsigned depth)
+{
+  const BooleanGate type = c.getGateType(g);
+  if(type == BooleanGate::IN)
+    return c.getProb(g);
+
+  if(depth < MAX_FOLD_DEPTH
+     && (type == BooleanGate::AND || type == BooleanGate::OR)) {
+    std::vector<gate_t> children;
+    GateSet seen;
+    for(gate_t w : c.getWires(g))
+      if(seen.insert(w).second)
+        children.push_back(w);
+
+    const auto groups = independentGroups(c, children);
+    if(groups.size() != 1 || groups.front().size() == 1) {
+      double product = 1.;
+      for(const auto &group : groups) {
+        double p;
+        if(group.size() == 1) {
+          p = foldedProbability(c, group.front(), compile, ran_compiler,
+                                use_cache, depth + 1);
+        } else {
+          BooleanCircuit part;
+          const gate_t part_root = materialiseGroup(c, type, group, part);
+          p = evaluateComponent(part, part_root, compile, ran_compiler,
+                                use_cache);
+        }
+        product *= type == BooleanGate::AND ? p : 1. - p;
+      }
+      return type == BooleanGate::AND ? product : 1. - product;
+    }
+  }
+
+  if(depth == 0)
+    return evaluateComponent(c, g, compile, ran_compiler, use_cache);
+
+  BooleanCircuit part;
+  const gate_t part_root = materialiseComponent(c, g, nullptr, {}, {}, part);
+  return evaluateComponent(part, part_root, compile, ran_compiler, use_cache);
+}
+
 }
 
 double probCachedProbability(const BooleanCircuit &c, gate_t root,
                              const ProbCacheCompileFn &compile,
-                             bool *ran_compiler)
+                             bool *ran_compiler,
+                             const ProbCacheOptions &options)
 {
   if(ran_compiler)
     *ran_compiler = false;
-  return cachedComponent(c, root, compile, ran_compiler);
+  if(options.fold)
+    return foldedProbability(c, root, compile, ran_compiler,
+                             options.use_cache, 0);
+  return evaluateComponent(c, root, compile, ran_compiler, options.use_cache);
 }
 
 }
