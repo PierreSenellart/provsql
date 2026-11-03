@@ -1,0 +1,90 @@
+\set ECHO none
+canonical_cache_reset
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|kappa
+Berlin|(OR V V)
+New York|(OR V V)
+Paris|(OR V V V)
+(3 rows)
+remove_provenance
+
+(1 row)
+city|kappa
+Berlin|(AND (OR V V) (NOT (AND #3 #4)))
+New York|(AND (OR V V) (NOT (AND #3 #4)))
+Paris|(AND (OR V V V) (NOT (OR (AND #3 #5) (AND #3 #4) (AND #4 #5))))
+(3 rows)
+city|island_key
+Berlin|residual: (AND (OR V V) (NOT (AND #3 #4)))
+New York|residual: (AND (OR V V) (NOT (AND #3 #4)))
+Paris|residual: (AND (OR V V V) (NOT (OR (AND #3 #5) (AND #3 #4) (AND #4 #5))))
+(3 rows)
+p_berlin
+0.8200
+(1 row)
+stats_after_berlin
+{"hits": 0, "misses": 1, "entries": 1, "inserts": 1, "evictions": 0, "rejections": 0}
+(1 row)
+p_new_york
+0.2800
+(1 row)
+stats_after_new_york
+{"hits": 1, "misses": 1, "entries": 1, "inserts": 1, "evictions": 0, "rejections": 0}
+(1 row)
+p_paris
+0.8600
+(1 row)
+stats_after_paris
+{"hits": 1, "misses": 2, "entries": 2, "inserts": 2, "evictions": 0, "rejections": 0}
+(1 row)
+remove_provenance
+
+(1 row)
+island_key
+residual: (AND V V)
+island 1: (OR V V)
+island 2: (OR V V)
+(1 row)
+p_conj
+0.229600
+(1 row)
+stats_after_conj
+{"hits": 3, "misses": 3, "entries": 3, "inserts": 3, "evictions": 0, "rejections": 0}
+(1 row)
+p_conj_repeat
+0.229600
+(1 row)
+stats_after_conj_repeat
+{"hits": 6, "misses": 3, "entries": 3, "inserts": 3, "evictions": 0, "rejections": 0}
+(1 row)
+p_conj_possible_worlds
+0.229600
+(1 row)
+remove_provenance
+
+(1 row)
+island_key
+residual: (AND V V)
+(1 row)
+p_pair
+0.020000
+(1 row)
+stats_after_pair
+{"hits": 7, "misses": 3, "entries": 3, "inserts": 3, "evictions": 0, "rejections": 0}
+(1 row)
+canonical_cache_reset
+
+(1 row)
+p_berlin_uncached
+0.8200
+(1 row)
+stats_cache_off
+{"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
+(1 row)
+canonical_cache_reset
+
+(1 row)
