@@ -237,6 +237,11 @@ protected:
 virtual gate_t addGate();
 
 public:
+Circuit() = default;
+Circuit(const Circuit &) = default;
+Circuit(Circuit &&) = default;
+Circuit &operator=(const Circuit &) = default;
+Circuit &operator=(Circuit &&) = default;
 virtual ~Circuit() {
 }
 

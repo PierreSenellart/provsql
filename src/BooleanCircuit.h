@@ -231,6 +231,10 @@ public:
 /** @brief Construct an empty Boolean circuit. */
 BooleanCircuit() {
 }
+BooleanCircuit(const BooleanCircuit &) = default;
+BooleanCircuit(BooleanCircuit &&) = default;
+BooleanCircuit &operator=(const BooleanCircuit &) = default;
+BooleanCircuit &operator=(BooleanCircuit &&) = default;
 virtual ~BooleanCircuit() {
 }
 
