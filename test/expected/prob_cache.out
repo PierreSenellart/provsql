@@ -88,3 +88,30 @@ stats_cache_off
 prob_cache_reset
 
 (1 row)
+p_pair_folded
+0.020000
+(1 row)
+stats_after_folded_pair
+{"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
+(1 row)
+p_berlin_folded
+0.8200
+(1 row)
+p_new_york_folded
+0.2800
+(1 row)
+p_conj_folded
+0.229600
+(1 row)
+stats_after_folded
+{"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
+(1 row)
+prob_cache_reset
+
+(1 row)
+p_berlin_fold_only
+0.8200
+(1 row)
+stats_fold_only
+{"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
+(1 row)

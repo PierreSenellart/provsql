@@ -71,6 +71,24 @@ SELECT prob_cache_stats() - 'bytes' AS stats_cache_off;
 SET provsql.prob_cache = on;
 
 SELECT prob_cache_reset();
+SET provsql.idp_fold = on;
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_pair_folded FROM pair;
+SELECT prob_cache_stats() - 'bytes' AS stats_after_folded_pair;
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
+  AS p_berlin_folded FROM city_lineage WHERE city='Berlin';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
+  AS p_new_york_folded FROM city_lineage WHERE city='New York';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_conj_folded FROM conj;
+SELECT prob_cache_stats() - 'bytes' AS stats_after_folded;
+SELECT prob_cache_reset();
+SET provsql.prob_cache = off;
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
+  AS p_berlin_fold_only FROM city_lineage WHERE city='Berlin';
+SELECT prob_cache_stats() - 'bytes' AS stats_fold_only;
+SET provsql.prob_cache = on;
+SET provsql.idp_fold = off;
 
 DROP TABLE city_lineage;
 DROP TABLE exc_lineage;

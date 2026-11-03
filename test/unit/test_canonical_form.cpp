@@ -1,7 +1,11 @@
 #include <cassert>
 #include <cmath>
+#include <functional>
 #include <iostream>
+#include <random>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "CircuitCanonicalForm.h"
 #include "ProbCache.h"
@@ -344,7 +348,231 @@ static void testAdmits() {
   ProbCache::instance().reset();
 }
 
+static double exactProbability(const BooleanCircuit &c, gate_t root) {
+  std::vector<gate_t> inputs;
+  for(gate_t g{0}; g < c.getNbGates(); ++g)
+    if(c.getGateType(g) == BooleanGate::IN)
+      inputs.push_back(g);
+  double total = 0.;
+  for(size_t world = 0; world < (size_t{1} << inputs.size()); ++world) {
+    std::vector<int> value(c.getNbGates(), -1);
+    double weight = 1.;
+    for(size_t i = 0; i < inputs.size(); ++i) {
+      const bool on = (world >> i) & 1;
+      value[static_cast<size_t>(inputs[i])] = on;
+      weight *= on ? c.getProb(inputs[i]) : 1. - c.getProb(inputs[i]);
+    }
+    std::function<bool(gate_t)> eval = [&](gate_t g) {
+      int &v = value[static_cast<size_t>(g)];
+      if(v >= 0)
+        return v == 1;
+      bool r = c.getGateType(g) == BooleanGate::AND;
+      for(gate_t w : c.getWires(g)) {
+        const bool x = eval(w);
+        if(c.getGateType(g) == BooleanGate::AND)
+          r = r && x;
+        else if(c.getGateType(g) == BooleanGate::OR)
+          r = r || x;
+        else
+          r = !x;
+      }
+      v = r;
+      return r;
+    };
+    if(eval(root))
+      total += weight;
+  }
+  return total;
+}
+
+static void testFolding() {
+  size_t compiles = 0;
+  ProbCacheCompileFn compile = [&compiles](const BooleanCircuit &cc, gate_t g) {
+    ++compiles;
+    TreeDecomposition td(cc);
+    return dDNNFTreeDecompositionBuilder{cc, g, td}.build();
+  };
+  const ProbCacheOptions fold{true, true};
+  const ProbCacheOptions fold_only{false, true};
+  ProbCache &cache = ProbCache::instance();
+
+  for(BooleanGate type : {BooleanGate::OR, BooleanGate::AND}) {
+    BooleanCircuit c;
+    gate_t root = c.setGate(type);
+    double product = 1.;
+    for(int i = 0; i < 5000; ++i) {
+      const double p = 0.1 + 0.8 * (i % 7) / 7;
+      c.addWire(root, c.setGate("flat" + std::to_string(i), BooleanGate::IN, p));
+      product *= type == BooleanGate::AND ? p : 1. - p;
+    }
+    cache.reset();
+    compiles = 0;
+    bool ran = true;
+    const double got = probCachedProbability(c, root, compile, &ran, fold);
+    const double want = type == BooleanGate::AND ? product : 1. - product;
+    assert(std::fabs(got - want) < 1e-12);
+    assert(compiles == 0);
+    assert(!ran);
+    assert(cache.stats().hits + cache.stats().misses == 0);
+  }
+
+  {
+    BooleanCircuit c;
+    gate_t empty_and = c.setGate(BooleanGate::AND);
+    gate_t empty_or = c.setGate(BooleanGate::OR);
+    compiles = 0;
+    assert(probCachedProbability(c, empty_and, compile, nullptr, fold) == 1.);
+    assert(probCachedProbability(c, empty_or, compile, nullptr, fold) == 0.);
+    assert(compiles == 0);
+  }
+
+  {
+    BooleanCircuit c;
+    gate_t x = c.setGate("dup_x", BooleanGate::IN, 0.3);
+    gate_t y = c.setGate("dup_y", BooleanGate::IN, 0.4);
+    gate_t root = c.setGate(BooleanGate::OR);
+    c.addWire(root, x);
+    c.addWire(root, x);
+    c.addWire(root, y);
+    compiles = 0;
+    const double got = probCachedProbability(c, root, compile, nullptr, fold);
+    assert(std::fabs(got - (1 - 0.7 * 0.6)) < 1e-12);
+    assert(compiles == 0);
+  }
+
+  auto orders = [](const std::string &tag, gate_t &root) {
+    BooleanCircuit c;
+    const std::vector<std::vector<double> > shape = {{0.5, 0.2, 0.3}, {0.6, 0.7}, {0.8, 0.9, 0.4}};
+    root = c.setGate(BooleanGate::OR);
+    for(size_t o = 0; o < shape.size(); ++o) {
+      gate_t order = c.setGate(tag + "o" + std::to_string(o), BooleanGate::IN, shape[o][0]);
+      for(size_t l = 1; l < shape[o].size(); ++l) {
+        gate_t line = c.setGate(tag + "l" + std::to_string(o) + "_" + std::to_string(l), BooleanGate::IN, shape[o][l]);
+        gate_t pair = c.setGate(BooleanGate::AND);
+        c.addWire(pair, order);
+        c.addWire(pair, line);
+        c.addWire(root, pair);
+      }
+    }
+    return c;
+  };
+
+  {
+    gate_t root;
+    BooleanCircuit c = orders("a", root);
+    const double want = exactProbability(c, root);
+
+    cache.reset();
+    compiles = 0;
+    const double folded = probCachedProbability(c, root, compile, nullptr, fold);
+    assert(std::fabs(folded - want) < 1e-12);
+    assert(compiles == 1);
+    assert(cache.stats().hits == 1);
+    assert(cache.stats().misses == 1);
+
+    cache.reset();
+    compiles = 0;
+    const double alone = probCachedProbability(c, root, compile, nullptr, fold_only);
+    assert(std::fabs(alone - want) < 1e-12);
+    assert(compiles == 2);
+    assert(cache.stats().hits + cache.stats().misses == 0);
+  }
+
+  {
+    BooleanCircuit c;
+    std::vector<gate_t> v;
+    for(int i = 0; i < 4; ++i)
+      v.push_back(c.setGate("chain" + std::to_string(i), BooleanGate::IN, 0.2 + 0.2 * i));
+    gate_t root = c.setGate(BooleanGate::OR);
+    for(int i = 0; i < 3; ++i) {
+      gate_t pair = c.setGate(BooleanGate::AND);
+      c.addWire(pair, v[i]);
+      c.addWire(pair, v[i + 1]);
+      c.addWire(root, pair);
+    }
+    cache.reset();
+    compiles = 0;
+    const double got = probCachedProbability(c, root, compile, nullptr, fold);
+    assert(std::fabs(got - exactProbability(c, root)) < 1e-12);
+    assert(compiles == 1);
+    assert(cache.stats().misses == 1);
+  }
+
+  {
+    BooleanCircuit c;
+    gate_t a = c.setGate("nest_a", BooleanGate::IN, 0.3);
+    gate_t b = c.setGate("nest_b", BooleanGate::IN, 0.4);
+    gate_t d = c.setGate("nest_d", BooleanGate::IN, 0.5);
+    gate_t e = c.setGate("nest_e", BooleanGate::IN, 0.6);
+    gate_t left = c.setGate(BooleanGate::OR);
+    c.addWire(left, a);
+    c.addWire(left, b);
+    gate_t right = c.setGate(BooleanGate::OR);
+    c.addWire(right, d);
+    c.addWire(right, e);
+    gate_t root = c.setGate(BooleanGate::AND);
+    c.addWire(root, left);
+    c.addWire(root, right);
+    compiles = 0;
+    const double got = probCachedProbability(c, root, compile, nullptr, fold);
+    assert(std::fabs(got - (1 - 0.7 * 0.6) * (1 - 0.5 * 0.4)) < 1e-12);
+    assert(compiles == 0);
+  }
+
+  {
+    BooleanCircuit c;
+    gate_t prev = c.setGate("deep0", BooleanGate::IN, 0.9);
+    double want = 0.9;
+    for(int i = 1; i < 2000; ++i) {
+      gate_t x = c.setGate("deep" + std::to_string(i), BooleanGate::IN, 0.999);
+      gate_t n = c.setGate(BooleanGate::AND);
+      c.addWire(n, x);
+      c.addWire(n, prev);
+      prev = n;
+      want *= 0.999;
+    }
+    const double got = probCachedProbability(c, prev, compile, nullptr, fold);
+    assert(std::fabs(got - want) < 1e-9);
+  }
+
+  {
+    std::mt19937 rng(20261102);
+    int wrong_fold = 0, wrong_alone = 0;
+    for(int round = 0; round < 400; ++round) {
+      BooleanCircuit c;
+      std::vector<gate_t> nodes;
+      const int inputs = 2 + rng() % 8;
+      for(int i = 0; i < inputs; ++i)
+        nodes.push_back(c.setGate("r" + std::to_string(round) + "_" + std::to_string(i), BooleanGate::IN,
+                                  0.1 + 0.8 * (rng() % 100) / 100.));
+      const int gates = 1 + rng() % 8;
+      for(int i = 0; i < gates; ++i) {
+        const unsigned kind = rng() % 5;
+        gate_t g = c.setGate(kind == 0 ? BooleanGate::NOT : kind % 2 ? BooleanGate::AND : BooleanGate::OR);
+        const int fanin = kind == 0 ? 1 : 1 + rng() % 4;
+        for(int k = 0; k < fanin; ++k)
+          c.addWire(g, nodes[rng() % nodes.size()]);
+        nodes.push_back(g);
+      }
+      gate_t root = c.setGate(rng() % 2 ? BooleanGate::AND : BooleanGate::OR);
+      for(size_t k = 0; k < nodes.size(); ++k)
+        if(rng() % 2)
+          c.addWire(root, nodes[k]);
+      c.addWire(root, nodes.back());
+      const double want = exactProbability(c, root);
+      if(std::fabs(probCachedProbability(c, root, compile, nullptr, fold) - want) > 1e-9)
+        ++wrong_fold;
+      if(std::fabs(probCachedProbability(c, root, compile, nullptr, fold_only) - want) > 1e-9)
+        ++wrong_alone;
+    }
+    assert(wrong_fold == 0);
+    assert(wrong_alone == 0);
+  }
+  cache.reset();
+}
+
 int main() {
+  testFolding();
   testMoveDoesNotCopy();
   testAdmits();
   testWorkedExample();
