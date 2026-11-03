@@ -1311,13 +1311,14 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if(provsql_prob_cache && probCacheEligible(ctx.c, ctx.gate)) {
+    if((provsql_prob_cache || provsql_idp_fold)
+       && probCacheEligible(ctx.c, ctx.gate)) {
       ctx.actual_method = "tree-decomposition";
       return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
-      });
+      }, nullptr, ProbCacheOptions{provsql_prob_cache, provsql_idp_fold});
     }
     return buildDD(ctx).probabilityEvaluation();
   }
@@ -1365,13 +1366,14 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if(provsql_prob_cache && probCacheEligible(ctx.c, ctx.gate)) {
+    if((provsql_prob_cache || provsql_idp_fold)
+       && probCacheEligible(ctx.c, ctx.gate)) {
       ctx.actual_method = "compilation";
       return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
-      });
+      }, nullptr, ProbCacheOptions{provsql_prob_cache, provsql_idp_fold});
     }
     return buildDD(ctx).probabilityEvaluation();
   }

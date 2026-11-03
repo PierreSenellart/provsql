@@ -649,6 +649,8 @@ extern bool provsql_simplify_on_load;
 
 extern bool provsql_prob_cache;
 
+extern bool provsql_idp_fold;
+
 /** @brief Run the hybrid evaluator (simplifier + per-cmp island
  *         decomposer) before dispatching a probability_evaluate query.
  *
