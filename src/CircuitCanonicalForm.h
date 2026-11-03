@@ -36,6 +36,16 @@ GateSet reachableNodes(const BooleanCircuit &c, gate_t root,
 CanonicalForm computeCanonicalForm(const BooleanCircuit &c, gate_t root,
                                    const GateSet *abstract_leaves = nullptr);
 
+std::vector<gate_t> maximalIslandRoots(const BooleanCircuit &c, gate_t root);
+
+struct IslandKey {
+  CanonicalForm residual;
+  std::vector<gate_t> island_roots;
+  std::vector<CanonicalForm> islands;
+};
+
+IslandKey computeIslandKey(const BooleanCircuit &c, gate_t root);
+
 uint64_t fnv1aHash(const std::string &s);
 
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 
 namespace provsql {
 
@@ -222,6 +223,146 @@ CanonicalForm computeCanonicalForm(const BooleanCircuit &c, gate_t root,
 
   cf.hash = fnv1aHash(cf.form);
   return cf;
+}
+
+std::vector<gate_t> maximalIslandRoots(const BooleanCircuit &c, gate_t root)
+{
+  GateSet node_set = reachableNodes(c, root);
+  std::vector<gate_t> nodes(node_set.begin(), node_set.end());
+  std::unordered_map<gate_t, idx_t, CanonicalGateHash> index;
+  index.reserve(nodes.size());
+  for(idx_t i = 0; i < nodes.size(); ++i)
+    index[nodes[i]] = i;
+  const idx_t n = nodes.size();
+  const idx_t root_idx = index.at(root);
+
+  if(n <= 1)
+    return {};
+
+  std::vector<std::vector<idx_t> > consumers(n);
+  std::vector<idx_t> indeg(n, 0);
+  for(idx_t i = 0; i < n; ++i)
+    for(gate_t u : c.getWires(nodes[i])) {
+      idx_t j = index.at(u);
+      consumers[j].push_back(i);
+      ++indeg[j];
+    }
+
+  std::vector<idx_t> topo;
+  topo.reserve(n);
+  topo.push_back(root_idx);
+  for(size_t k = 0; k < topo.size(); ++k) {
+    idx_t v = topo[k];
+    for(gate_t u : c.getWires(nodes[v])) {
+      idx_t j = index.at(u);
+      if(--indeg[j] == 0)
+        topo.push_back(j);
+    }
+  }
+  assert(topo.size() == n);
+
+  int levels = 1;
+  while((idx_t(1) << levels) < n)
+    ++levels;
+  std::vector<std::vector<idx_t> > up(levels,
+                                      std::vector<idx_t>(n, root_idx));
+  std::vector<idx_t> idom(n, root_idx);
+  std::vector<uint64_t> depth(n, 0);
+
+  auto nca = [&](idx_t a, idx_t b) {
+    if(depth[a] < depth[b])
+      std::swap(a, b);
+    uint64_t diff = depth[a] - depth[b];
+    for(int k = 0; diff != 0; ++k, diff >>= 1)
+      if(diff & 1)
+        a = up[k][a];
+    if(a == b)
+      return a;
+    for(int k = levels - 1; k >= 0; --k)
+      if(up[k][a] != up[k][b]) {
+        a = up[k][a];
+        b = up[k][b];
+      }
+    return up[0][a];
+  };
+
+  for(size_t k = 1; k < topo.size(); ++k) {
+    idx_t v = topo[k];
+    bool first = true;
+    idx_t d = root_idx;
+    for(idx_t p : consumers[v]) {
+      d = first ? p : nca(d, p);
+      first = false;
+    }
+    idom[v] = d;
+    depth[v] = depth[d] + 1;
+    up[0][v] = d;
+    for(int l = 1; l < levels; ++l)
+      up[l][v] = up[l-1][up[l-1][v]];
+  }
+
+  const uint64_t NO_REQ = std::numeric_limits<uint64_t>::max();
+  std::vector<uint64_t> req(n, NO_REQ);
+  for(idx_t w = 0; w < n; ++w)
+    for(gate_t cu : c.getWires(nodes[w])) {
+      idx_t u = index.at(cu);
+      uint64_t limit = depth[nca(u, w)];
+      if(limit < req[w])
+        req[w] = limit;
+    }
+
+  std::vector<idx_t> by_depth(topo.rbegin(), topo.rend());
+  std::vector<bool> failed(n, false);
+  for(idx_t v : by_depth) {
+    if(req[v] == NO_REQ || req[v] >= depth[v])
+      continue;
+    failed[v] = true;
+    idx_t p = idom[v];
+    if(req[v] < req[p])
+      req[p] = req[v];
+  }
+
+  auto isIslandRoot = [&](idx_t v) {
+    if(v == root_idx || failed[v])
+      return false;
+    const auto t = c.getGateType(nodes[v]);
+    if(t != BooleanGate::AND && t != BooleanGate::OR &&
+       t != BooleanGate::NOT)
+      return false;
+    return !c.getWires(nodes[v]).empty();
+  };
+
+  std::vector<bool> covered(n, false);
+  std::vector<gate_t> result;
+  for(size_t k = 1; k < topo.size(); ++k) {
+    idx_t v = topo[k];
+    idx_t p = idom[v];
+    covered[v] = covered[p] || (p != root_idx && isIslandRoot(p));
+    if(!covered[v] && isIslandRoot(v))
+      result.push_back(nodes[v]);
+  }
+  return result;
+}
+
+IslandKey computeIslandKey(const BooleanCircuit &c, gate_t root)
+{
+  IslandKey key;
+  std::vector<gate_t> frontier = maximalIslandRoots(c, root);
+  if(frontier.empty()) {
+    key.residual = computeCanonicalForm(c, root);
+    return key;
+  }
+
+  GateSet fs(frontier.begin(), frontier.end());
+  key.residual = computeCanonicalForm(c, root, &fs);
+
+  for(const CanonicalLeaf &leaf : key.residual.leaves)
+    if(leaf.is_abstract) {
+      key.island_roots.push_back(leaf.gate);
+      key.islands.push_back(computeCanonicalForm(c, leaf.gate));
+    }
+  assert(key.island_roots.size() == frontier.size());
+  return key;
 }
 
 }
