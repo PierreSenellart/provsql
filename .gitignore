@@ -13,6 +13,7 @@ provsql.control
 .clangd
 compile_commands.json
 tdkc
+test_canonical_form
 provsql_migrate_mmap
 test.log
 # Coverage build artefacts (make coverage): gcovr report + gcov data
