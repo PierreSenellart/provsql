@@ -227,8 +227,8 @@ tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp s
 test-kcmcp: tdkc
 	python3 test/kcmcp/conformance.py ./tdkc
 
-test_canonical_form: test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/CircuitCanonicalForm.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/dDNNF.cpp src/dDNNF.h src/TreeDecomposition.cpp src/TreeDecomposition.h src/dDNNFTreeDecompositionBuilder.cpp src/dDNNFTreeDecompositionBuilder.h src/Circuit.h src/Circuit.hpp src/Graph.h src/PermutationStrategy.h src/tdkc_interrupt.h
-	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -Isrc -o test_canonical_form test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/TreeDecomposition.cpp src/dDNNFTreeDecompositionBuilder.cpp
+test_canonical_form: test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/CircuitCanonicalForm.h src/CanonicalCache.cpp src/CanonicalCache.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/dDNNF.cpp src/dDNNF.h src/TreeDecomposition.cpp src/TreeDecomposition.h src/dDNNFTreeDecompositionBuilder.cpp src/dDNNFTreeDecompositionBuilder.h src/Circuit.h src/Circuit.hpp src/Graph.h src/PermutationStrategy.h src/tdkc_interrupt.h
+	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -Isrc -o test_canonical_form test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/CanonicalCache.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/TreeDecomposition.cpp src/dDNNFTreeDecompositionBuilder.cpp
 
 .PHONY: test-canonical
 test-canonical: test_canonical_form

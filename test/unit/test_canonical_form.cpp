@@ -1,8 +1,12 @@
 #include <cassert>
+#include <cmath>
 #include <iostream>
 #include <utility>
 
 #include "CircuitCanonicalForm.h"
+#include "CanonicalCache.h"
+#include "TreeDecomposition.h"
+#include "dDNNFTreeDecompositionBuilder.h"
 
 using namespace provsql;
 
@@ -153,6 +157,148 @@ static void testSharedIsland() {
   assert(k.islands[0].form == "(AND V V)");
 }
 
+static void testCacheEndToEnd() {
+  auto compile = [](const BooleanCircuit &cc, gate_t g) {
+    TreeDecomposition td(cc);
+    return dDNNFTreeDecompositionBuilder{cc, g, td}.build();
+  };
+
+  auto build = [](const std::string &prefix, double pa, double pb, double pc,
+                  gate_t &root) {
+    BooleanCircuit c;
+    gate_t a = c.setGate(prefix + "a", BooleanGate::IN, pa);
+    gate_t b = c.setGate(prefix + "b", BooleanGate::IN, pb);
+    gate_t cc = c.setGate(prefix + "c", BooleanGate::IN, pc);
+    gate_t g1 = c.setGate(BooleanGate::AND);
+    c.addWire(g1, a); c.addWire(g1, b);
+    gate_t g2 = c.setGate(BooleanGate::AND);
+    c.addWire(g2, a); c.addWire(g2, cc);
+    root = c.setGate(BooleanGate::OR);
+    c.addWire(root, g1); c.addWire(root, g2);
+    return c;
+  };
+
+  auto expected = [](double pa, double pb, double pc) {
+    return pa * (pb + pc - pb * pc);
+  };
+
+  CanonicalCache::instance().reset();
+
+  gate_t r1;
+  BooleanCircuit c1 = build("t1_", 0.5, 0.4, 0.3, r1);
+  assert(canonicalCacheEligible(c1, r1));
+  bool compiled1 = false;
+  double p1 = canonicalCachedProbability(c1, r1, compile, &compiled1);
+  assert(compiled1);
+  assert(std::fabs(p1 - expected(0.5, 0.4, 0.3)) < 1e-12);
+
+  gate_t r2;
+  BooleanCircuit c2 = build("t2_", 0.9, 0.2, 0.7, r2);
+  bool compiled2 = true;
+  double p2 = canonicalCachedProbability(c2, r2, compile, &compiled2);
+  assert(!compiled2);
+  assert(std::fabs(p2 - expected(0.9, 0.2, 0.7)) < 1e-12);
+
+  auto st = CanonicalCache::instance().stats();
+  assert(st.hits > 0);
+  assert(st.inserts > 0);
+
+  BooleanCircuit c3;
+  gate_t a3 = c3.setGate("u", BooleanGate::IN, 0.25);
+  gate_t b3 = c3.setGate("v", BooleanGate::IN, 0.5);
+  gate_t w3 = c3.setGate("w", BooleanGate::IN, 0.5);
+  gate_t g3 = c3.setGate(BooleanGate::AND);
+  c3.addWire(g3, a3); c3.addWire(g3, b3);
+  gate_t n3 = c3.setGate(BooleanGate::NOT);
+  c3.addWire(n3, w3);
+  gate_t o3 = c3.setGate(BooleanGate::OR);
+  c3.addWire(o3, g3); c3.addWire(o3, n3);
+  bool compiled3 = false;
+  double p3 = canonicalCachedProbability(c3, o3, compile, &compiled3);
+  assert(std::fabs(p3 - (1 - (1 - 0.125) * 0.5)) < 1e-12);
+
+  BooleanCircuit c4;
+  gate_t a4 = c4.setGate("u2", BooleanGate::IN, 0.6);
+  gate_t b4 = c4.setGate("v2", BooleanGate::IN, 0.8);
+  gate_t w4 = c4.setGate("w2", BooleanGate::IN, 0.1);
+  gate_t g4 = c4.setGate(BooleanGate::AND);
+  c4.addWire(g4, a4); c4.addWire(g4, b4);
+  gate_t n4 = c4.setGate(BooleanGate::NOT);
+  c4.addWire(n4, w4);
+  gate_t o4 = c4.setGate(BooleanGate::OR);
+  c4.addWire(o4, g4); c4.addWire(o4, n4);
+  bool compiled4 = true;
+  double p4 = canonicalCachedProbability(c4, o4, compile, &compiled4);
+  assert(!compiled4);
+  assert(std::fabs(p4 - (1 - (1 - 0.48) * (1 - 0.9))) < 1e-12);
+}
+
+static void testResidualMatchesCircuit() {
+  auto compile = [](const BooleanCircuit &cc, gate_t g) {
+    TreeDecomposition td(cc);
+    return dDNNFTreeDecompositionBuilder{cc, g, td}.build();
+  };
+
+  auto buildOr = [](double pu, double pv, gate_t &root) {
+    BooleanCircuit c;
+    gate_t u = c.setGate("m_u", BooleanGate::IN, pu);
+    gate_t v = c.setGate("m_v", BooleanGate::IN, pv);
+    root = c.setGate(BooleanGate::OR);
+    c.addWire(root, u); c.addWire(root, v);
+    return c;
+  };
+
+  auto buildOrOfAnds = [](double px, double py, double pz, double pw,
+                          gate_t &root) {
+    BooleanCircuit c;
+    gate_t x = c.setGate("m_x", BooleanGate::IN, px);
+    gate_t y = c.setGate("m_y", BooleanGate::IN, py);
+    gate_t z = c.setGate("m_z", BooleanGate::IN, pz);
+    gate_t w = c.setGate("m_w", BooleanGate::IN, pw);
+    gate_t h1 = c.setGate(BooleanGate::AND);
+    c.addWire(h1, x); c.addWire(h1, y);
+    gate_t h2 = c.setGate(BooleanGate::AND);
+    c.addWire(h2, z); c.addWire(h2, w);
+    root = c.setGate(BooleanGate::OR);
+    c.addWire(root, h1); c.addWire(root, h2);
+    return c;
+  };
+
+  CanonicalCache::instance().reset();
+  gate_t r1;
+  BooleanCircuit c1 = buildOr(0.3, 0.6, r1);
+  IslandKey k1 = computeIslandKey(c1, r1);
+  assert(k1.islands.empty());
+  assert(k1.residual.form == "(OR V V)");
+  double p1 = canonicalCachedProbability(c1, r1, compile);
+  assert(std::fabs(p1 - (1 - 0.7 * 0.4)) < 1e-12);
+
+  gate_t r2;
+  BooleanCircuit c2 = buildOrOfAnds(0.5, 0.4, 0.9, 0.2, r2);
+  IslandKey k2 = computeIslandKey(c2, r2);
+  assert(k2.islands.size() == 2);
+  assert(k2.residual.form == "(OR V V)");
+  CanonicalCacheStats before = CanonicalCache::instance().stats();
+  double p2 = canonicalCachedProbability(c2, r2, compile);
+  CanonicalCacheStats after = CanonicalCache::instance().stats();
+  assert(after.inserts == before.inserts + 1);
+  assert(after.hits == before.hits + 2);
+  assert(std::fabs(p2 - (1 - (1 - 0.2) * (1 - 0.18))) < 1e-12);
+
+  CanonicalCache::instance().reset();
+  gate_t r3;
+  BooleanCircuit c3 = buildOrOfAnds(0.7, 0.1, 0.3, 0.8, r3);
+  double p3 = canonicalCachedProbability(c3, r3, compile);
+  assert(std::fabs(p3 - (1 - (1 - 0.07) * (1 - 0.24))) < 1e-12);
+
+  gate_t r4;
+  BooleanCircuit c4 = buildOr(0.25, 0.45, r4);
+  bool compiled4 = true;
+  double p4 = canonicalCachedProbability(c4, r4, compile, &compiled4);
+  assert(!compiled4);
+  assert(std::fabs(p4 - (1 - 0.75 * 0.55)) < 1e-12);
+}
+
 static void testDeepChain() {
   BooleanCircuit c;
   gate_t prev = c.setGate("leaf", BooleanGate::IN, 0.5);
@@ -168,12 +314,46 @@ static void testDeepChain() {
 
 void provsql_tdkc_poll() {}
 
+static void testMoveDoesNotCopy() {
+  dDNNF source;
+  gate_t a = source.setGate("a", BooleanGate::IN, 0.5);
+  gate_t b = source.setGate("b", BooleanGate::IN, 0.5);
+  gate_t g = source.setGate(BooleanGate::AND);
+  source.addWire(g, a);
+  source.addWire(g, b);
+  source.setRoot(g);
+
+  dDNNF target = std::move(source);
+  assert(target.getNbGates() == 3);
+  assert(source.getNbGates() == 0);
+
+  CanonicalCache::Entry first;
+  first.dd = std::move(target);
+  CanonicalCache::Entry second = std::move(first);
+  assert(second.dd.getNbGates() == 3);
+  assert(first.dd.getNbGates() == 0);
+}
+
+static void testAdmits() {
+  CanonicalCache::instance().reset();
+  CanonicalCache &cache = CanonicalCache::instance();
+  assert(cache.admits(1u << 20));
+  assert(cache.stats().rejections == 0);
+  assert(!cache.admits(size_t{1} << 40));
+  assert(cache.stats().rejections == 1);
+  CanonicalCache::instance().reset();
+}
+
 int main() {
+  testMoveDoesNotCopy();
+  testAdmits();
   testWorkedExample();
   testRenaming();
   testEssentialTie();
   testDomination();
   testSharedIsland();
+  testCacheEndToEnd();
+  testResidualMatchesCircuit();
   testDeepChain();
   std::cout << "all tests passed" << std::endl;
   return 0;
