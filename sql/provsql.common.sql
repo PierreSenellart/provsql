@@ -11565,6 +11565,22 @@ CREATE OR REPLACE FUNCTION ddnnf_stats(
   RETURNS jsonb AS
   'provsql','ddnnf_stats' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION circuit_canonical_form(token UUID)
+  RETURNS TEXT AS
+  'provsql','circuit_canonical_form' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION circuit_island_key(token UUID)
+  RETURNS TEXT AS
+  'provsql','circuit_island_key' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION canonical_cache_stats()
+  RETURNS jsonb AS
+  'provsql','canonical_cache_stats' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION canonical_cache_reset()
+  RETURNS void AS
+  'provsql','canonical_cache_reset' LANGUAGE C;
+
 /**
  * @brief Return the DIMACS CNF (Tseytin transformation) of the provenance circuit
  *
