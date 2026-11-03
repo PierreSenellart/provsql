@@ -1,0 +1,227 @@
+#include "CircuitCanonicalForm.h"
+
+#include <algorithm>
+#include <cassert>
+
+namespace provsql {
+
+namespace {
+
+using idx_t = size_t;
+
+unsigned typeCode(const BooleanCircuit &c, gate_t g, bool is_abstract)
+{
+  if(is_abstract)
+    return 4;
+  switch(c.getGateType(g)) {
+  case BooleanGate::AND:   return 1;
+  case BooleanGate::OR:    return 2;
+  case BooleanGate::NOT:   return 3;
+  case BooleanGate::IN:    return 4;
+  case BooleanGate::MULIN: return 5;
+  case BooleanGate::MULVAR: return 6;
+  case BooleanGate::UNDETERMINED: return 0;
+  }
+  return 0;
+}
+
+const char *typeToken(const BooleanCircuit &c, gate_t g, bool is_abstract)
+{
+  if(is_abstract)
+    return "V";
+  switch(c.getGateType(g)) {
+  case BooleanGate::AND:   return "AND";
+  case BooleanGate::OR:    return "OR";
+  case BooleanGate::NOT:   return "NOT";
+  case BooleanGate::IN:    return "V";
+  case BooleanGate::MULIN: return "MUL";
+  case BooleanGate::MULVAR: return "MULVAR";
+  case BooleanGate::UNDETERMINED: return "UNDET";
+  }
+  return "UNDET";
+}
+
+bool isLeafToken(const BooleanCircuit &c, gate_t g, bool is_abstract)
+{
+  return is_abstract || c.getGateType(g) == BooleanGate::IN;
+}
+
+}
+
+uint64_t fnv1aHash(const std::string &s)
+{
+  uint64_t h = 14695981039346656037ULL;
+  for(unsigned char ch : s) {
+    h ^= ch;
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+GateSet reachableNodes(const BooleanCircuit &c, gate_t root,
+                       const GateSet *abstract_leaves)
+{
+  GateSet nodes;
+  std::vector<gate_t> stack{root};
+  nodes.insert(root);
+  while(!stack.empty()) {
+    gate_t g = stack.back();
+    stack.pop_back();
+    if(g != root && abstract_leaves && abstract_leaves->count(g))
+      continue;
+    for(gate_t ch : c.getWires(g))
+      if(nodes.insert(ch).second)
+        stack.push_back(ch);
+  }
+  return nodes;
+}
+
+CanonicalForm computeCanonicalForm(const BooleanCircuit &c, gate_t root,
+                                   const GateSet *abstract_leaves)
+{
+  auto isAbstract = [&](gate_t g) {
+    return g != root && abstract_leaves && abstract_leaves->count(g) != 0;
+  };
+  static const std::vector<gate_t> no_children;
+  auto childrenOf = [&](gate_t g) -> const std::vector<gate_t>& {
+    return isAbstract(g) ? no_children : c.getWires(g);
+  };
+
+  GateSet node_set = reachableNodes(c, root, abstract_leaves);
+
+  std::vector<gate_t> nodes(node_set.begin(), node_set.end());
+  std::unordered_map<gate_t, idx_t, CanonicalGateHash> index;
+  index.reserve(nodes.size());
+  for(idx_t i = 0; i < nodes.size(); ++i)
+    index[nodes[i]] = i;
+  const idx_t n = nodes.size();
+
+  std::vector<uint64_t> fanout(n, 0);
+  std::vector<idx_t> pending(n, 0);
+  for(idx_t i = 0; i < n; ++i) {
+    const auto &ch = childrenOf(nodes[i]);
+    pending[i] = ch.size();
+    for(gate_t u : ch)
+      ++fanout[index.at(u)];
+  }
+
+  std::vector<std::vector<idx_t> > consumers(n);
+  for(idx_t i = 0; i < n; ++i)
+    for(gate_t u : childrenOf(nodes[i]))
+      consumers[index.at(u)].push_back(i);
+
+  std::vector<uint64_t> height(n, 0);
+  std::vector<idx_t> worklist;
+  for(idx_t i = 0; i < n; ++i)
+    if(pending[i] == 0)
+      worklist.push_back(i);
+  size_t processed = 0;
+  while(processed < worklist.size()) {
+    idx_t v = worklist[processed++];
+    for(idx_t w : consumers[v]) {
+      if(height[w] < height[v] + 1)
+        height[w] = height[v] + 1;
+      if(--pending[w] == 0)
+        worklist.push_back(w);
+    }
+  }
+  assert(worklist.size() == n);
+
+  uint64_t max_height = 0;
+  for(idx_t i = 0; i < n; ++i)
+    max_height = std::max(max_height, height[i]);
+  std::vector<std::vector<idx_t> > by_height(max_height + 1);
+  for(idx_t i = 0; i < n; ++i)
+    by_height[height[i]].push_back(i);
+
+  std::vector<uint64_t> col(n, 0);
+  uint64_t colours_assigned = 0;
+  std::vector<uint64_t> sig;
+  for(uint64_t h = 0; h <= max_height; ++h) {
+    std::vector<std::pair<std::vector<uint64_t>, idx_t> > sigs;
+    sigs.reserve(by_height[h].size());
+    for(idx_t v : by_height[h]) {
+      gate_t g = nodes[v];
+      const bool abs = isAbstract(g);
+      sig.clear();
+      sig.push_back(typeCode(c, g, abs));
+      sig.push_back(fanout[v]);
+      const auto &ch = childrenOf(g);
+      const size_t list_start = sig.size();
+      for(gate_t u : ch)
+        sig.push_back(col[index.at(u)]);
+      const auto t = c.getGateType(g);
+      if(!abs && (t == BooleanGate::AND || t == BooleanGate::OR))
+        std::sort(sig.begin() + list_start, sig.end());
+      sigs.emplace_back(sig, v);
+    }
+    std::sort(sigs.begin(), sigs.end());
+    uint64_t rank = 0;
+    for(size_t k = 0; k < sigs.size(); ++k) {
+      if(k > 0 && sigs[k].first != sigs[k-1].first)
+        ++rank;
+      col[sigs[k].second] = colours_assigned + rank + 1;
+    }
+    if(!sigs.empty())
+      colours_assigned += rank + 1;
+  }
+
+  std::vector<std::vector<gate_t> > canonical_children(n);
+  for(idx_t i = 0; i < n; ++i) {
+    canonical_children[i] = childrenOf(nodes[i]);
+    const auto t = c.getGateType(nodes[i]);
+    if(!isAbstract(nodes[i]) &&
+       (t == BooleanGate::AND || t == BooleanGate::OR))
+      std::stable_sort(canonical_children[i].begin(),
+                       canonical_children[i].end(),
+                       [&](gate_t a, gate_t b) {
+        return col[index.at(a)] < col[index.at(b)];
+      });
+  }
+
+  CanonicalForm cf;
+  std::vector<uint64_t> number(n, 0);
+  uint64_t counter = 0;
+
+  struct Frame { idx_t v; size_t next_child; };
+  std::vector<Frame> stack;
+  std::string &out = cf.form;
+
+  auto firstVisit = [&](idx_t v) {
+    gate_t g = nodes[v];
+    const bool abs = isAbstract(g);
+    number[v] = ++counter;
+    if(isLeafToken(c, g, abs)) {
+      out += typeToken(c, g, abs);
+      cf.leaves.push_back(CanonicalLeaf{g, abs});
+    } else {
+      out += '(';
+      out += typeToken(c, g, abs);
+      stack.push_back(Frame{v, 0});
+    }
+  };
+
+  firstVisit(index.at(root));
+  while(!stack.empty()) {
+    Frame &f = stack.back();
+    const auto &ch = canonical_children[f.v];
+    if(f.next_child < ch.size()) {
+      idx_t u = index.at(ch[f.next_child++]);
+      out += ' ';
+      if(number[u] != 0) {
+        out += '#';
+        out += std::to_string(number[u]);
+      } else {
+        firstVisit(u);
+      }
+    } else {
+      out += ')';
+      stack.pop_back();
+    }
+  }
+
+  cf.hash = fnv1aHash(cf.form);
+  return cf;
+}
+
+}
