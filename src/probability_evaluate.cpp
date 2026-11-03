@@ -68,6 +68,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
+#include "CanonicalCache.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
@@ -1264,7 +1265,7 @@ public:
     return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
            * pow2_clamped(ctx.tw_proxy_);
   }
-  dDNNF buildDD(EvalContext &ctx) const override {
+  static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
     try {
       // On the chooser's path, the cost is bounded by the next-best method's:
       // stop the min-fill build as soon as a bag shows the width it would take
@@ -1274,12 +1275,12 @@ public:
       unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
       if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
         const double ratio = ctx.cost_budget
-          / (kCostTreeDecomp * static_cast<double>(ctx.circuit_size));
+          / (kCostTreeDecomp * static_cast<double>(cc.getNbGates()));
         const double w = ratio >= 1. ? std::floor(std::log2(ratio)) : 0.;
         width_cap = static_cast<unsigned>(
           std::min<double>(w, TreeDecomposition::MAX_TREEWIDTH));
       }
-      TreeDecomposition td(ctx.c, width_cap);
+      TreeDecomposition td(cc, width_cap);
       // Speculative execution: the (poly) min-fill build has now discovered the
       // EXACT treewidth, where the cost estimate above used only the degeneracy
       // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
@@ -1289,13 +1290,13 @@ public:
       // competitive refinement.  A by-name call runs unbounded.
       if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
         const double real_cost = kCostTreeDecomp
-          * static_cast<double>(ctx.circuit_size)
+          * static_cast<double>(cc.getNbGates())
           * pow2_clamped(td.getTreewidth());
         if(real_cost > ctx.cost_budget)
           throw CircuitException(
             "tree-decomposition: discovered treewidth exceeds the budget");
       }
-      dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
+      dDNNF dd = dDNNFTreeDecompositionBuilder{cc, g, td}.build();
       ctx.actual_method = "tree-decomposition";
       return dd;
     } catch(TreeDecompositionException &) {
@@ -1306,7 +1307,18 @@ public:
       throw CircuitException("tree-decomposition: treewidth above the bound");
     }
   }
+  dDNNF buildDD(EvalContext &ctx) const override {
+    return buildOn(ctx.c, ctx.gate, ctx);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    if(provsql_canonical_cache && canonicalCacheEligible(ctx.c, ctx.gate)) {
+      ctx.actual_method = "tree-decomposition";
+      return canonicalCachedProbability(
+        ctx.c, ctx.gate,
+        [&ctx](const BooleanCircuit &cc, gate_t g) {
+        return buildOn(cc, g, ctx);
+      });
+    }
     return buildDD(ctx).probabilityEvaluation();
   }
 };
@@ -1332,7 +1344,7 @@ public:
     const double s = static_cast<double>(ctx.circuit_size);
     return std::max(kCostCompilationFloor, kCostCompilation * s * std::sqrt(s));
   }
-  dDNNF buildDD(EvalContext &ctx) const override {
+  static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
     // On a chooser path (exact / relative / additive) ctx.args carries the
     // path's TOLERANCE string (epsilon=...,delta=...), not a compiler name, so
     // auto-select the compiler.  Only a by-name 'compilation' call passes an
@@ -1343,13 +1355,24 @@ public:
     const std::string compiler =
       ctx.explicitly_named ? ctx.args : std::string();
     std::string used;
-    dDNNF dd = ctx.c.compilation(ctx.gate, compiler, &used);
+    dDNNF dd = cc.compilation(g, compiler, &used);
     // Report WHICH compiler ran (e.g. "compilation:d4"), not just "compilation":
     // on a chooser path the tool is auto-selected, so the bare label hid it.
     ctx.actual_method = used.empty() ? "compilation" : "compilation:" + used;
     return dd;
   }
+  dDNNF buildDD(EvalContext &ctx) const override {
+    return buildOn(ctx.c, ctx.gate, ctx);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    if(provsql_canonical_cache && canonicalCacheEligible(ctx.c, ctx.gate)) {
+      ctx.actual_method = "compilation";
+      return canonicalCachedProbability(
+        ctx.c, ctx.gate,
+        [&ctx](const BooleanCircuit &cc, gate_t g) {
+        return buildOn(cc, g, ctx);
+      });
+    }
     return buildDD(ctx).probabilityEvaluation();
   }
 };
