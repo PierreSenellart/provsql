@@ -391,7 +391,8 @@ Currently Supported Methods
        bound, which under-costs; the min-fill build then discovers the *exact*
        treewidth, so before the ``2^w`` d-DNNF step the method recomputes the
        real cost and -- if it exceeds the next-best method's (``cost_budget``) --
-       throws so the chooser escalates (the ``MAX_TREEWIDTH`` cap remains the hard
+       throws so the chooser re-ranks it at that cost, keeping it for a later
+       attempt under a larger budget (the ``MAX_TREEWIDTH`` cap remains the hard
        ceiling).  By-name calls run unbounded.
    * - ``"d-tree"``
      - The Olteanu-Huang-Koch anytime interval-bounds engine
@@ -424,9 +425,10 @@ Currently Supported Methods
        (``EvalContext::cost_budget`` → a count via ``kCostDTreeMsPerStepDnf``
        on the clause path, ``kCostDTreeMsPerStepGeneral`` on the general
        recursion); a
-       counter in the recursion throws ``"cost budget exceeded"`` on overrun and
-       the chooser's ``catch`` escalates -- bounding wasted work at ~the safe
-       fallback's cost (deterministic, so selection is reproducible).  The debug
+       counter in the recursion throws ``"cost budget exceeded"`` on overrun, and
+       the chooser re-ranks it at twice that budget -- keeping the work wasted on
+       it within a constant factor of what it finally spends (deterministic, so
+       selection is reproducible).  The debug
        GUC ``provsql.dtree_max_subproblems`` adds a hard cap.
    * - ``"compilation"``
      - :cfunc:`BooleanCircuit::compilation` -- invokes the registered

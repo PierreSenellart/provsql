@@ -240,5 +240,28 @@ SHOW provsql.last_eval_method;
 
 DROP TABLE lem_reach;
 
+-- tree-decomposition giving up under a tight budget is re-priced at the width it
+-- discovered, not dropped: on this 160-cycle (degeneracy 2, min-fill width 3) it
+-- still beats d-tree, which overruns, and the external compiler.
+CREATE TABLE lem_cycle(id int);
+INSERT INTO lem_cycle SELECT generate_series(1,160);
+SELECT add_provenance('lem_cycle');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.02) FROM lem_cycle; END $$;
+SET provsql.provenance = 'semiring';
+SET provsql.active = off;
+SET provsql.last_eval_method = '';
+DO $$
+DECLARE v uuid[]; cl uuid[] := ARRAY[]::uuid[];
+BEGIN
+  SELECT array_agg(provsql::uuid ORDER BY id) INTO v FROM lem_cycle;
+  FOR i IN 1..160 LOOP cl := cl || provenance_times(v[i], v[1+(i%160)]); END LOOP;
+  PERFORM probability_evaluate(provenance_plus(cl), 'relative', 'epsilon=0.1,delta=0.05');
+END $$;
+SHOW provsql.last_eval_method;
+RESET provsql.active;
+RESET provsql.provenance;
+SELECT remove_provenance('lem_cycle');
+DROP TABLE lem_cycle;
+
 SELECT remove_provenance('lem');
 DROP TABLE lem;

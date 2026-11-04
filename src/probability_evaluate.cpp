@@ -771,6 +771,14 @@ static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
 
 namespace provsql {
 
+/// Thrown by a method that gave up under its budget but learned a tighter cost
+/// estimate: the chooser keeps the method, now priced by that estimate, rather
+/// than dropping it, since it may still be cheaper than what remains.
+class MethodRepricedException : public CircuitException {
+public:
+  using CircuitException::CircuitException;
+};
+
 /// Sanity bound on the reachable-input count for the auto-chosen 2^N
 /// possible-worlds enumeration: above it the method drops out of the portfolio
 /// so it is never *attempted* (its 2^N cost already deprioritises it, but this
@@ -894,9 +902,10 @@ struct EvalContext {
   size_t circuit_size = 0;          ///< gate count S, the circuit-size parameter (O(1))
   /// Speculative-execution budget: the estimated cost (in the chooser's ms-ish
   /// units) of the next-cheapest admissible method.  A budget-aware method
-  /// (currently the d-tree) runs until its own work exceeds this and then throws,
-  /// so the chooser drops it and escalates -- bounding wasted work at ~the cost
-  /// of the safe fallback.  Infinity = no budget (the method is the last resort,
+  /// (the d-tree, tree-decomposition) stops once its own work would exceed this
+  /// and throws @c MethodRepricedException, so the chooser re-ranks it at a higher
+  /// cost and tries the next method -- keeping wasted work within a constant
+  /// factor of what the method finally spends.  Infinity = no budget (the method is the last resort,
   /// or budgeting is off).
   double cost_budget = std::numeric_limits<double>::infinity();
   /// Cost of an evaluation outside this Boolean view (sampling the equation
@@ -933,6 +942,8 @@ struct EvalContext {
   // computed once when the chooser is about to consider tree-decomposition.
   mutable bool tw_computed_ = false;
   mutable unsigned tw_proxy_ = 0;
+  /// Lower bound on the d-tree's cost, raised each time it overruns a budget.
+  double dtree_cost_floor_ = 0.;
   mutable unsigned tw_max_degree_ = 0;
 
   void ensureTreewidthProxy() const {
@@ -1265,13 +1276,13 @@ public:
            * pow2_clamped(ctx.tw_proxy_);
   }
   dDNNF buildDD(EvalContext &ctx) const override {
+    unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
     try {
       // On the chooser's path, the cost is bounded by the next-best method's:
       // stop the min-fill build as soon as a bag shows the width it would take
       // to exceed it (the degeneracy proxy that priced the method is only a
       // lower bound, and the build of a large circuit is slow).  A by-name call
       // keeps the full MAX_TREEWIDTH bound.
-      unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
       if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
         const double ratio = ctx.cost_budget
           / (kCostTreeDecomp * static_cast<double>(ctx.circuit_size));
@@ -1284,16 +1295,19 @@ public:
       // EXACT treewidth, where the cost estimate above used only the degeneracy
       // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
       // build, recompute the real cost from the discovered width; if it exceeds
-      // the next-best method's cost, bail so the chooser escalates -- the
-      // build's own MAX_TREEWIDTH cap is the hard ceiling, this is the
-      // competitive refinement.  A by-name call runs unbounded.
+      // the next-best method's cost, bail so the chooser re-ranks the method at
+      // that cost -- the build's own MAX_TREEWIDTH cap is the hard ceiling, this
+      // is the competitive refinement.  A by-name call runs unbounded.
       if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
         const double real_cost = kCostTreeDecomp
           * static_cast<double>(ctx.circuit_size)
           * pow2_clamped(td.getTreewidth());
-        if(real_cost > ctx.cost_budget)
-          throw CircuitException(
+        if(real_cost > ctx.cost_budget) {
+          ctx.tw_proxy_ = std::max(ctx.tw_proxy_,
+                                   static_cast<unsigned>(td.getTreewidth()));
+          throw MethodRepricedException(
             "tree-decomposition: discovered treewidth exceeds the budget");
+        }
       }
       dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
       ctx.actual_method = "tree-decomposition";
@@ -1302,8 +1316,13 @@ public:
       if(ctx.explicitly_named)
         provsql_error("Treewidth greater than %u",
                       TreeDecomposition::MAX_TREEWIDTH);
-      // Default chain: fall through to the compilation terminal.
-      throw CircuitException("tree-decomposition: treewidth above the bound");
+      // Chooser: the build needs a width above the cap, which raises the bound
+      // that prices the method.  It competes again at that price, and drops out
+      // of the portfolio through applicable() once above MAX_TREEWIDTH.  Each
+      // retry raises the bound, so this terminates.
+      ctx.tw_proxy_ = std::max(ctx.tw_proxy_, width_cap + 1);
+      throw MethodRepricedException(
+        "tree-decomposition: treewidth above the bound");
     }
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
@@ -1578,7 +1597,8 @@ public:
       // The general (non-DNF) path first computes every gate's footprint.
       const double footprint = ctx.dnf_ok_ ? 0.
         : kCostDTreeFootprint * S * static_cast<double>(ctx.n_inputs);
-      return kCostDTreeApprox * S / tol.epsilon + footprint;
+      return std::max(ctx.dtree_cost_floor_,
+                      kCostDTreeApprox * S / tol.epsilon + footprint);
     }
     // Exact: memoised Shannon compilation, ~S*m.  Pessimistic vs tree-
     // decomposition (tighter constant) on low treewidth, so it is picked for
@@ -1592,7 +1612,7 @@ public:
       return std::numeric_limits<double>::infinity();
     const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
                                          ? ctx.dnf_num_clauses_ : 1);
-    return kCostDTreeExact * S * m;
+    return std::max(ctx.dtree_cost_floor_, kCostDTreeExact * S * m);
   }
   double evaluate(EvalContext &ctx, const Tolerance &tol) const override {
     // Monotone-DNF circuits take the optimised clause path; everything else
@@ -1641,7 +1661,7 @@ public:
 
     // Speculative-execution budget: convert the chooser's ms budget (the
     // next-best method's cost) into a subproblem cap, so the d-tree bails (throws,
-    // chooser escalates) rather than blowing up on a high-treewidth circuit its
+    // chooser re-ranks it) rather than blowing up on a high-treewidth circuit its
     // cheap-feature cost estimate mis-rated.  An explicit by-name call runs
     // unbounded (it is the user's deliberate choice, with no chooser fallback);
     // the debug GUC provsql.dtree_max_subproblems imposes an extra hard cap.
@@ -1666,11 +1686,22 @@ public:
       budget_ms = std::max(50., 10. * ctx.cost_budget);
 
     unsigned long steps = 0;
-    provsql::DTreeInterval iv = is_dnf
-      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width, budget_steps,
-                             &steps, budget_ms)
-      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width, budget_steps,
-                                    &steps, budget_ms);
+    provsql::DTreeInterval iv;
+    try {
+      iv = is_dnf
+        ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width, budget_steps,
+                               &steps, budget_ms)
+        : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width, budget_steps,
+                                      &steps, budget_ms);
+    } catch(CircuitException &e) {
+      // Overran the budget: compete again at twice that, so the work wasted on
+      // this method stays within a constant factor of what it finally spends.
+      if(ctx.explicitly_named || !std::isfinite(ctx.cost_budget)
+         || provsql_interrupted)
+        throw;
+      ctx.dtree_cost_floor_ = 2. * ctx.cost_budget;
+      throw MethodRepricedException(e.what());
+    }
     if(provsql_verbose >= 50)
       provsql_notice("calibrate kind=dtree path=%s S=%zu N=%zu steps=%lu budget=%lu",
                      is_dnf ? "dnf" : "circuit", ctx.circuit_size, ctx.n_inputs,
@@ -1812,7 +1843,9 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
   // to compute features (dnfShape, later a treewidth proxy) that could not have
   // changed the decision.  A method that throws when attempted is dropped (its
   // implicit feature -- e.g. 'independent' learning the circuit is not
-  // independent); the last such error propagates if the portfolio is exhausted.
+  // independent), unless it throws MethodRepricedException, which keeps it at
+  // its new estimate; the last such error propagates if the portfolio is
+  // exhausted.
   std::set<Feature> acquired;
   std::string last_error;
   bool have_last_error = false;
@@ -1882,6 +1915,11 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
           return r;
         }
         return run(best);
+      } catch(MethodRepricedException &e) {
+        if(provsql_interrupted)
+          throw;
+        last_error = e.what();
+        have_last_error = true;
       } catch(CircuitException &e) {
         if(provsql_interrupted)
           throw;  // a cancel / timeout -- do not silently try another method
