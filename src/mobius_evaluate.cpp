@@ -832,9 +832,9 @@ private:
     Datum res = OidFunctionCall1(isAnd ? times_oid : plus_oid,
                                  PointerGetDatum(arr));
     /* Data-cost cap: the lifted-inference recursion is O(|D|^k), so bound the
-     * total work and decline (-> joint-width / the ladder) past the cap rather
-     * than let a high-level safe query on large data out-cost the general
-     * pipeline.  0 disables the cap. */
+     * total work and decline (-> joint-width / the cost-based chooser) past the
+     * cap rather than let a high-level safe query on large data out-cost the
+     * general pipeline.  0 disables the cap. */
     ++st.dd_size;
     if(provsql_mobius_max_gates > 0 &&
        static_cast<long>(st.dd_size) > static_cast<long>(provsql_mobius_max_gates))

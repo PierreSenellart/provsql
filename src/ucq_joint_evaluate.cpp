@@ -251,7 +251,7 @@ void decodeQuery(FunctionCallInfo fcinfo, UCQ &ucq)
  * becomes a left-deep binary tree).  @c gate_monus(one, x) is the
  * Boolean @c NOT x; constants fold; @c gate_mulinput / @c gate_mixture
  * and other non-Boolean gate types are rejected (the caller falls back
- * to the ladder).
+ * to the default cost-based probability evaluation).
  *
  * The returned per-node code is @c -2 for constant true, @c -1 for
  * constant false, and otherwise the slice index.

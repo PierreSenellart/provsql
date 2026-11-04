@@ -9,7 +9,7 @@ SET provsql.provenance = 'boolean';
 -- the circuit slice from the real provenance tokens; the width columns come
 -- from ucq_joint_compile_stats_tracked and the materialised d-D from
 -- ucq_joint_materialize_tracked, each cross-checked against ProvSQL's own
--- ladder (probability_evaluate) on the same instance (the thesis §7.3
+-- chooser (probability_evaluate) on the same instance (the thesis §7.3
 -- correlated oracle).
 
 CREATE TABLE base(k int);
@@ -34,7 +34,7 @@ SELECT round((SELECT probability FROM ucq_joint_compile_stats_tracked(
   ARRAY[(SELECT provsql FROM r),(SELECT provsql FROM s),
         (SELECT provsql FROM t)]))::numeric, 6) AS h0_correlated;
 
--- Ladder oracle: the real provenance of the H0 join, evaluated by
+-- Chooser oracle: the real provenance of the H0 join, evaluated by
 -- probability_evaluate.  Must agree.
 CREATE TABLE h0 AS SELECT r.x, t.y FROM r, s, t
   WHERE r.x=s.x AND s.y=t.y;
@@ -105,7 +105,7 @@ SELECT round((SELECT probability FROM ucq_joint_compile_stats_tracked(
         (SELECT provsql FROM detection_n2 WHERE bbox_key='3' AND species_id=3)]
   ))::numeric, 6) AS bid_h0;
 
--- Ladder oracle on the native BID circuit (joint_width off): the
+-- Chooser oracle on the native BID circuit (joint_width off): the
 -- hand-computed 0.728 -- the joint-width answer must agree.
 SET provsql.joint_width = off;
 CREATE TABLE bid_h0 AS SELECT provenance() tok
@@ -144,7 +144,7 @@ SELECT round(probability_evaluate((SELECT tok FROM bid_h0_on), 'independent')::n
 --   x=5 : R(5)=e3, S(5,7)=e3, T(7)=e3 (all THREE share e3)
 --         -> P = P(e3) = 0.5
 -- The shared events make neither answer an independent product; the answer
--- set is cross-checked against the standard ladder evaluated per group.
+-- set is cross-checked against the default chooser evaluated per group.
 CREATE TABLE base2(k int);
 SELECT add_provenance('base2');
 INSERT INTO base2 VALUES (0),(1),(2),(3);
@@ -163,7 +163,7 @@ CREATE TABLE t3 AS
 -- Per-answer over CORRELATED inputs through the TRANSPARENT route: the flat
 -- GROUP BY query under provsql.joint_width = on substitutes the head-pinned
 -- joint-width provenance (one gather + one single-DP sweep materialising all
--- answers); off is the exact ladder.  Two answers, both correlated:
+-- answers); off is the exact chooser.  Two answers, both correlated:
 --   x=0 : R(0)=e0&e1, S(0,2)=e0 (e0 SHARED with R(0)), T(2)=e2 -> 0.5^3 = 0.125
 --   x=5 : R(5)=e3, S(5,7)=e3, T(7)=e3 (all THREE share e3) -> P(e3) = 0.5
 -- The shared events make neither answer an independent product.

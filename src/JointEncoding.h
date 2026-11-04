@@ -40,7 +40,8 @@
  *
  * Raised on unsupported input shapes (a @c gate_input token shared by
  * facts over different element tuples, an unsupported gate type in a
- * circuit slice) so the SQL layer can fall back to the standard ladder.
+ * circuit slice) so the SQL layer can fall back to the default cost-based
+ * probability evaluation.
  * Joint width above the configured bound surfaces as the usual
  * @c TreeDecompositionException instead.
  */

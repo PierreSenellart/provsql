@@ -120,8 +120,9 @@ static constexpr std::size_t DEFAULT_MAX_STATES = 1u << 16;
  *
  * @param enc            The joint encoding (facts, events, joint graph).
  * @param ucq            The Boolean UCQ.
- * @param max_treewidth  Reject (fall through to the ladder) when the
- *                       joint width exceeds this.
+ * @param max_treewidth  Reject (fall through to the default cost-based
+ *                       probability evaluation) when the joint width
+ *                       exceeds this.
  * @param max_states     Bound on the DP state count per node.
  * @return               The compiled d-D and statistics.
  * @throws TreeDecompositionException  if the joint width exceeds

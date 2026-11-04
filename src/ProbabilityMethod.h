@@ -7,9 +7,9 @@
  * instead of that knowledge being smeared across a string-switch dispatcher.
  * The @c MethodCatalog is the registry the dispatcher in
  * @c probability_evaluate.cpp consults: a named request resolves through
- * @c byName(); the default (empty-method) request runs @c chooseAndRun(), which
- * runs the independent -> inversion-free -> compilation ladder
- * as the @c Exact-tolerance instance of the chooser.
+ * @c byName(); the default (empty-method) request runs @c chooseAndRun(), the
+ * cost-based chooser, as its @c Exact-tolerance instance: a uniform-cost search
+ * over the default-chain methods that the tolerance admits.
  *
  * This header carries only the public interface.  The concrete method classes,
  * the @c EvalContext that threads the per-evaluation circuit state, and the
@@ -85,8 +85,8 @@ struct EvalContext;
  * @brief Strategy interface: one concrete subclass per probability method.
  *
  * @c evaluate throws @c CircuitException when the method cannot be applied to
- * the circuit; @c chooseAndRun relies on that to fall through the default
- * ladder, while @c byName lets it propagate (an explicitly named method
+ * the circuit; @c chooseAndRun relies on that to move on to the next-cheapest
+ * method, while @c byName lets it propagate (an explicitly named method
  * reports the failure instead of silently falling back).
  */
 class ProbabilityMethod {

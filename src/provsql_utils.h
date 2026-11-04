@@ -601,8 +601,8 @@ extern int provsql_dtree_max_subproblems;
 
 /* Joint-width UCQ compiler (see UCQJointCompiler.h): the maximum joint
  * treewidth attempted before the path declines (the SQL layer then falls
- * back to the standard ladder).  Default = TreeDecomposition::MAX_TREEWIDTH
- * (10). */
+ * back to the default cost-based probability evaluation).  Default =
+ * TreeDecomposition::MAX_TREEWIDTH (10). */
 extern int provsql_joint_max_treewidth;
 
 /* Joint-width UCQ compiler: the per-bag DP state-count cap, the true safety

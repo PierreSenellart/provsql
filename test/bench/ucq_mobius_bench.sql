@@ -31,8 +31,8 @@
 --     into COMPILE (build the lineage islands) and EVAL (the signed sweep);
 --   * the literal route (provsql.mobius = off, provsql.joint_width = off):
 --     provenance() reverts to the plain circuit and probability_evaluate
---     falls back to the general ladder (tree-decomposition / compilation /
---     possible-worlds).
+--     falls back to the general cost-based chooser (tree-decomposition /
+--     compilation / possible-worlds).
 -- The literal route is attempted only up to LITERAL_CAP below: measured on
 -- this machine it finishes at N=2 (12 S-tuples, agreeing with Möbius to the
 -- last digit) and already exceeds a 20 s timeout at N=3 (27 S-tuples).  Past
@@ -99,7 +99,7 @@ $$ LANGUAGE plpgsql;
 
 -- One benchmark row.  Build the q9 existence provenance with Möbius on
 -- (split compile vs eval), then -- only if n <= literal_cap -- build the
--- plain circuit and time the general ladder on it.
+-- plain circuit and time the general cost-based chooser on it.
 CREATE OR REPLACE FUNCTION mobius_bench_row(n int, literal_cap int,
                                             p float8 DEFAULT 0.1)
 RETURNS TABLE(n_dom int, n_s_tuples bigint, gate text,
@@ -131,7 +131,7 @@ BEGIN
   mobius_prob := round(probability_evaluate(mtok)::numeric, 6);
   mobius_eval_ms := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
 
-  -- (2) Literal circuit + general ladder, only where it is known to finish.
+  -- (2) Literal circuit + general chooser, only where it is known to finish.
   IF n <= literal_cap THEN
     PERFORM set_config('provsql.active', 'on', true);
     PERFORM set_config('provsql.mobius', 'off', true);

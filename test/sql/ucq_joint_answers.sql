@@ -37,7 +37,7 @@ END $$ LANGUAGE plpgsql;
 -- single-DP sweep.  Cross-checked against ProvSQL's standard per-answer
 -- evaluation (joint_width off) where that terminates, and against the
 -- closed form on the almost-safe shape whose per-answer lineage is the
--- QxW biclique the standard ladder cannot tree-decompose.
+-- QxW biclique the default cost-based chooser cannot tree-decompose.
 
 -- ---------------------------------------------------------------------
 -- (1) H0 per source: q(x) :- R(x), S(x,y), T(y).  Cross-check against the
@@ -63,7 +63,7 @@ CREATE TEMP TABLE h0_std AS
     FROM (SELECT jr.x FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q
    GROUP BY x;
 
--- h0_std (the standard per-x ladder) is the oracle the transparent route
+-- h0_std (the default per-x evaluation) is the oracle the transparent route
 -- (section 4) cross-checks against.
 
 -- ---------------------------------------------------------------------
@@ -320,7 +320,7 @@ SELECT o.x, o.y, (o.tok = f.tok) AS same_as_standard
 --      descriptor (relations merged across the arms) and the transparent
 --      substitution evaluates the union with the joint-width compiler --
 --      the "U" in UCQ exercised end to end.  Cross-checked against the
---      standard ladder on the same instance (diff 0), token differs from
+--      default chooser on the same instance (diff 0), token differs from
 --      the joint_width=off run (proves it fired).
 -- ---------------------------------------------------------------------
 SET provsql.active = on;
@@ -344,7 +344,7 @@ SELECT (o.tok <> f.tok) AS joint_width_fired,
 --      the head canonically (head -> variable 0 in every disjunct) so the
 --      Sel-pin forces it across both disjuncts, and the substitution
 --      evaluates the head-pinned UCQ per answer.  Cross-checked per x
---      against the standard ladder (diff 0), token differs (fired).
+--      against the default chooser (diff 0), token differs (fired).
 -- ---------------------------------------------------------------------
 SET provsql.active = on;
 SET provsql.joint_width = on;
@@ -369,7 +369,7 @@ SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
 --      join-only schema the pin collapses H0 to a query hierarchical in x,
 --      which the safe-query route claims under the 'boolean' class, so
 --      joint-width correctly DEFERS to it; the value still cross-checks against
---      the ladder.  (A constant on a non-join column -- e.g. cs7's
+--      the chooser.  (A constant on a non-join column -- e.g. cs7's
 --      b.paper='p1' -- keeps H0 #P-hard and lets joint-width fire with its
 --      rel_where pushdown.)
 -- ---------------------------------------------------------------------
@@ -424,7 +424,7 @@ SELECT e.x, e.k, (e.tok <> o.tok) AS joint_width_fired,
 --      deparsed, and pushed into that relation's gather scan -- the
 --      relation/join/group structure is all the joint-width engine sees.
 --      Inequality, IN, and a single-relation OR over the per-answer H0
---      (grouped by jr.x) all fire and agree with the ladder per answer.
+--      (grouped by jr.x) all fire and agree with the chooser per answer.
 --      (A self-join with disjoint constant filters yields two filtered
 --      scans of the same relation; covered in the prefilter bench sweep.)
 -- ---------------------------------------------------------------------
@@ -459,7 +459,7 @@ SET provsql.active = off;
 --      = R(x), S(x,y), T(y) asked as "does any witness exist?".  DISTINCT
 --      lowers to GROUP BY <const>, which is one group (the existence), not
 --      a per-answer head -- the recogniser must read it as Boolean and
---      fire build_joint_width_provenance_expr.  Cross-check vs the ladder.
+--      fire build_joint_width_provenance_expr.  Cross-check vs the chooser.
 -- ---------------------------------------------------------------------
 SET provsql.active = on;
 SET provsql.joint_width = on;
@@ -479,9 +479,9 @@ SELECT (o.tok <> f.tok) AS joint_width_fired,
 -- (16) The width screen (the cheap tw prepass): the joint compiler runs a
 --      degeneracy lower bound on the joint graph before the expensive
 --      decomposition + DP, and throws (-> the SQL layer falls back to the
---      ladder) when it exceeds provsql.joint_max_treewidth.  A 6-cycle has
+--      chooser) when it exceeds provsql.joint_max_treewidth.  A 6-cycle has
 --      joint treewidth 2: at the default bound it fires; with the bound set
---      to 1 the screen declines and the query is answered by the ladder --
+--      to 1 the screen declines and the query is answered by the chooser --
 --      same probability either way (the screen is a sound dispatch gate,
 --      not an approximation).  [The provsql.joint_max_states cap is the
 --      second net, during the DP; not toggled here.]
@@ -492,7 +492,7 @@ SELECT add_provenance('jcyc');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM jcyc; END $$;
 SET provsql.active = on;
 SET provsql.joint_width = on;
--- Isolate the joint width screen's ladder fallback.  Möbius is off for the
+-- Isolate the joint width screen's chooser fallback.  Möbius is off for the
 -- whole file (it would otherwise catch the tw=1 decline AND the joint_width=off
 -- token below with a gate_mobius of the same probability -- the two routes are
 -- independent, so disabling joint-width alone no longer disables Möbius); the

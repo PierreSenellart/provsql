@@ -755,7 +755,7 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
 // Probability-method catalog (see ProbabilityMethod.h).
 //
 // Each dispatch branch is a ProbabilityMethod object: chooseAndRun runs the
-// independent -> inversion-free -> compilation default ladder, and
+// cost-based chooser over the default-chain methods, and
 // byName runs each explicit method.  The RV+monte-carlo special case and
 // every probability-side pre-pass stay in probability_evaluate_internal.
 // ---------------------------------------------------------------------------
@@ -1032,7 +1032,7 @@ provsql_route rootRoute(const GenericCircuit *gc, gate_t root)
 }
 
 /// Exact, decomposition of disconnected circuits.  Throws when the circuit is
-/// not independent, which the default ladder catches to fall through.
+/// not independent, which the chooser catches to move on to the next method.
 class IndependentMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "independent"; }
@@ -1126,7 +1126,7 @@ public:
            * (static_cast<double>(ctx.circuit_size) + N * std::log2(N < 2 ? 2. : N));
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    // In the default ladder: only when the certificate is present and the
+    // In the default chain: only when the certificate is present and the
     // kill-switch is on.  byName ignores applicable() and enforces the explicit
     // rules (hard errors) in evaluate().
     return ctx.inv_free_cert && provsql_inversion_free;
@@ -1143,7 +1143,7 @@ public:
       if(ctx.explicitly_named)
         provsql_error("method 'inversion-free': the provenance root carries a "
                       "certificate but its inputs lack per-input order markers");
-      // Default-ladder mode: fall through to the next method.
+      // Chooser mode: fall through to the next method.
       throw CircuitException("inversion-free: inputs lack per-input order "
                              "markers");
     }

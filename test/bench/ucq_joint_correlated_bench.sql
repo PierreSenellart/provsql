@@ -33,9 +33,10 @@
 --      instance tractable up front and the compiler is linear in the data
 --      for bounded joint width.
 --
--- The joint-width answer is cross-checked against ProvSQL's own ladder on
--- the NATIVE correlated circuit (built with provsql.joint_width = off so
--- the ladder, not joint-width, evaluates it); the two must agree to 1e-9.
+-- The joint-width answer is cross-checked against ProvSQL's own default
+-- probability evaluation on the NATIVE correlated circuit (built with
+-- provsql.joint_width = off so the cost-based chooser, not joint-width,
+-- evaluates it); the two must agree to 1e-9.
 --
 -- Run :
 --   createdb ucqbench && psql ucqbench -X -f test/bench/ucq_joint_correlated_bench.sql
@@ -74,10 +75,10 @@ BEGIN
   EXECUTE 'CREATE TABLE s AS SELECT a.k AS x, b.k AS y FROM base a JOIN base b ON b.k = a.k + 1';
   EXECUTE 'CREATE TABLE t AS SELECT k AS y FROM base';
 
-  -- Ladder oracle on the NATIVE correlated circuit (joint_width off so the
-  -- ladder -- not the joint-width substitution -- evaluates it).  The ladder
-  -- does NOT scale on the large chain, so the cross-check runs only on the
-  -- small sizes; that the ladder cannot reach the big sizes joint-width
+  -- Chooser oracle on the NATIVE correlated circuit (joint_width off so the
+  -- cost-based chooser -- not the joint-width substitution -- evaluates it).
+  -- The chooser does NOT scale on the large chain, so the cross-check runs only
+  -- on the small sizes; that the chooser cannot reach the big sizes joint-width
   -- handles in milliseconds is itself the point.
   IF n <= 512 THEN
     SET provsql.joint_width = off;
@@ -91,7 +92,7 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN lifted := 'independent DECLINES (correlated)'; END;
     SET provsql.joint_width = on;
   ELSE
-    p_ladder := NULL;   -- ladder oracle does not scale; joint-width does
+    p_ladder := NULL;   -- chooser oracle does not scale; joint-width does
     lifted := 'ladder too slow at this size';
   END IF;
 
