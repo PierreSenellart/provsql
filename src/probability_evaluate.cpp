@@ -1918,8 +1918,13 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
       } catch(MethodRepricedException &e) {
         if(provsql_interrupted)
           throw;
-        last_error = e.what();
-        have_last_error = true;
+        // The method stays in the running, so this is not its verdict: keep what
+        // a dropped method reported, e.g., that no knowledge compiler is
+        // installed, which is what the user can act on.
+        if(!have_last_error) {
+          last_error = e.what();
+          have_last_error = true;
+        }
       } catch(CircuitException &e) {
         if(provsql_interrupted)
           throw;  // a cancel / timeout -- do not silently try another method
