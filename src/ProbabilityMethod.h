@@ -45,9 +45,9 @@ namespace provsql {
  * confidence @c 1-delta; @c Additive promises @c |p̂-p| <= epsilon with the same
  * confidence.  Admissible method sets nest @c Exact ⊂ @c Relative ⊂ @c Additive.
  *
- * The tolerance is recorded but does not by itself drive method selection:
- * named methods dispatch by name and the empty method set runs the exact
- * ladder.
+ * The tolerance drives method selection on the auto-chooser's path: only the
+ * methods whose guarantee is at least as tight as the request are admissible,
+ * and their estimated costs may depend on it.  Named methods dispatch by name.
  */
 enum class ToleranceKind { Exact, Relative, Additive };
 

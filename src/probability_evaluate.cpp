@@ -787,8 +787,8 @@ static const size_t kSieveSanityMaxClauses = 24;
 // ---------------------------------------------------------------------------
 // Cost-function constants.  Each method's / feature's estimatedCost models its
 // actual asymptotic complexity (see doc / the complexity table) times one of
-// these constants -- ARBITRARY placeholders for now, to be replaced by measured
-// values in the calibration pass.  Parameters (all O(1) on the EvalContext):
+// these constants, calibrated as described below.  Parameters (all O(1) on the
+// EvalContext):
 // S = circuit_size (gates), N = n_inputs, m = dnf_num_clauses_, w = tw_proxy_,
 // Delta = tw_max_degree_.  Constraints the values must keep (so the lazy chooser
 // stays correct): a cheap method must be tried before acquiring the feature that
