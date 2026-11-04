@@ -194,7 +194,7 @@ std::unordered_map<gate_t, std::string> id2name;  ///< Gate index → other name
 /** @brief What gate @p g is named by. */
 unsigned char nameKind(gate_t g) const {
   const auto i = static_cast<std::underlying_type<gate_t>::type>(g);
-  return i < name_kind.size() ? name_kind[i] : NO_NAME;
+  return i < name_kind.size() ? name_kind[i] : static_cast<unsigned char>(NO_NAME);
 }
 
 /** @brief Name gate @p g by the UUID @p u. */
