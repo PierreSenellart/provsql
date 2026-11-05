@@ -117,7 +117,7 @@ double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
  *        probabilistic-database model.
  *
  * Tries @c BooleanCircuit::independentEvaluation first; if that throws
- * (e.g. the subcircuit is not disconnected for that method), falls
+ * (e.g. the subcircuit is not read-once), falls
  * back to Monte Carlo with @c provsql.rv_mc_samples samples.  Used by
  * the mixture moment evaluators for compound Boolean Bernoulli wires.
  */

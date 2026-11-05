@@ -28,9 +28,10 @@
 
 // d-DNNF artifact (defined in dDNNF.h). The d-D-producing methods can return it
 // via buildDD(), and the catalog's chooseAndBuildDD / makeDDAuto cost-select a
-// construction route and return the artifact for makeDD's callers (shapley,
-// compile_to_ddnnf, ddnnf_stats) -- the same selection the probability chooser
-// already makes among interpret-as-dd / tree-decomposition / compilation.
+// construction route and return the artifact for the default request of shapley
+// and banzhaf -- the same selection the probability chooser already makes among
+// interpret-as-dd / tree-decomposition / compilation.  compile_to_ddnnf and
+// ddnnf_stats keep the external-compilation default, through makeDDByName.
 class dDNNF;
 class BooleanCircuit;
 class GenericCircuit;
@@ -63,10 +64,11 @@ struct Tolerance {
  *
  * Acquiring a feature has a cost (modelled by @c EvalContext::featureCost), and
  * the chooser acquires one lazily only when no already-known method is cheaper
- * than acquiring it -- so a circuit the cheap methods resolve (read-once via
- * @c independent, certified via @c inversion-free) never pays for analysis that
- * could not change the decision.  Free/O(1) features (\#inputs, an inversion-free
- * certificate) are not modelled here -- they are read eagerly.
+ * than acquiring it -- so a feature costing more than the cheapest ready method
+ * is never computed: a read-once circuit runs @c independent without
+ * @c TreewidthProxy.  @c DnfShape costs less than @c independent, so it is
+ * computed first.  Free/O(1) features (\#inputs, an inversion-free certificate)
+ * are not modelled here -- they are read eagerly.
  *
  * @c DnfShape is a linear @c dnfShape walk.  @c TreewidthProxy is a cheap
  * (@c O(V+E)) degeneracy lower bound on the circuit's treewidth that gates
@@ -142,9 +144,10 @@ public:
   /// (@c EvalContext::ensureMultivaluedRewritten) before every method that
   /// returns @c false, so a Boolean-only method needs no per-@c evaluate rewrite
   /// of its own and a new one is BID-correct by default.  Only @c "independent"
-  /// overrides this: it interprets a @c mulinput block natively (summing the
-  /// mutually-exclusive alternatives) to keep the exact disjoint-OR structure
-  /// the rewrite would dissolve.  (Methods gated to TID-only circuits -- the
+  /// and the three route methods, which run the same sweep, override this: they
+  /// interpret a @c mulinput block natively (summing the mutually-exclusive
+  /// alternatives) to keep the exact disjoint-OR structure the rewrite would
+  /// dissolve.  (Methods gated to TID-only circuits -- the
   /// DNF samplers via @c Feature::DnfShape, @c inversion-free via its
   /// certificate -- never see a @c mulinput, so the central rewrite is a no-op
   /// for them and they keep the default.)

@@ -11,7 +11,8 @@
  * - @c "monte-carlo": approximate via random sampling (fast, inexact).
  * - @c "weightmc": approximate using the @c weightmc model counter.
  * - @c "tree-decomposition": exact via tree-decomposition-based d-DNNF.
- * - @c "independent": exact evaluation for disconnected circuits.
+ * - @c "independent": exact evaluation for read-once circuits and circuits whose
+ *   sharing is certified.
  * - @c "inversion-free": exact via the structured-d-DNNF builder over the
  *   query-derived order; errors unless the root carries an inversion-free
  *   certificate.  The default method also tries it (after @c "independent")
@@ -783,7 +784,8 @@ public:
 /// possible-worlds enumeration: above it the method drops out of the portfolio
 /// so it is never *attempted* (its 2^N cost already deprioritises it, but this
 /// guards against a catastrophic last-resort attempt if every cheaper method
-/// failed).  The by-name call ignores it (up to possibleWorlds' own 64 limit).
+/// failed).  The by-name call ignores it (possibleWorlds itself refuses 64 or
+/// more reachable inputs).
 /// The actual small-N-vs-compile crossover is a cost comparison, not this bound.
 static const size_t kPossibleWorldsSanityMax = 30;
 
@@ -797,14 +799,14 @@ static const size_t kSieveSanityMaxClauses = 24;
 // actual asymptotic complexity (see doc / the complexity table) times one of
 // these constants, calibrated as described below.  Parameters (all O(1) on the
 // EvalContext):
-// S = circuit_size (gates), N = n_inputs, m = dnf_num_clauses_, w = tw_proxy_,
-// Delta = tw_max_degree_.  Constraints the values must keep (so the lazy chooser
-// stays correct): a cheap method must be tried before acquiring the feature that
-// would only reveal a costlier one, hence
-//   C_independent <= C_dnfShape <= C_twProxy
-// (a read-once circuit runs 'independent' before paying for either feature), and
-// C_compilation > C_possibleWorlds (same 2^N, but compilation is the subprocess
-// last resort).
+// S = circuit_size (gates), N = n_inputs, m = dnf_num_clauses_, w = tw_proxy_.
+// The chooser acquires a feature only when no ready method is cheaper, so the
+// per-gate constants set the order of its first steps:
+//   C_dnfShape <= C_independent <= C_twProxy
+// The DNF-shape walk runs first, then a read-once circuit runs 'independent'
+// without paying for the treewidth proxy.  possible-worlds undercuts
+// 'independent' up to N = 4 (3e-6 * 2^N < 5e-5).  compilation, the subprocess
+// last resort, has the largest constant of the exact methods.
 // Calibrated on this machine so that the value of each cost function is roughly
 // the number of MILLISECONDS the work takes (order-of-magnitude only -- the goal
 // is to know whether a cost is ~1, ~100, ~1e6 ms, not a precise fit).  See the
@@ -817,7 +819,7 @@ static const double kCostSieve           = 1e-5;  // O(S * 2^m): ~1e-5 (rarely o
 // the true treewidth exceeds it (a dense, low-degeneracy circuit can run far
 // slower than predicted).  The constant is calibrated where the proxy is tight
 // (tree-like circuits, where tree-decomposition is the right pick anyway).
-static const double kCostTreeDecomp      = 7e-4;  // O(S * (Delta^2+2^w)): ~7e-4 * f
+static const double kCostTreeDecomp      = 7e-4;  // O(S * 2^w):          ~7e-4 * S*2^w
 // compilation is an external knowledge compiler: a fixed subprocess startup
 // plus a compile that, while it exploits structure on easy shapes (~tens of ms
 // here), can struggle badly on others (the worst case is exponential).  So we do
@@ -1042,8 +1044,9 @@ provsql_route rootRoute(const GenericCircuit *gc, gate_t root)
   }
 }
 
-/// Exact, decomposition of disconnected circuits.  Throws when the circuit is
-/// not independent, which the chooser catches to move on to the next method.
+/// Exact, linear sweep over a read-once circuit or certified d-D islands.  Throws
+/// on an input shared outside what the certificates license, which the chooser
+/// catches to move on to the next method.
 class IndependentMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "independent"; }
@@ -1212,8 +1215,8 @@ public:
 /// decomposable AND), AND as a product, and throws "Not an independent circuit"
 /// on a shared input -- exactly independentEvaluation's computation -- while
 /// also rejecting the multivalued inputs and 0/1 constants that 'independent'
-/// accepts.  Since 'independent' runs first in the chain it always wins, so this
-/// would be dead there.  Kept as an explicit method for parity with the
+/// accepts.  'independent' performs the same computation at the same cost, so this
+/// would be dead in the chain.  Kept as an explicit method for parity with the
 /// dD-artifact surfaces / debugging.
 class InterpretAsDdMethod : public ProbabilityMethod {
 public:
@@ -1437,7 +1440,7 @@ public:
   bool inDefaultChain() const override { return true; }
   bool isDeterministic() const override { return false; } // (eps,delta) sampler
   // Cost / applicability need the DNF-shape feature; the chooser acquires it
-  // (lazily) before calling them, so a read-once circuit never pays the walk.
+  // before calling them.
   std::vector<Feature> requiredFeatures() const override {
     return {Feature::DnfShape};
   }
@@ -1513,7 +1516,7 @@ public:
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
   // Cost / applicability need the DNF-shape feature; the chooser acquires it
-  // (lazily) before calling them, so a read-once circuit never pays the walk.
+  // before calling them.
   std::vector<Feature> requiredFeatures() const override {
     return {Feature::DnfShape};
   }
@@ -1552,13 +1555,12 @@ public:
   }
 };
 
-/// d-tree: deterministic anytime interval bounds for a monotone DNF (Olteanu-
-/// Huang).  Refines the cheap leaf bound by independent-or decomposition and
-/// Shannon expansion until the tolerance is met (exact when run to a zero-width
-/// interval), returning a certified interval -- no failure probability.  Phase
-/// 1: reachable by name only (inDefaultChain() == false), so it does not yet
-/// perturb the calibrated auto-chooser; toleranceAdmits still lets an explicit
-/// 'd-tree' serve the exact, relative and additive paths.
+/// d-tree: deterministic anytime interval bounds for a Boolean circuit (Olteanu-
+/// Huang), with an optimised path for a monotone DNF.  Refines the cheap leaf
+/// bound by independent-or decomposition and Shannon expansion until the tolerance
+/// is met (exact when run to a zero-width interval), returning a certified
+/// interval -- no failure probability.  In the default chain on every path, and
+/// selectable by name.
 class DTreeBoundsMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "d-tree"; }
@@ -1839,13 +1841,13 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
   // Each step either RUNS the cheapest ready method or ACQUIRES the cheapest
   // pending feature -- and we acquire a feature only when no ready method is
   // already cheaper than acquiring it (a feature-gated method then costs at
-  // least that much anyway).  So a circuit the cheap methods resolve never pays
-  // to compute features (dnfShape, later a treewidth proxy) that could not have
-  // changed the decision.  A method that throws when attempted is dropped (its
-  // implicit feature -- e.g. 'independent' learning the circuit is not
-  // independent), unless it throws MethodRepricedException, which keeps it at
-  // its new estimate; the last such error propagates if the portfolio is
-  // exhausted.
+  // least that much anyway).  So a feature costing more than the cheapest ready
+  // method is never computed: 'independent' resolves a read-once circuit without
+  // the treewidth proxy, after the cheaper dnfShape walk.  A method that throws
+  // when attempted is dropped (its implicit feature -- e.g. 'independent'
+  // learning the circuit is not independent), unless it throws
+  // MethodRepricedException, which keeps it at its new estimate; the last such
+  // error propagates if the portfolio is exhausted.
   std::set<Feature> acquired;
   std::string last_error;
   bool have_last_error = false;
@@ -1896,8 +1898,8 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
       // Run the cheapest method: nothing cheaper could be revealed by acquiring
       // a feature first.  A Boolean-only method (handlesMultivalued() == false)
       // gets multivalued / BID blocks rewritten to independent Booleans first;
-      // this is the single, declarative enforcement point (idempotent, and a
-      // no-op on a circuit with no mulinput gates).
+      // booleanSubcircuitProbability applies the same rule to a named method
+      // (idempotent, and a no-op on a circuit with no mulinput gates).
       if(!best->handlesMultivalued())
         ctx.ensureMultivaluedRewritten();
       try {
@@ -2168,7 +2170,7 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
           provsql_error("Wrong method '%s' for probability evaluation",
                         method.c_str());
         // A Boolean-only method named explicitly gets multivalued / BID
-        // blocks rewritten first (same declarative point as chooseAndRun).
+        // blocks rewritten first (same rule as runPortfolio).
         if (!m->handlesMultivalued())
           ctx.ensureMultivaluedRewritten();
         result = m->evaluate(ctx, tol);

@@ -41,7 +41,8 @@ its cost-based chooser over the admissible ones.  Two declarative
 flags shape the dispatch: ``handlesMultivalued()`` (the BID →
 Boolean rewrite of ``gate_mulinput`` blocks is applied centrally
 before any method that does not handle blocks natively -- only
-``independent`` opts out), and ``producesDD()`` / ``buildDD()`` for
+``independent`` and the route methods, which run the same sweep, opt
+out), and ``producesDD()`` / ``buildDD()`` for
 the d-DNNF constructors the makeDD ``auto`` route selects among.
 Two gate types short-circuit the chooser entirely: a
 ``gate_conditioned`` root is evaluated as the conditional
@@ -287,11 +288,11 @@ gluing them into a d-DNNF whose decomposability and determinism
 follow from the bag-cover structure of the decomposition.  The
 worst-case cost is :math:`O(2^{w+1} \cdot |\mathit{circuit}|)`,
 which is why ProvSQL caps the treewidth at
-:cfunc:`TreeDecomposition::MAX_TREEWIDTH` (currently 10) and
-falls back to ``compilation`` with ``d4`` when that bound is
-exceeded.  The two treewidth heuristics ProvSQL relies on -- the
-cheap *degeneracy* lower bound (used for the cost estimate that
-drives the chooser, see below) and the *min-fill* upper bound (the
+:cfunc:`TreeDecomposition::MAX_TREEWIDTH` (currently 10).  Above
+that bound, a by-name call raises an error and the chooser moves on
+to the next-cheapest method.  The two treewidth heuristics ProvSQL
+relies on -- the cheap *degeneracy* lower bound (used for the cost
+estimate that drives the chooser, see below) and the *min-fill* upper bound (the
 elimination ordering that builds the decomposition here) -- are
 chosen following the experimental study of real-world graph
 treewidth of :cite:`DBLP:conf/icdt/ManiuSJ19`.
@@ -325,7 +326,8 @@ Currently Supported Methods
        its rewrite produced (see :ref:`route-reporting` below).
    * - ``"possible-worlds"``
      - :cfunc:`BooleanCircuit::possibleWorlds` -- exact enumeration
-       of all :math:`2^n` worlds; capped at 64 inputs.
+       of all :math:`2^n` worlds.  It refuses 64 or more reachable
+       inputs, and the chooser only considers it up to 30 inputs.
    * - ``"sieve"``
      - :cfunc:`BooleanCircuit::sieve` -- exact inclusion-exclusion
        over a monotone DNF (:cfunc:`BooleanCircuit::dnfShape` checks
@@ -538,8 +540,10 @@ The probability methods do not funnel through
 calling :cfunc:`TreeDecomposition` /
 :cfunc:`dDNNFTreeDecompositionBuilder` and
 :cfunc:`BooleanCircuit::compilation` respectively.  ``makeDD`` remains
-for the callers that need the d-DNNF *artifact* -- ``shapley``,
-``compile_to_ddnnf``, ``ddnnf_stats`` (see below).
+for the callers that need the d-DNNF *artifact* from a named route:
+``shapley`` with an explicit method, and, through
+:cfunc:`BooleanCircuit::makeDDByName`, ``compile_to_ddnnf``,
+``ddnnf_stats``, and ``compile_to_ddnnf_dot`` (see below).
 
 The external-compiler choice inside ``compilation`` resolves the
 named tool against the external-tool registry, which supplies its
