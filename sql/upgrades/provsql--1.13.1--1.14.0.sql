@@ -10,11 +10,11 @@ SET search_path TO provsql;
 
 CREATE FUNCTION circuit_canonical_form(token UUID)
   RETURNS TEXT AS
-  'provsql','circuit_canonical_form' LANGUAGE C;
+  'provsql','circuit_canonical_form' LANGUAGE C STRICT;
 
 CREATE FUNCTION circuit_island_key(token UUID)
   RETURNS TEXT AS
-  'provsql','circuit_island_key' LANGUAGE C;
+  'provsql','circuit_island_key' LANGUAGE C STRICT;
 
 CREATE FUNCTION prob_cache_stats()
   RETURNS jsonb AS
