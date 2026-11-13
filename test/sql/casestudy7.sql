@@ -255,6 +255,10 @@ DROP TABLE cs7_hard;
 
 -- The default exact request: the cost-based chooser picks d-tree on the
 -- literal circuit (the case study shows Studio's "via d-tree").
+-- needs checking, not true anymore
+-- the chooser folds and then uses d-tree and sieve. The alternative,
+-- setting provsql.idp_fold = off before that statement, would bring
+-- d-tree back in the test
 -- provsql.last_eval_method lists every method of the session's
 -- evaluations, so empty it to read this query's alone.
 SET provsql.last_eval_method = '';
