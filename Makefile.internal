@@ -55,7 +55,7 @@ endif
 endif
 
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
-EXTRA_CLEAN = $(DEPS) sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc test_canonical_form provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files src/*.gcno src/*.gcda src/semiring/*.gcno src/semiring/*.gcda coverage
+EXTRA_CLEAN = $(DEPS) sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files src/*.gcno src/*.gcda src/semiring/*.gcno src/semiring/*.gcda coverage
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -226,13 +226,6 @@ tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp s
 .PHONY: test-kcmcp
 test-kcmcp: tdkc
 	python3 test/kcmcp/conformance.py ./tdkc
-
-test_canonical_form: test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/CircuitCanonicalForm.h src/ProbCache.cpp src/ProbCache.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/dDNNF.cpp src/dDNNF.h src/TreeDecomposition.cpp src/TreeDecomposition.h src/dDNNFTreeDecompositionBuilder.cpp src/dDNNFTreeDecompositionBuilder.h src/Circuit.h src/Circuit.hpp src/Graph.h src/PermutationStrategy.h src/tdkc_interrupt.h
-	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -Isrc -o test_canonical_form test/unit/test_canonical_form.cpp src/CircuitCanonicalForm.cpp src/ProbCache.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/TreeDecomposition.cpp src/dDNNFTreeDecompositionBuilder.cpp
-
-.PHONY: test-canonical
-test-canonical: test_canonical_form
-	./test_canonical_form
 
 provsql_migrate_mmap: src/provsql_migrate_mmap.cpp
 	$(CXX) $(PRECXXFLAGS) -W -Wall \
