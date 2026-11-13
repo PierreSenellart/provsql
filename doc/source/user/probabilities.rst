@@ -842,7 +842,7 @@ use ProvSQL Studio's benchmark panel; see :doc:`studio`.
 Performance optimisations under the hood
 ----------------------------------------
 
-Four optimisations exploit Boolean-specific structure to make
+Six optimisations exploit Boolean-specific structure to make
 probability evaluation faster, sometimes by orders of magnitude; none
 changes the result.
 
@@ -1003,3 +1003,33 @@ magnitude of the values, the shortcut is *pseudo*-polynomial and steps
 aside for the general path when the range is too wide; for the usual
 small-integer values it replaces the exponential enumeration with a fast
 computation.
+
+.. _independent-folding:
+
+Folding independent parts
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When the lineage is a conjunction or a disjunction of parts that share
+no input tuple, ProvSQL evaluates each part on its own, with the method
+that suits it, and combines the results.  A query whose answer gathers
+many unrelated groups (the lines of each order, the papers of each
+reviewer) is then as easy as its hardest group.  This happens under the
+default method; :ref:`provsql.idp_fold <provsql-idp-fold>` turns it off,
+or extends it to a method called by name.  Such an evaluation is listed
+as ``fold`` in :ref:`provsql.last_eval_method <provsql-last-eval-method>`,
+followed by the methods used on the parts.
+
+.. _compiled-cache:
+
+Reusing compiled d-DNNFs
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Within a session, ProvSQL keeps the d-DNNFs that
+``'tree-decomposition'`` and ``'compilation'`` build, and reuses one
+whenever a lineage of the same shape comes back, over other tuples or
+with other probabilities: the answers of one query often share a shape.
+This too happens under the default method;
+:ref:`provsql.prob_cache <provsql-prob-cache>` turns it off, or extends
+it to a method called by name.  An answer served this way is listed as
+``cache:<method>`` in
+:ref:`provsql.last_eval_method <provsql-last-eval-method>`.

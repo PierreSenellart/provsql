@@ -1,3 +1,14 @@
+/**
+ * @file canonical_form_sql.cpp
+ * @brief SQL functions @c provsql.circuit_canonical_form(),
+ *        @c provsql.circuit_island_key(), @c provsql.prob_cache_stats()
+ *        and @c provsql.prob_cache_reset() – inspect the canonical form
+ *        of a circuit and the cache of compiled d-DNNFs.
+ *
+ * Diagnostics for the cache of @c ProbCache.h: the first two show the
+ * keys a circuit is looked up under, the last two read and empty the
+ * cache of the current session.
+ */
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"

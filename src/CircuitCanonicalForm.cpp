@@ -1,3 +1,7 @@
+/**
+ * @file CircuitCanonicalForm.cpp
+ * @brief Canonical form of a Boolean circuit and its split into islands (implementation).
+ */
 #include "CircuitCanonicalForm.h"
 
 #include <algorithm>

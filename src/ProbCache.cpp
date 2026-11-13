@@ -1,3 +1,7 @@
+/**
+ * @file ProbCache.cpp
+ * @brief Cache of compiled d-DNNFs and folding of independent parts (implementation).
+ */
 #include "ProbCache.h"
 
 #include <algorithm>
