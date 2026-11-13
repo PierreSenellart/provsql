@@ -83,8 +83,8 @@ struct DTreeContext {
   const BooleanCircuit &c;
   std::unordered_map<Clauses, double, ClausesHash> memo;
   // Speculative-execution budget: count subproblems (recursion entries) and bail
-  // when they exceed @c budget, so the chooser drops the d-tree and escalates to
-  // the next method.  @c budget == 0 means unbounded.  Deterministic (a function
+  // when they exceed @c budget, so the chooser re-ranks the d-tree at a higher
+  // cost and tries the next method.  @c budget == 0 means unbounded.  Deterministic (a function
   // of the circuit), so the chosen method is reproducible.
   unsigned long steps = 0;
   unsigned long budget = 0;

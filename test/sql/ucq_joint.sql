@@ -124,7 +124,7 @@ SELECT n_enumerating AS e_fd_broken FROM ucq_joint_compile_stats(
   ARRAY[0.5,0.5,0.5,0.5,0.5,0.5,0.5]);
 
 -- Prop 4.2.11(b): a high-joint-width instance must be rejected (the
--- caller then falls back to the ladder).  With the joint-width cap
+-- caller then falls back to the cost-based chooser).  With the joint-width cap
 -- lowered to 1, a triangle over S (Gaifman treewidth 2) is rejected by
 -- the degeneracy screen.
 SET provsql.joint_max_treewidth = 1;

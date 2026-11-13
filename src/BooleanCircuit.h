@@ -13,7 +13,7 @@
  * | @c compilation()       | Knowledge compilation to d-DNNF via an external tool     |
  * | @c monteCarlo()        | Monte Carlo sampling approximation                       |
  * | @c WeightMC()          | Weighted model counting via weightmc                     |
- * | @c independentEvaluation() | Exact evaluation for disconnected circuits           |
+ * | @c independentEvaluation() | Exact evaluation for read-once circuits              |
  * | @c interpretAsDD()     | Direct tree-decomposition-based compilation              |
  * | @c makeDD()            | Generic d-DNNF construction dispatcher                   |
  *

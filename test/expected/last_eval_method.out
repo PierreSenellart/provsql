@@ -158,6 +158,15 @@ PL/pgSQL function inline_code_block line 1 at PERFORM
 provsql.last_eval_method
 
 (1 row)
+add_provenance
+
+(1 row)
+provsql.last_eval_method
+tree-decomposition
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

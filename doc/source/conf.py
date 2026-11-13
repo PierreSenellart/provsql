@@ -488,6 +488,7 @@ _C_FUNC_MAP = {
     'BooleanCircuit::wmcCount':              '/doxygen-c/html/classBooleanCircuit.html#a82366627e2e907cf56ae4b6d28812eb6',
     'BooleanCircuit::compilation':           '/doxygen-c/html/classBooleanCircuit.html#a667b05ef1cfb933d2cae73692e761786',
     'BooleanCircuit::makeDD':                '/doxygen-c/html/classBooleanCircuit.html#a699b0537bdaf692ff18e36ad32064d6e',
+    'BooleanCircuit::makeDDByName':          '/doxygen-c/html/classBooleanCircuit.html#ad7a7837d2eebfc934c3e9b5f1ae1f41b',
     'BooleanCircuit::sieve':                 '/doxygen-c/html/classBooleanCircuit.html#a1f64ce454dedf3e9cfc767454d38a5db',
     'provsql::makeDDAuto':                   '/doxygen-c/html/namespaceprovsql.html#af9c3efa1011d015722a158c4bfbef0e3',
     'runHavingAlwaysTrueRewriter':           '/doxygen-c/html/namespaceprovsql.html#af882ddbffa805395b9c2f6b85308ea85',
