@@ -53,16 +53,6 @@ bool isLeafToken(const BooleanCircuit &c, gate_t g, bool is_abstract)
 
 }
 
-uint64_t fnv1aHash(const std::string &s)
-{
-  uint64_t h = 14695981039346656037ULL;
-  for(unsigned char ch : s) {
-    h ^= ch;
-    h *= 1099511628211ULL;
-  }
-  return h;
-}
-
 GateSet reachableNodes(const BooleanCircuit &c, gate_t root,
                        const GateSet *abstract_leaves)
 {
@@ -225,7 +215,6 @@ CanonicalForm computeCanonicalForm(const BooleanCircuit &c, gate_t root,
     }
   }
 
-  cf.hash = fnv1aHash(cf.form);
   return cf;
 }
 

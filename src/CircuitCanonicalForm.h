@@ -57,7 +57,6 @@ struct CanonicalLeaf {
 /// Canonical form of a circuit below a root.
 struct CanonicalForm {
   std::string form;                   ///< The form, e.g. `(OR (AND V V) (AND V #4))`
-  uint64_t hash;                      ///< FNV-1a hash of @c form
   std::vector<CanonicalLeaf> leaves;  ///< The leaves, in the order of their @c V in @c form
 };
 
@@ -102,9 +101,6 @@ struct IslandKey {
 
 /// Splits the circuit below @p root into its outermost islands and the residual.
 IslandKey computeIslandKey(const BooleanCircuit &c, gate_t root);
-
-/// 64-bit FNV-1a hash of @p s.
-uint64_t fnv1aHash(const std::string &s);
 
 }
 
