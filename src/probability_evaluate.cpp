@@ -51,6 +51,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <csignal>
 #include <string>
 #include <sstream>
@@ -69,6 +70,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
+#include "ProbCache.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
@@ -916,6 +918,8 @@ struct EvalContext {
   double outside_cost = std::numeric_limits<double>::infinity();
   bool multivalued_rewritten = false;
   std::string actual_method;
+  bool linked_group = false;
+  bool fold_component = false;
 
   void ensureMultivaluedRewritten() {
     if(!multivalued_rewritten) {
@@ -946,6 +950,11 @@ struct EvalContext {
   mutable unsigned tw_proxy_ = 0;
   /// Lower bound on the d-tree's cost, raised each time it overruns a budget.
   double dtree_cost_floor_ = 0.;
+  /// Lower bound on tree-decomposition's cost, raised when the parts it
+  /// builds (islands, folded groups, residual) overrun a budget together.
+  double treedec_cost_floor_ = 0.;
+  /// Cost of the parts tree-decomposition has built in the current attempt.
+  double treedec_spent_ = 0.;
   mutable unsigned tw_max_degree_ = 0;
 
   void ensureTreewidthProxy() const {
@@ -1065,7 +1074,8 @@ public:
   // keeping explicit 'independent' available on any circuit as the escape
   // hatch that names the computation rather than its producer.
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    return rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
+    return !ctx.linked_group
+           && rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = ctx.c.independentEvaluation(ctx.gate);
@@ -1201,6 +1211,44 @@ public:
   }
 };
 
+/// Whether a provsql.prob_cache / provsql.idp_fold setting applies to this
+/// evaluation: 'auto' covers the methods ProvSQL chooses, so that a method
+/// called by name runs as named; 'on' covers that call too.
+static bool evalOptActive(int setting, const EvalContext &ctx)
+{
+  return setting == PROVSQL_EVAL_OPT_ON
+         || (setting == PROVSQL_EVAL_OPT_AUTO && !ctx.explicitly_named);
+}
+
+/// Shared evaluate() of the d-DNNF-producing methods: build through the fold
+/// and the cache where they apply, and report what actually ran.  @p builder
+/// names the method as its cache entries record it; a call by name is answered
+/// only from an entry of that builder.
+template<typename BuildOn>
+static double evaluateViaDD(EvalContext &ctx, const std::string &builder,
+                            BuildOn buildOn)
+{
+  const bool cache = evalOptActive(provsql_prob_cache, ctx);
+  const bool fold = evalOptActive(provsql_idp_fold, ctx) && !ctx.fold_component;
+  if(!(cache || fold) || !probCacheEligible(ctx.c, ctx.gate))
+    return buildOn(ctx.c, ctx.gate, ctx).probabilityEvaluation();
+
+  ProbCacheReport report;
+  ProbCacheOptions options;
+  options.use_cache = cache;
+  options.fold = fold;
+  if(ctx.explicitly_named)
+    options.required_builder = builder;
+  options.last_builder = [&ctx]() { return ctx.actual_method; };
+  options.report = &report;
+  const double p = probCachedProbability(
+    ctx.c, ctx.gate,
+    [&](const BooleanCircuit &cc, gate_t g) { return buildOn(cc, g, ctx); },
+    nullptr, options);
+  ctx.actual_method = report.describe();
+  return p;
+}
+
 // makeDD's internal interpret-as-dd -> tree-decomposition -> compiler ladder is
 // lifted here into three first-class catalog members, so the chooser can see
 // and rank the three most cost-divergent exact compilers (linear / treewidth-
@@ -1275,61 +1323,93 @@ public:
   // Delta is dropped; 2^w (capped at the MAX_TREEWIDTH applicability bound) is
   // the real cost driver.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
-           * pow2_clamped(ctx.tw_proxy_);
+    return std::max(ctx.treedec_cost_floor_,
+                    kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
+                    * pow2_clamped(ctx.tw_proxy_));
   }
-  dDNNF buildDD(EvalContext &ctx) const override {
+  /// Builds the d-DNNF of @p cc below @p g: the circuit of @p ctx, or one
+  /// of the parts it is evaluated in (an island, a folded group, the
+  /// residual).  The parts of one attempt share the budget of @p ctx, each
+  /// being charged to @c treedec_spent_.
+  static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
+    const bool whole = &cc == &ctx.c;
+    // On the chooser's path, the cost is bounded by the next-best method's.
+    // A by-name call keeps the full MAX_TREEWIDTH bound.
+    const bool budgeted = !ctx.explicitly_named && std::isfinite(ctx.cost_budget);
+    const double size = whole ? static_cast<double>(ctx.circuit_size)
+                              : static_cast<double>(cc.getNbGates());
+    const double remaining = ctx.cost_budget - ctx.treedec_spent_;
     unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
     try {
-      // On the chooser's path, the cost is bounded by the next-best method's:
-      // stop the min-fill build as soon as a bag shows the width it would take
-      // to exceed it (the degeneracy proxy that priced the method is only a
-      // lower bound, and the build of a large circuit is slow).  A by-name call
-      // keeps the full MAX_TREEWIDTH bound.
-      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
-        const double ratio = ctx.cost_budget
-          / (kCostTreeDecomp * static_cast<double>(ctx.circuit_size));
+      // Stop the min-fill build as soon as a bag shows the width it would
+      // take to exceed what is left of the budget (the degeneracy proxy that
+      // priced the method is only a lower bound, and the build of a large
+      // circuit is slow).
+      if(budgeted) {
+        const double ratio = remaining / (kCostTreeDecomp * size);
         const double w = ratio >= 1. ? std::floor(std::log2(ratio)) : 0.;
         width_cap = static_cast<unsigned>(
           std::min<double>(w, TreeDecomposition::MAX_TREEWIDTH));
       }
-      TreeDecomposition td(ctx.c, width_cap);
+      TreeDecomposition td(cc, width_cap);
       // Speculative execution: the (poly) min-fill build has now discovered the
       // EXACT treewidth, where the cost estimate above used only the degeneracy
       // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
       // build, recompute the real cost from the discovered width; if it exceeds
-      // the next-best method's cost, bail so the chooser re-ranks the method at
-      // that cost -- the build's own MAX_TREEWIDTH cap is the hard ceiling, this
-      // is the competitive refinement.  A by-name call runs unbounded.
-      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
-        const double real_cost = kCostTreeDecomp
-          * static_cast<double>(ctx.circuit_size)
-          * pow2_clamped(td.getTreewidth());
-        if(real_cost > ctx.cost_budget) {
+      // what is left of the budget, bail so the chooser re-ranks the method at
+      // the cost now known -- the build's own MAX_TREEWIDTH cap is the hard
+      // ceiling, this is the competitive refinement.
+      const double real_cost = kCostTreeDecomp * size
+        * pow2_clamped(td.getTreewidth());
+      if(budgeted && real_cost > remaining) {
+        if(whole)
           ctx.tw_proxy_ = std::max(ctx.tw_proxy_,
                                    static_cast<unsigned>(td.getTreewidth()));
-          throw MethodRepricedException(
-            "tree-decomposition: discovered treewidth exceeds the budget");
-        }
+        reprice(ctx, real_cost,
+                "tree-decomposition: discovered treewidth exceeds the budget");
       }
-      dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
+      dDNNF dd = dDNNFTreeDecompositionBuilder{cc, g, td}.build();
+      ctx.treedec_spent_ += real_cost;
       ctx.actual_method = "tree-decomposition";
       return dd;
     } catch(TreeDecompositionException &) {
       if(ctx.explicitly_named)
         provsql_error("Treewidth greater than %u",
                       TreeDecomposition::MAX_TREEWIDTH);
-      // Chooser: the build needs a width above the cap, which raises the bound
-      // that prices the method.  It competes again at that price, and drops out
-      // of the portfolio through applicable() once above MAX_TREEWIDTH.  Each
-      // retry raises the bound, so this terminates.
-      ctx.tw_proxy_ = std::max(ctx.tw_proxy_, width_cap + 1);
-      throw MethodRepricedException(
-        "tree-decomposition: treewidth above the bound");
+      if(whole) {
+        // The build needs a width above the cap, which raises the bound that
+        // prices the method.  It competes again at that price, and drops out
+        // of the portfolio through applicable() once above MAX_TREEWIDTH.
+        ctx.tw_proxy_ = std::max(ctx.tw_proxy_, width_cap + 1);
+        throw MethodRepricedException(
+          "tree-decomposition: treewidth above the bound");
+      }
+      // A part whose width is above MAX_TREEWIDTH is out of reach of the
+      // method, whatever the budget.
+      if(width_cap >= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH))
+        throw CircuitException("tree-decomposition: treewidth above the bound");
+      reprice(ctx, kCostTreeDecomp * size * pow2_clamped(width_cap + 1),
+              "tree-decomposition: treewidth above the bound");
     }
   }
+  /// Leaves the attempt for the chooser to rank the method again, at the
+  /// cost now known: what the parts built so far took, plus @p part_cost
+  /// for the one that does not fit.  That is above the budget, hence above
+  /// the estimate the method was picked on, so each retry raises the floor
+  /// and this terminates.
+  [[noreturn]] static void reprice(EvalContext &ctx, double part_cost,
+                                   const char *why) {
+    ctx.treedec_cost_floor_ =
+      std::max(ctx.treedec_cost_floor_, ctx.treedec_spent_ + part_cost);
+    throw MethodRepricedException(why);
+  }
+  dDNNF buildDD(EvalContext &ctx) const override {
+    ctx.treedec_spent_ = 0.;
+    return buildOn(ctx.c, ctx.gate, ctx);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    return buildDD(ctx).probabilityEvaluation();
+    ctx.treedec_spent_ = 0.;
+    return evaluateViaDD(ctx, "tree-decomposition", buildOn);
   }
 };
 
@@ -1354,7 +1434,7 @@ public:
     const double s = static_cast<double>(ctx.circuit_size);
     return std::max(kCostCompilationFloor, kCostCompilation * s * std::sqrt(s));
   }
-  dDNNF buildDD(EvalContext &ctx) const override {
+  static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
     // On a chooser path (exact / relative / additive) ctx.args carries the
     // path's TOLERANCE string (epsilon=...,delta=...), not a compiler name, so
     // auto-select the compiler.  Only a by-name 'compilation' call passes an
@@ -1365,14 +1445,22 @@ public:
     const std::string compiler =
       ctx.explicitly_named ? ctx.args : std::string();
     std::string used;
-    dDNNF dd = ctx.c.compilation(ctx.gate, compiler, &used);
+    dDNNF dd = cc.compilation(g, compiler, &used);
     // Report WHICH compiler ran (e.g. "compilation:d4"), not just "compilation":
     // on a chooser path the tool is auto-selected, so the bare label hid it.
     ctx.actual_method = used.empty() ? "compilation" : "compilation:" + used;
     return dd;
   }
+  dDNNF buildDD(EvalContext &ctx) const override {
+    return buildOn(ctx.c, ctx.gate, ctx);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    return buildDD(ctx).probabilityEvaluation();
+    // A call by name is answered from the cache only by the compiler it
+    // names (resolved here, which also rejects an unknown one up front).
+    std::string builder = "compilation";
+    if(ctx.explicitly_named)
+      builder += ":" + BooleanCircuit::checkCompiler(ctx.args);
+    return evaluateViaDD(ctx, builder, buildOn);
   }
 };
 
@@ -1834,9 +1922,10 @@ namespace {
 /// @c buildDD respectively); everything else -- lazy feature acquisition, the
 /// cheapest-first ranking, the speculative budget, and dropping a method that
 /// throws -- is identical for both, so it lives here once.
-template<class R, class Run>
+template<class R, class Run, class Dropped>
 R runPortfolio(EvalContext &ctx, const Tolerance &tol,
-               std::vector<const ProbabilityMethod *> portfolio, Run run)
+               std::vector<const ProbabilityMethod *> portfolio, Run run,
+               Dropped dropped)
 {
   // Each step either RUNS the cheapest ready method or ACQUIRES the cheapest
   // pending feature -- and we acquire a feature only when no ready method is
@@ -1934,6 +2023,8 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
         have_last_error = true;
         portfolio.erase(std::remove(portfolio.begin(), portfolio.end(), best),
                         portfolio.end());
+        if(std::optional<R> r = dropped(best))
+          return std::move(*r);
       }
     } else if(have_pending) {
       if(provsql_verbose >= 50) {
@@ -1971,8 +2062,74 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
        // be excluded by admissibility, not left to lose on cost.
        && (tol.delta > 0. || m->isDeterministic()))
       portfolio.push_back(m.get());
+
+  const auto keep = [](const ProbabilityMethod *) {
+    return std::optional<double>();
+  };
+  const bool may_fold = evalOptActive(provsql_idp_fold, ctx)
+                        && tol.kind == ToleranceKind::Exact
+                        && !ctx.fold_component && !ctx.inv_free_cert
+                        && !std::isfinite(ctx.outside_cost)
+                        && rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
+  if(!may_fold)
+    return runPortfolio<double>(ctx, tol, std::move(portfolio),
+      [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); }, keep);
+
+  const std::vector<const ProbabilityMethod *> all = portfolio;
+  const auto fold = [&](const ProbabilityMethod *failed)
+                    -> std::optional<double> {
+    if(failed->name() != "independent")
+      return std::nullopt;
+    const BooleanGate type = ctx.c.getGateType(ctx.gate);
+    if(type != BooleanGate::AND && type != BooleanGate::OR)
+      return std::nullopt;
+    if(!probCacheEligible(ctx.c, ctx.gate))
+      return std::nullopt;
+
+    // Thrown where the root has nothing to fold: one group of children
+    // sharing inputs.
+    struct NothingToFold {};
+
+    std::vector<std::string> used;
+    ProbFoldEval eval;
+    eval.part = [&](BooleanCircuit &part, gate_t part_root, bool linked) {
+      EvalContext sub{nullptr, gate_t{}, pg_uuid_t{}, part, part_root, nullptr,
+                      false, ctx.args, false, part.getInputs().size(),
+                      part.getNbGates()};
+      sub.linked_group = linked;
+      sub.fold_component = true;
+      const double p = runPortfolio<double>(sub, tol, all,
+        [&](const ProbabilityMethod *m){ return m->evaluate(sub, tol); },
+        keep);
+      if(std::find(used.begin(), used.end(), sub.actual_method) == used.end())
+        used.push_back(sub.actual_method);
+      return p;
+    };
+    eval.whole = []() -> double { throw NothingToFold(); };
+    try {
+      const double r = probFoldedProbability(ctx.c, ctx.gate, eval);
+      std::string name = "fold";
+      for(const std::string &u : used)
+        if(!u.empty())
+          name += "," + u;
+      ctx.actual_method = name;
+      return r;
+    } catch(NothingToFold &) {
+      // The portfolio this is called from goes on with the remaining methods
+      // on the whole circuit.  Running them here would run them twice when
+      // they all fail, the caller trying them again after us.
+    } catch(CircuitException &) {
+      if(provsql_interrupted)
+        throw;
+      // A part resisted every method: the caller tries the whole circuit.
+    }
+    // Either way the root is not folded again by the methods that follow,
+    // which would only split it into the same groups.
+    ctx.fold_component = true;
+    return std::nullopt;
+  };
   return runPortfolio<double>(ctx, tol, std::move(portfolio),
-    [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); });
+    [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); }, fold);
 }
 
 dDNNF MethodCatalog::chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) const
@@ -1987,7 +2144,8 @@ dDNNF MethodCatalog::chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) co
     if(m->producesDD())
       portfolio.push_back(m.get());
   return runPortfolio<dDNNF>(ctx, tol, std::move(portfolio),
-    [&](const ProbabilityMethod *m){ return m->buildDD(ctx); });
+    [&](const ProbabilityMethod *m){ return m->buildDD(ctx); },
+    [](const ProbabilityMethod *) { return std::optional<dDNNF>(); });
 }
 
 const MethodCatalog &MethodCatalog::instance()
@@ -2281,12 +2439,26 @@ static void record_last_eval_method(const std::string &actual_method)
   if(actual_method.empty())
     return;
   std::string current = provsql_last_eval_method ? provsql_last_eval_method : "";
-  if(current.find(actual_method) == std::string::npos) {
-    if(!current.empty()) current += ",";
-    current += actual_method;
+  bool changed = false;
+  size_t start = 0;
+  while(start <= actual_method.size()) {
+    size_t end = actual_method.find(',', start);
+    if(end == std::string::npos)
+      end = actual_method.size();
+    const std::string name = actual_method.substr(start, end - start);
+    // Whole-name match: "tree-decomposition" is not already listed because
+    // "cache:tree-decomposition" is.
+    if(!name.empty()
+       && ("," + current + ",").find("," + name + ",") == std::string::npos) {
+      if(!current.empty()) current += ",";
+      current += name;
+      changed = true;
+    }
+    start = end + 1;
+  }
+  if(changed)
     SetConfigOption("provsql.last_eval_method", current.c_str(),
                     PGC_USERSET, PGC_S_SESSION);
-  }
 }
 
 /**

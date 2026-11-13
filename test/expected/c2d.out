@@ -19,3 +19,33 @@ Dave|Paris|0.056
 Magdalen|Paris|0.113
 Nancy|Paris|0.156
 (7 rows)
+remove_provenance
+
+(1 row)
+by_possible_worlds
+0.611920
+(1 row)
+prob_cache_reset
+
+(1 row)
+by_tree_decomposition
+0.611920
+(1 row)
+provsql.last_eval_method
+tree-decomposition,cache:tree-decomposition
+(1 row)
+by_c2d
+0.611920
+(1 row)
+provsql.last_eval_method
+compilation:c2d,cache:compilation:c2d
+(1 row)
+by_c2d_again
+0.611920
+(1 row)
+provsql.last_eval_method
+cache:compilation:c2d
+(1 row)
+prob_cache_reset
+
+(1 row)

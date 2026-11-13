@@ -253,8 +253,9 @@ SELECT remove_provenance('cs7_hard');
 SELECT hard_exact FROM cs7_hard;
 DROP TABLE cs7_hard;
 
--- The default exact request: the cost-based chooser picks d-tree on the
--- literal circuit (the case study shows Studio's "via d-tree").
+-- The default exact request: the cost-based chooser splits the literal
+-- circuit into independent parts and picks d-tree or sieve for each (the
+-- case study shows Studio's "via fold,d-tree,sieve").
 -- provsql.last_eval_method lists every method of the session's
 -- evaluations, so empty it to read this query's alone.
 SET provsql.last_eval_method = '';

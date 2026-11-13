@@ -63,7 +63,13 @@ jobs:
       run:
         shell: wsl-bash {0}
     steps:
+      # Ubuntu rather than the action's default Debian: the Debian image is
+      # fetched from salsa.debian.org, which does not serve it reliably to
+      # the hosted runners (aborted downloads, an error page saved as the
+      # image), whereas Ubuntu's comes from releases.ubuntu.com.
       - uses: Vampire/setup-wsl@v7.2.0
+        with:
+          distribution: Ubuntu-24.04
       - run: apt update
       - run: apt -y install --no-install-recommends postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all python3
       # d4 / dsharp / weightmc are exercised by the Linux matrix; the WSL

@@ -63,7 +63,7 @@ remove_provenance
 
 (1 row)
 hard_default|method
-0.881791|d-tree
+0.881791|fold,d-tree,sieve
 (1 row)
 remove_provenance
 

@@ -1281,8 +1281,7 @@ static std::string chooseCompiler() {
   return chosen.empty() ? std::string(fb) : chosen;
 }
 
-dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
-                                  std::string *resolved) const {
+std::string BooleanCircuit::checkCompiler(std::string compiler) {
   // No compiler named: pick the highest-preference available one (symmetric
   // with the no-tool wmc path).  provsql.fallback_compiler is deliberately
   // not consulted here -- it governs only makeDD's last-resort fallback route.
@@ -1312,6 +1311,13 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
     throw CircuitException(
             "Compiler '"+compiler+"' uses output parser '"+rec->parser
             +"', which compilation() does not implement");
+  return compiler;
+}
+
+dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
+                                  std::string *resolved) const {
+  compiler =  checkCompiler(compiler);
+  const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
   const std::string compiler_binary = rec->binary;
   if(resolved)
     *resolved = compiler; // the validated tool actually used (CLI or KCMCP)

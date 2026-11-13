@@ -1,0 +1,127 @@
+\set ECHO none
+prob_cache_reset
+
+(1 row)
+compiled|expected|fold_lookups
+0.290000000000|0.290000000000|0 hits, 1 misses
+(1 row)
+served|expected|fold_lookups
+0.684000000000|0.684000000000|1 hits, 1 misses
+(1 row)
+compiled|expected|fold_lookups
+0.562500000000|0.562500000000|1 hits, 4 misses
+(1 row)
+served|expected|fold_lookups
+0.948000000000|0.948000000000|4 hits, 4 misses
+(1 row)
+prob_cache_reset
+
+(1 row)
+disjunction|expected|fold_lookups
+0.720000000000|0.720000000000|0 hits, 1 misses
+(1 row)
+of_conjunctions|expected|fold_lookups
+0.344000000000|0.344000000000|2 hits, 2 misses
+(1 row)
+prob_cache_reset
+
+(1 row)
+flat_or|expected|flat_and|expected
+0.864664718|0.864664718|0.135335282|0.135335282
+(1 row)
+method|fold_lookups
+fold|0 hits, 0 misses
+(1 row)
+empty_and|empty_or
+1|0
+(1 row)
+twice|expected|fold_lookups
+0.580000000000|0.580000000000|0 hits, 0 misses
+(1 row)
+nested|expected|fold_lookups
+0.464000000000|0.464000000000|0 hits, 0 misses
+(1 row)
+orders_possible_worlds
+0.887804800000
+(1 row)
+prob_cache_reset
+
+(1 row)
+orders|expected|fold_lookups
+0.887804800000|0.887804800000|1 hits, 1 misses
+(1 row)
+method
+fold,tree-decomposition,cache:tree-decomposition
+(1 row)
+prob_cache_reset
+
+(1 row)
+orders_uncached|fold_lookups
+0.887804800000|0 hits, 0 misses
+(1 row)
+chain_possible_worlds
+0.560000000000
+(1 row)
+prob_cache_reset
+
+(1 row)
+chain|fold_lookups
+0.560000000000|0 hits, 1 misses
+(1 row)
+method
+tree-decomposition
+(1 row)
+deep_exact
+t
+(1 row)
+prob_cache_reset
+
+(1 row)
+circuits|wrong_folded
+300|0
+(1 row)
+folds|hits
+t|t
+(1 row)
+wrong_folded_uncached
+0
+(1 row)
+prob_cache_reset
+
+(1 row)
+wrong_unfolded_cached
+0
+(1 row)
+hits
+t
+(1 row)
+prob_cache_reset
+
+(1 row)
+large_exact|large_not_kept
+t|{"hits": 0, "misses": 1, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 1}
+(1 row)
+prob_cache_reset
+
+(1 row)
+wrong_small
+0
+(1 row)
+kept|some_left|within_budget|consistent
+14|t|t|t
+(1 row)
+default_budget|expected
+67108864|67108864
+(1 row)
+under_large_limit
+67108864
+(1 row)
+under_small_limit|expected
+26214400|26214400
+(1 row)
+smaller_setting|expected
+1048576|1048576
+(1 row)
+prob_cache_reset
+
+(1 row)

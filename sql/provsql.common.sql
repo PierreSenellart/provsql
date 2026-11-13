@@ -11566,6 +11566,61 @@ CREATE OR REPLACE FUNCTION ddnnf_stats(
   'provsql','ddnnf_stats' LANGUAGE C;
 
 /**
+ * @brief Canonical form of the Boolean circuit of a provenance token
+ * (diagnostic).
+ *
+ * The key the cache of compiled d-DNNFs (setting prob_cache) files a
+ * circuit under: its structure, with each input written V where it is
+ * first met and a gate met again written \#k, its rank among the nodes of
+ * the form.  Circuits of equal form differ only by their inputs and
+ * share one compiled d-DNNF.
+ *
+ * @param token root provenance token
+ */
+CREATE OR REPLACE FUNCTION circuit_canonical_form(token UUID)
+  RETURNS TEXT AS
+  'provsql','circuit_canonical_form' LANGUAGE C STRICT;
+
+/**
+ * @brief Islands of the Boolean circuit of a provenance token
+ * (diagnostic).
+ *
+ * The cache of compiled d-DNNFs looks a circuit up in parts: each
+ * island, a part the rest of the circuit reaches through one gate only,
+ * and the residual, the circuit with every island read as an input.
+ * Returns one line "residual: <form>" followed by one line
+ * "island <i>: <form>" per island, each form as circuit_canonical_form
+ * writes it.
+ *
+ * @param token root provenance token
+ */
+CREATE OR REPLACE FUNCTION circuit_island_key(token UUID)
+  RETURNS TEXT AS
+  'provsql','circuit_island_key' LANGUAGE C STRICT;
+
+/**
+ * @brief Counters of the cache of compiled d-DNNFs of the session
+ * (diagnostic).
+ *
+ * Returns a jsonb object: hits and misses (lookups served and not
+ * served), inserts, evictions (entries dropped for room), rejections
+ * (d-DNNFs too large to keep), the entries and bytes held now, and the
+ * budget in bytes that the entries may reach.  The counters run from the
+ * start of the session or the last prob_cache_reset.
+ */
+CREATE OR REPLACE FUNCTION prob_cache_stats()
+  RETURNS jsonb AS
+  'provsql','prob_cache_stats' LANGUAGE C;
+
+/**
+ * @brief Empty the cache of compiled d-DNNFs of the session, and its
+ * counters (diagnostic).
+ */
+CREATE OR REPLACE FUNCTION prob_cache_reset()
+  RETURNS void AS
+  'provsql','prob_cache_reset' LANGUAGE C;
+
+/**
  * @brief Return the DIMACS CNF (Tseytin transformation) of the provenance circuit
  *
  * Returns the same encoding the extension writes to a temp file before

@@ -1,0 +1,46 @@
+\set ECHO none
+shared_a
+(OR (AND V V) (AND V #4))
+(1 row)
+shared_b
+(OR (AND V V) (AND V #4))
+(1 row)
+exchanged
+(OR (AND V V) (AND V #4))
+(1 row)
+original
+(OR V (AND #2 (NOT V)))
+(1 row)
+renamed
+(OR V (AND #2 (NOT V)))
+(1 row)
+cycle_in_order
+(OR (AND V V) (AND #4 V) (AND #6 V) (AND #8 #3))
+(1 row)
+cycle_reordered
+(OR (AND V V) (AND V #3) (AND V #6) (AND #4 #8))
+(1 row)
+sharing
+residual: (OR (AND V V) (AND V #4))
+(1 row)
+disjoint
+residual: (OR V V)
+island 1: (AND V V)
+island 2: (AND V V)
+(1 row)
+shared_island
+residual: (OR V (NOT #2))
+island 1: (AND V V)
+(1 row)
+children_only
+residual: (OR (NOT V) (NOT (NOT #3)))
+(1 row)
+deep_form_length
+120001
+(1 row)
+deep_islands
+1
+(1 row)
+circuits|disagreements|enough_with_islands
+300|0|t
+(1 row)

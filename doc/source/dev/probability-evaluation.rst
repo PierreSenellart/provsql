@@ -628,6 +628,74 @@ and the regression suite stay quiet; ProvSQL Studio raises the level to 5 for
 evaluation and parses the NOTICE into the eval-strip bound, but its probability
 benchmark drops it (it is per-method UI metadata, not a benchmark row).
 
+Folding Independent Parts and Caching Compiled d-DNNFs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Two mechanisms spare the d-DNNF-producing methods
+(``tree-decomposition``, ``compilation``) the compilation of a whole
+circuit.  Both live in :cfile:`ProbCache.cpp` and apply to circuits of
+AND, OR and NOT gates over inputs.
+
+**Canonical form.**  :cfile:`CircuitCanonicalForm.cpp` writes a circuit
+as a string that keeps its structure and forgets its inputs: ``V`` for
+an input met for the first time, ``#k`` for a node met again (``k`` its
+rank in the string), as in ``(OR (AND V V) (AND V #4))`` for
+``ab + ac``.  The children of an AND or an OR are ordered by a colour
+refined bottom-up from the type, the fan-out and the colours of the
+children.  Equal forms imply equal structure, with the inputs matched
+in the order of their ``V``, so a d-DNNF compiled for one circuit
+evaluates the other once its probabilities are replaced.  The form is
+not complete: children tied on colour keep their stored order, so two
+isomorphic circuits can differ in form, at the price of one more
+compilation.
+
+**Islands.**  A gate other than the root is an *island root* when
+everything below it is reached from the root only through it; the part
+below shares no input with the rest of the circuit.  The outermost
+islands are found in one depth-first traversal.  The *residual* is the
+circuit with each of them read as an input.  These islands are
+unrelated to the island discipline of the certified regions above.
+
+**Cache.**  Each backend keeps a map from canonical form to compiled
+d-DNNF.  A circuit is looked up island by island, then for its
+residual, the probability of each island standing in for the input
+that replaces it; what is not found is compiled and stored.  A hit
+copies the stored d-DNNF, sets the probabilities of its inputs and
+evaluates it.  Each entry records the method that built it: the
+default strategy accepts any entry, whereas a method called by name is
+served only from an entry of its own (and of the same compiler), and
+replaces another's.  The estimated size of the cache is capped by
+``provsql.prob_cache_size``: entries are dropped least recently used
+first, and a d-DNNF larger than a quarter of the budget is not stored.
+What a statement adds to the cache is memory its evaluations take, so
+it counts towards ``provsql.max_memory``; for the cache not to be what
+exhausts that limit, the budget is at most a quarter of it.
+The estimate errs on the high side (by 13 to 23 % of the memory
+actually taken, on the two families of circuits it was measured on).
+
+**Fold.**  The children of an AND or OR root are grouped by the inputs
+below them that they share.  Distinct groups are independent, so the
+probability of the root is the product of theirs (for an OR, of their
+complements).  A group of one child is folded in turn; a group of
+several is evaluated as a circuit of its own.  In the default strategy
+the fold is tried when ``independent`` fails, and the chooser picks a
+method for each group; a method called by name, when the fold extends
+to it, runs itself on each group.
+
+``provsql.prob_cache`` and ``provsql.idp_fold`` take ``off``, ``auto``
+(the default: under the default strategy only, so that a method called
+by name runs as named) or ``on``.  ``provsql.last_eval_method`` lists
+``fold`` for a folded evaluation and ``cache:<method>`` for an entry
+served.
+
+Four SQL functions, kept out of the user guide, serve the regression
+tests and debugging: ``circuit_canonical_form`` and
+``circuit_island_key`` show the keys of a circuit, and
+``prob_cache_stats`` and ``prob_cache_reset`` read and empty the cache
+of the session.  With :sqlfunc:`create_gate` they let a test state a
+circuit gate by gate and check what the cache does with it (tests
+``canonical_form``, ``idp_fold`` and ``prob_cache``).
+
 Cmp-Probability Pre-Passes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 

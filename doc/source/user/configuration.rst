@@ -270,6 +270,35 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.fallback_compiler = 'c2d';
 
+.. _provsql-prob-cache:
+
+``provsql.prob_cache`` (default: ``'auto'``)
+    Reuse compiled d-DNNFs across circuits of the same shape, within a
+    session. With ``'auto'``, the cache serves the automatic method
+    selection only, and a method called by name runs as named. ``'on'``
+    extends it to ``'tree-decomposition'`` and ``'compilation'`` called
+    by name, each answered only from a d-DNNF it compiled itself.
+    ``'off'`` disables it. A cached answer appears as ``cache:<method>``
+    in :ref:`provsql.last_eval_method <provsql-last-eval-method>`.
+
+.. _provsql-prob-cache-size:
+
+``provsql.prob_cache_size`` (default: ``64MB``)
+    Size of the cache of ``provsql.prob_cache``, per session. Past it,
+    the d-DNNFs least recently used are dropped; one larger than a
+    quarter of it is not kept. When
+    :ref:`provsql.max_memory <provsql-max-memory>` is set, the cache
+    takes at most a quarter of that limit.
+
+.. _provsql-idp-fold:
+
+``provsql.idp_fold`` (default: ``'auto'``)
+    Split a circuit into independent parts, evaluate each separately,
+    and combine the results. ``'auto'``, ``'on'``, and ``'off'`` have
+    the same scope as for ``provsql.prob_cache``. A split evaluation
+    appears as ``fold`` in
+    :ref:`provsql.last_eval_method <provsql-last-eval-method>`.
+
 .. _provsql-last-eval-method:
 
 ``provsql.last_eval_method`` (default: empty)

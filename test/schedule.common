@@ -72,7 +72,8 @@ test: having_correlated having_count_distinct scalar_empty_having having_sum_zer
 test: inert_provenance_sublink conditioning given_conditioning rv_conditioning agg_conditioning
 
 # External compilers, tree decompositions, and knowledge-compilation helpers
-test: predicate_conditioning provenance_not mixed_selection last_eval_method d4 dsharp weightmc c2d minic2d d4_timeout external_tool_timeout semiring_timeout treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key expected
+test: predicate_conditioning provenance_not mixed_selection last_eval_method d4 dsharp weightmc c2d minic2d d4_timeout external_tool_timeout semiring_timeout treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key prob_cache expected
+test: canonical_form idp_fold
 test: large_circuit btw_reachability tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf compile_to_ddnnf_inversion_free ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
 
 # Shapley and Banzhaf values, and makeDD: they rewrite the tokens or
