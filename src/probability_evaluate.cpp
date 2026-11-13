@@ -950,6 +950,11 @@ struct EvalContext {
   mutable unsigned tw_proxy_ = 0;
   /// Lower bound on the d-tree's cost, raised each time it overruns a budget.
   double dtree_cost_floor_ = 0.;
+  /// Lower bound on tree-decomposition's cost, raised when the parts it
+  /// builds (islands, folded groups, residual) overrun a budget together.
+  double treedec_cost_floor_ = 0.;
+  /// Cost of the parts tree-decomposition has built in the current attempt.
+  double treedec_spent_ = 0.;
   mutable unsigned tw_max_degree_ = 0;
 
   void ensureTreewidthProxy() const {
@@ -1318,21 +1323,30 @@ public:
   // Delta is dropped; 2^w (capped at the MAX_TREEWIDTH applicability bound) is
   // the real cost driver.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
-           * pow2_clamped(ctx.tw_proxy_);
+    return std::max(ctx.treedec_cost_floor_,
+                    kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
+                    * pow2_clamped(ctx.tw_proxy_));
   }
+  /// Builds the d-DNNF of @p cc below @p g: the circuit of @p ctx, or one
+  /// of the parts it is evaluated in (an island, a folded group, the
+  /// residual).  The parts of one attempt share the budget of @p ctx, each
+  /// being charged to @c treedec_spent_.
   static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
+    const bool whole = &cc == &ctx.c;
+    // On the chooser's path, the cost is bounded by the next-best method's.
+    // A by-name call keeps the full MAX_TREEWIDTH bound.
+    const bool budgeted = !ctx.explicitly_named && std::isfinite(ctx.cost_budget);
+    const double size = whole ? static_cast<double>(ctx.circuit_size)
+                              : static_cast<double>(cc.getNbGates());
+    const double remaining = ctx.cost_budget - ctx.treedec_spent_;
     unsigned width_cap = TreeDecomposition::MAX_TREEWIDTH;
-    const double size = &cc == &ctx.c ? static_cast<double>(ctx.circuit_size)
-                                      : static_cast<double>(cc.getNbGates());
     try {
-      // On the chooser's path, the cost is bounded by the next-best method's:
-      // stop the min-fill build as soon as a bag shows the width it would take
-      // to exceed it (the degeneracy proxy that priced the method is only a
-      // lower bound, and the build of a large circuit is slow).  A by-name call
-      // keeps the full MAX_TREEWIDTH bound.
-      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
-        const double ratio = ctx.cost_budget / (kCostTreeDecomp * size);
+      // Stop the min-fill build as soon as a bag shows the width it would
+      // take to exceed what is left of the budget (the degeneracy proxy that
+      // priced the method is only a lower bound, and the build of a large
+      // circuit is slow).
+      if(budgeted) {
+        const double ratio = remaining / (kCostTreeDecomp * size);
         const double w = ratio >= 1. ? std::floor(std::log2(ratio)) : 0.;
         width_cap = static_cast<unsigned>(
           std::min<double>(w, TreeDecomposition::MAX_TREEWIDTH));
@@ -1342,44 +1356,59 @@ public:
       // EXACT treewidth, where the cost estimate above used only the degeneracy
       // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
       // build, recompute the real cost from the discovered width; if it exceeds
-      // the next-best method's cost, bail so the chooser re-ranks the method at
-      // that cost -- the build's own MAX_TREEWIDTH cap is the hard ceiling, this
-      // is the competitive refinement.  A by-name call runs unbounded.
-      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
-        const double real_cost = kCostTreeDecomp * size
-          * pow2_clamped(td.getTreewidth());
-        if(real_cost > ctx.cost_budget) {
-          if(static_cast<unsigned>(td.getTreewidth()) <= ctx.tw_proxy_)
-            throw CircuitException(
-              "tree-decomposition: discovered treewidth exceeds the budget");
+      // what is left of the budget, bail so the chooser re-ranks the method at
+      // the cost now known -- the build's own MAX_TREEWIDTH cap is the hard
+      // ceiling, this is the competitive refinement.
+      const double real_cost = kCostTreeDecomp * size
+        * pow2_clamped(td.getTreewidth());
+      if(budgeted && real_cost > remaining) {
+        if(whole)
           ctx.tw_proxy_ = std::max(ctx.tw_proxy_,
                                    static_cast<unsigned>(td.getTreewidth()));
-          throw MethodRepricedException(
-            "tree-decomposition: discovered treewidth exceeds the budget");
-        }
+        reprice(ctx, real_cost,
+                "tree-decomposition: discovered treewidth exceeds the budget");
       }
       dDNNF dd = dDNNFTreeDecompositionBuilder{cc, g, td}.build();
+      ctx.treedec_spent_ += real_cost;
       ctx.actual_method = "tree-decomposition";
       return dd;
     } catch(TreeDecompositionException &) {
       if(ctx.explicitly_named)
         provsql_error("Treewidth greater than %u",
                       TreeDecomposition::MAX_TREEWIDTH);
-      // Chooser: the build needs a width above the cap, which raises the bound
-      // that prices the method.  It competes again at that price, and drops out
-      // of the portfolio through applicable() once above MAX_TREEWIDTH.  Each
-      // retry raises the bound, so this terminates.
-      if(width_cap + 1 <= ctx.tw_proxy_)
+      if(whole) {
+        // The build needs a width above the cap, which raises the bound that
+        // prices the method.  It competes again at that price, and drops out
+        // of the portfolio through applicable() once above MAX_TREEWIDTH.
+        ctx.tw_proxy_ = std::max(ctx.tw_proxy_, width_cap + 1);
+        throw MethodRepricedException(
+          "tree-decomposition: treewidth above the bound");
+      }
+      // A part whose width is above MAX_TREEWIDTH is out of reach of the
+      // method, whatever the budget.
+      if(width_cap >= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH))
         throw CircuitException("tree-decomposition: treewidth above the bound");
-      ctx.tw_proxy_ = std::max(ctx.tw_proxy_, width_cap + 1);
-      throw MethodRepricedException(
-        "tree-decomposition: treewidth above the bound");
+      reprice(ctx, kCostTreeDecomp * size * pow2_clamped(width_cap + 1),
+              "tree-decomposition: treewidth above the bound");
     }
   }
+  /// Leaves the attempt for the chooser to rank the method again, at the
+  /// cost now known: what the parts built so far took, plus @p part_cost
+  /// for the one that does not fit.  That is above the budget, hence above
+  /// the estimate the method was picked on, so each retry raises the floor
+  /// and this terminates.
+  [[noreturn]] static void reprice(EvalContext &ctx, double part_cost,
+                                   const char *why) {
+    ctx.treedec_cost_floor_ =
+      std::max(ctx.treedec_cost_floor_, ctx.treedec_spent_ + part_cost);
+    throw MethodRepricedException(why);
+  }
   dDNNF buildDD(EvalContext &ctx) const override {
+    ctx.treedec_spent_ = 0.;
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.treedec_spent_ = 0.;
     return evaluateViaDD(ctx, "tree-decomposition", buildOn);
   }
 };
