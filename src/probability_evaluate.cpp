@@ -2057,13 +2057,11 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
     if(!probCacheEligible(ctx.c, ctx.gate))
       return std::nullopt;
 
-    std::vector<const ProbabilityMethod *> rest;
-    for(const ProbabilityMethod *m : all)
-      if(m != failed)
-        rest.push_back(m);
+    // Thrown where the root has nothing to fold: one group of children
+    // sharing inputs.
+    struct NothingToFold {};
 
     std::vector<std::string> used;
-     bool whole = false;
     ProbFoldEval eval;
     eval.part = [&](BooleanCircuit &part, gate_t part_root, bool linked) {
       EvalContext sub{nullptr, gate_t{}, pg_uuid_t{}, part, part_root, nullptr,
@@ -2078,29 +2076,28 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
         used.push_back(sub.actual_method);
       return p;
     };
-    eval.whole = [&]() {
-      whole = true;
-      ctx.fold_component = true;
-      return runPortfolio<double>(ctx, tol, rest,
-        [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); },
-        keep);
-    };
+    eval.whole = []() -> double { throw NothingToFold(); };
     try {
       const double r = probFoldedProbability(ctx.c, ctx.gate, eval);
-      if(!whole) {
-        std::string name = "fold";
-        for(const std::string &u : used)
-          if(!u.empty())
-            name += "," + u;
-        ctx.actual_method = name;
-      }
+      std::string name = "fold";
+      for(const std::string &u : used)
+        if(!u.empty())
+          name += "," + u;
+      ctx.actual_method = name;
       return r;
-    } catch(CircuitException &) 
-      {
+    } catch(NothingToFold &) {
+      // The portfolio this is called from goes on with the remaining methods
+      // on the whole circuit.  Running them here would run them twice when
+      // they all fail, the caller trying them again after us.
+    } catch(CircuitException &) {
       if(provsql_interrupted)
         throw;
-      return std::nullopt;
-      }
+      // A part resisted every method: the caller tries the whole circuit.
+    }
+    // Either way the root is not folded again by the methods that follow,
+    // which would only split it into the same groups.
+    ctx.fold_component = true;
+    return std::nullopt;
   };
   return runPortfolio<double>(ctx, tol, std::move(portfolio),
     [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); }, fold);
