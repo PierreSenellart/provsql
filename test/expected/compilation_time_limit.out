@@ -1,0 +1,9 @@
+\set ECHO none
+reference
+0.864639
+(1 row)
+default_agrees|method
+t|tree-decomposition
+(1 row)
+compiler started, then stopped:
+t

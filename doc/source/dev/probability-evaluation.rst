@@ -395,7 +395,11 @@ Currently Supported Methods
        real cost and -- if it exceeds the next-best method's (``cost_budget``) --
        throws so the chooser re-ranks it at that cost, keeping it for a later
        attempt under a larger budget (the ``MAX_TREEWIDTH`` cap remains the hard
-       ceiling).  By-name calls run unbounded.
+       ceiling).  By-name calls run unbounded.  When the circuit is built
+       in parts (islands, folded groups), these share the budget of the
+       attempt; and if min-fill finds no decomposition of width
+       ``MAX_TREEWIDTH`` for a part, the circuit is built whole, since the
+       heuristic may succeed on the whole where it failed on a part.
    * - ``"d-tree"``
      - The Olteanu-Huang-Koch anytime interval-bounds engine
        (:cite:`DBLP:conf/icde/OlteanuHK10`, ``src/DTree.cpp``): a cheap
@@ -439,6 +443,14 @@ Currently Supported Methods
        compiler named, the highest-preference available one, to
        produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
+       **Speculative execution:** an external compiler cannot tell that
+       it is overrunning its estimate, so under the chooser it is stopped
+       from outside (``ExternalToolTimeLimit`` in
+       :cfile:`external_tool.cpp`) after ten times the cost of the
+       next-best method, in ms, and re-ranked at that time.  The limit
+       applies to command-line compilers, not to those reached through
+       KCMCP.  A by-name call, or compilation as the last method left,
+       runs until ``statement_timeout``.
    * - ``"mobius"``
      - :cfile:`mobius_evaluate.cpp` -- exact route for a
        ``gate_mobius``-rooted token (the safe-UCQ Möbius-inversion

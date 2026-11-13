@@ -1,0 +1,7 @@
+\set ECHO none
+some_built_whole|split_fails_or_differs
+t|0
+(1 row)
+prob_cache_reset
+
+(1 row)

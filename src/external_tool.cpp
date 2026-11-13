@@ -26,6 +26,7 @@ extern "C" {
 #include "provsql_interrupt.h"
 #include "provsql_config.h"
 
+#include <chrono>
 #include <string>
 #include <unordered_map>
 
@@ -61,6 +62,25 @@ static const char *DEFAULT_PATH =
  *  statement past @c provsql.max_memory. */
 static bool tool_memory_exceeded = false;
 
+/** Time limit, in ms, of the innermost @c ExternalToolTimeLimit scope (0:
+ *  none). */
+static double tool_time_limit_ms = 0.;
+
+/** Set by @c run_in_own_pgroup when it killed a tool that ran past
+ *  @c tool_time_limit_ms. */
+static bool tool_time_exceeded = false;
+
+ExternalToolTimeLimit::ExternalToolTimeLimit(double ms)
+  : saved_(tool_time_limit_ms)
+{
+  tool_time_limit_ms = ms > 0. ? ms : 0.;
+}
+
+ExternalToolTimeLimit::~ExternalToolTimeLimit()
+{
+  tool_time_limit_ms = saved_;
+}
+
 static int run_in_own_pgroup(const std::string &cmdline)
 {
 #ifdef PROVSQL_NO_SUBPROCESS
@@ -91,6 +111,7 @@ static int run_in_own_pgroup(const std::string &cmdline)
 
   int status = 0;
   unsigned polls = 0;
+  const auto started = std::chrono::steady_clock::now();
   for (;;) {
     pid_t w = waitpid(child, &status, WNOHANG);
     if (w == child)
@@ -125,6 +146,18 @@ static int run_in_own_pgroup(const std::string &cmdline)
       tool_memory_exceeded = true;
       break;
     }
+    /* The time limit of an ExternalToolTimeLimit scope: past it, the group
+     * is killed as on a cancel, and run_external_tool reports it. */
+    if (tool_time_limit_ms > 0. &&
+        std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - started).count()
+          > tool_time_limit_ms) {
+      killpg(child, SIGKILL);
+      pid_t r;
+      do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
+      tool_time_exceeded = true;
+      break;
+    }
     pg_usleep(10000);                 /* 10 ms; an arriving signal wakes us via EINTR */
   }
   return status;
@@ -150,6 +183,7 @@ int run_external_tool(const std::string &cmdline) {
   }
 
   tool_memory_exceeded = false;
+  tool_time_exceeded = false;
   int rv = run_in_own_pgroup(cmdline);
 
   if (override_path) {
@@ -174,6 +208,14 @@ int run_external_tool(const std::string &cmdline) {
        std::to_string(provsql_max_memory) + " MB) and was stopped").c_str(),
       "Raise provsql.max_memory (e.g., SET provsql.max_memory = '2GB'), or "
       "set it to 0 for no limit.");
+  }
+
+  if (tool_time_exceeded) {
+    tool_time_exceeded = false;
+    throw ExternalToolTimeout(
+            "an external tool was stopped after " +
+            std::to_string(static_cast<long>(tool_time_limit_ms)) +
+            " ms, the time the cheapest alternative was expected to take");
   }
 
   return rv;

@@ -19,6 +19,10 @@
  * (shell exit 127), "tool not executable" (126), "killed by signal", and
  * "ran and exited nonzero".
  *
+ * A tool can be given a time limit with an @c ExternalToolTimeLimit scope:
+ * past it, the group is killed in the same way and @c run_external_tool
+ * throws @c ExternalToolTimeout.
+ *
  * In the standalone @c tdkc build (when @c TDKC is defined) the GUC layer is
  * unavailable; the helpers degenerate to a plain @c std::system() call and
  * a no-op @c find_external_tool.
@@ -27,6 +31,8 @@
 #define PROVSQL_EXTERNAL_TOOL_H
 
 #include <string>
+
+#include "Circuit.h"
 
 #ifdef TDKC
 #include <cstdlib>
@@ -57,6 +63,37 @@ inline std::string format_external_tool_status(int, const std::string &tool) {
  *                 @c system() return), or -1 if @c fork failed.
  */
 int run_external_tool(const std::string &cmdline);
+
+/**
+ * @brief Raised by @c run_external_tool when it stopped the tool for
+ *        running past the time limit of the enclosing
+ *        @c ExternalToolTimeLimit scope.
+ */
+class ExternalToolTimeout : public CircuitException {
+public:
+  using CircuitException::CircuitException;
+};
+
+/**
+ * @brief Scope within which an external tool is given a time limit.
+ *
+ * While an object of this class is alive, @c run_external_tool kills a
+ * tool (its whole process group, as on a cancel) that has run for more
+ * than the given time, and throws @c ExternalToolTimeout.  The cost-based
+ * chooser of the probability methods uses it to hold an external compiler
+ * to the cost of the method it was preferred over; a tool run outside any
+ * such scope has no limit other than @c statement_timeout.
+ */
+class ExternalToolTimeLimit {
+public:
+  /// @param ms  Time limit in milliseconds; 0 or less for no limit.
+  explicit ExternalToolTimeLimit(double ms);
+  ~ExternalToolTimeLimit();
+  ExternalToolTimeLimit(const ExternalToolTimeLimit &) = delete;
+  ExternalToolTimeLimit &operator=(const ExternalToolTimeLimit &) = delete;
+private:
+  double saved_;  ///< Limit of the enclosing scope, restored on exit
+};
 
 /**
  * @brief Locate an external tool by name.

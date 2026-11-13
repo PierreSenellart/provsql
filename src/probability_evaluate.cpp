@@ -71,6 +71,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
 #include "ProbCache.h"
+#include "external_tool.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
@@ -829,6 +830,12 @@ static const double kCostTreeDecomp      = 7e-4;  // O(S * 2^w):          ~7e-4 
 // super-linear S^1.5 above a startup floor, keeping it a strong last resort.
 static const double kCostCompilation     = 2e-3;  // ~2e-3 * S^1.5 ms ...
 static const double kCostCompilationFloor= 40.0;  // ... but at least ~40 ms (startup + easy compile)
+// An external compiler picked by the chooser runs for at most
+// kCompilationBudgetFactor times the cost (in ms) of the next-best method, and
+// for at least kCompilationMinLimitMs, the time a compiler takes to start and
+// answer on an easy circuit, with some margin.
+static const double kCompilationBudgetFactor = 10.;
+static const double kCompilationMinLimitMs   = 400.;
 static const double kCostDnfShapeFeature = 2e-6;  // O(S):                ~2e-6 * S
 static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 * S
 // Approximate portfolio members (relative & additive paths).  Their cost has the
@@ -955,6 +962,11 @@ struct EvalContext {
   double treedec_cost_floor_ = 0.;
   /// Cost of the parts tree-decomposition has built in the current attempt.
   double treedec_spent_ = 0.;
+  /// Lower bound on compilation's cost, raised when the external compiler
+  /// is stopped for running past its time limit.
+  double compilation_cost_floor_ = 0.;
+  /// Time, in ms, the external compiler has run in the current attempt.
+  double compilation_spent_ms_ = 0.;
   mutable unsigned tw_max_degree_ = 0;
 
   void ensureTreewidthProxy() const {
@@ -1327,6 +1339,10 @@ public:
                     kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
                     * pow2_clamped(ctx.tw_proxy_));
   }
+  /// Thrown by buildOn when a part of the circuit has no tree decomposition
+  /// of width MAX_TREEWIDTH that min-fill can find.
+  struct PartOutOfReach {};
+
   /// Builds the d-DNNF of @p cc below @p g: the circuit of @p ctx, or one
   /// of the parts it is evaluated in (an island, a folded group, the
   /// residual).  The parts of one attempt share the budget of @p ctx, each
@@ -1373,9 +1389,11 @@ public:
       ctx.actual_method = "tree-decomposition";
       return dd;
     } catch(TreeDecompositionException &) {
-      if(ctx.explicitly_named)
+      if(ctx.explicitly_named && whole)
         provsql_error("Treewidth greater than %u",
                       TreeDecomposition::MAX_TREEWIDTH);
+      if(ctx.explicitly_named)
+        throw PartOutOfReach();
       if(whole) {
         // The build needs a width above the cap, which raises the bound that
         // prices the method.  It competes again at that price, and drops out
@@ -1384,10 +1402,11 @@ public:
         throw MethodRepricedException(
           "tree-decomposition: treewidth above the bound");
       }
-      // A part whose width is above MAX_TREEWIDTH is out of reach of the
-      // method, whatever the budget.
+      // No decomposition of width MAX_TREEWIDTH was found for this part.
+      // That does not rule the method out: min-fill is a heuristic, and may
+      // do better on the whole circuit than on one of its parts.
       if(width_cap >= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH))
-        throw CircuitException("tree-decomposition: treewidth above the bound");
+        throw PartOutOfReach();
       reprice(ctx, kCostTreeDecomp * size * pow2_clamped(width_cap + 1),
               "tree-decomposition: treewidth above the bound");
     }
@@ -1409,7 +1428,15 @@ public:
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.treedec_spent_ = 0.;
-    return evaluateViaDD(ctx, "tree-decomposition", buildOn);
+    try {
+      return evaluateViaDD(ctx, "tree-decomposition", buildOn);
+    } catch(PartOutOfReach &) {
+      // Splitting the circuit into islands or folded groups left a part
+      // the method cannot build.  Build the circuit whole, as is done when
+      // neither the cache nor the fold applies: what the parts already
+      // took stays charged to the budget.
+      return buildOn(ctx.c, ctx.gate, ctx).probabilityEvaluation();
+    }
   }
 };
 
@@ -1432,7 +1459,9 @@ public:
   // does, it is the only candidate and runs regardless.)
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
     const double s = static_cast<double>(ctx.circuit_size);
-    return std::max(kCostCompilationFloor, kCostCompilation * s * std::sqrt(s));
+    return std::max(ctx.compilation_cost_floor_,
+                    std::max(kCostCompilationFloor,
+                             kCostCompilation * s * std::sqrt(s)));
   }
   static dDNNF buildOn(const BooleanCircuit &cc, gate_t g, EvalContext &ctx) {
     // On a chooser path (exact / relative / additive) ctx.args carries the
@@ -1445,16 +1474,47 @@ public:
     const std::string compiler =
       ctx.explicitly_named ? ctx.args : std::string();
     std::string used;
-    dDNNF dd = cc.compilation(g, compiler, &used);
+    // On the chooser's path, the compiler is held to the cost of the
+    // next-best method: unlike the in-process methods it cannot tell that
+    // it is overrunning, so it is stopped from outside, after
+    // kCompilationBudgetFactor times that cost in ms (the same margin as the
+    // d-tree's, for the cost being an estimate of the time, not the time),
+    // and repriced at the time it is now known to exceed.  The parts of one
+    // attempt (islands, folded groups, residual) share the limit.  A by-name
+    // call, or compilation as the last method standing, has no limit.
+    const bool budgeted = !ctx.explicitly_named && std::isfinite(ctx.cost_budget);
+    const double limit_ms =
+      std::max(kCompilationMinLimitMs,
+               kCompilationBudgetFactor * ctx.cost_budget);
+    const auto reprice = [&](const char *why) {
+      ctx.compilation_cost_floor_ =
+        std::max(ctx.compilation_cost_floor_, limit_ms);
+      throw MethodRepricedException(why);
+    };
+    if(budgeted && ctx.compilation_spent_ms_ >= limit_ms)
+      reprice("compilation: time limit reached");
+    const auto t0 = std::chrono::steady_clock::now();
+    dDNNF dd;
+    try {
+      ExternalToolTimeLimit limit(
+        budgeted ? limit_ms - ctx.compilation_spent_ms_ : 0.);
+      dd = cc.compilation(g, compiler, &used);
+    } catch(ExternalToolTimeout &e) {
+      reprice(e.what());
+    }
+    ctx.compilation_spent_ms_ += std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - t0).count();
     // Report WHICH compiler ran (e.g. "compilation:d4"), not just "compilation":
     // on a chooser path the tool is auto-selected, so the bare label hid it.
     ctx.actual_method = used.empty() ? "compilation" : "compilation:" + used;
     return dd;
   }
   dDNNF buildDD(EvalContext &ctx) const override {
+    ctx.compilation_spent_ms_ = 0.;
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.compilation_spent_ms_ = 0.;
     // A call by name is answered from the cache only by the compiler it
     // names (resolved here, which also rejects an unknown one up front).
     std::string builder = "compilation";
@@ -2009,6 +2069,11 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
       } catch(MethodRepricedException &e) {
         if(provsql_interrupted)
           throw;
+        if(provsql_verbose >= 50)
+          provsql_notice("calibrate kind=repriced which=%s S=%zu cost=%g "
+                         "budget=%g newcost=%g why=%s", best->name().c_str(),
+                         ctx.circuit_size, best_cost, second_cost,
+                         best->estimatedCost(ctx, tol), e.what());
         // The method stays in the running, so this is not its verdict: keep what
         // a dropped method reported, e.g., that no knowledge compiler is
         // installed, which is what the user can act on.
@@ -2019,6 +2084,10 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
       } catch(CircuitException &e) {
         if(provsql_interrupted)
           throw;  // a cancel / timeout -- do not silently try another method
+        if(provsql_verbose >= 50)
+          provsql_notice("calibrate kind=dropped which=%s S=%zu cost=%g "
+                         "budget=%g why=%s", best->name().c_str(),
+                         ctx.circuit_size, best_cost, second_cost, e.what());
         last_error = e.what();
         have_last_error = true;
         portfolio.erase(std::remove(portfolio.begin(), portfolio.end(), best),
