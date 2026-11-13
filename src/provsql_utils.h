@@ -647,9 +647,25 @@ extern int provsql_mobius_max_cnf;
  * code paths). */
 extern bool provsql_simplify_on_load;
 
-extern bool provsql_prob_cache;
+/**
+ * @brief Values of the @c provsql.prob_cache and @c provsql.idp_fold GUCs.
+ *
+ * Both optimizations change which computation answers a probability
+ * request, so by default they apply only where ProvSQL chooses the method.
+ */
+typedef enum {
+  PROVSQL_EVAL_OPT_OFF,  ///< Never applied.
+  PROVSQL_EVAL_OPT_AUTO, ///< Applied by the default method only (default).
+  PROVSQL_EVAL_OPT_ON    ///< Also applied to a method called by name.
+} provsql_eval_opt_t;
 
-extern bool provsql_idp_fold;
+/** @brief Backing variable of @c provsql.prob_cache: when the per-backend
+ * cache of compiled d-DNNFs, keyed by canonical form, is consulted. */
+extern int provsql_prob_cache;
+
+/** @brief Backing variable of @c provsql.idp_fold: when an AND or OR root is
+ * split into independent groups evaluated separately. */
+extern int provsql_idp_fold;
 
 /** @brief Run the hybrid evaluator (simplifier + per-cmp island
  *         decomposer) before dispatching a probability_evaluate query.

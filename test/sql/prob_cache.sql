@@ -2,6 +2,15 @@
 \pset format unaligned
 
 SELECT prob_cache_reset();
+
+-- Both settings default to 'auto': a method called by name runs as named,
+-- touching neither the cache nor the fold.
+SHOW provsql.prob_cache;
+SHOW provsql.idp_fold;
+
+-- 'on' extends them to a method called by name, which makes the cache
+-- deterministic to exercise: no chooser decides what runs.
+SET provsql.prob_cache = on;
 SET provsql.idp_fold = off;
 
 CREATE TABLE city_lineage AS
@@ -90,6 +99,39 @@ SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
 SELECT prob_cache_stats() - 'bytes' AS stats_fold_only;
 SET provsql.prob_cache = on;
 RESET provsql.idp_fold;
+
+-- A method called by name under 'auto': no cache activity, no fold, and
+-- the method reported is the one that ran.
+SELECT prob_cache_reset();
+RESET provsql.prob_cache;
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_conj_named_auto FROM conj;
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_conj_named_auto_repeat FROM conj;
+SHOW provsql.last_eval_method;
+SELECT prob_cache_stats() - 'bytes' AS stats_named_auto;
+
+-- The same calls under 'on': the second is served from the cache, and says so.
+SET provsql.prob_cache = on;
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_conj_named_on FROM conj;
+SHOW provsql.last_eval_method;
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
+  AS p_conj_named_on_repeat FROM conj;
+SHOW provsql.last_eval_method;
+SELECT prob_cache_stats() - 'bytes' AS stats_named_on;
+
+-- Folding by name is reported as a fold.
+SET provsql.idp_fold = on;
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
+  AS p_berlin_named_fold FROM city_lineage WHERE city='Berlin';
+SHOW provsql.last_eval_method;
+RESET provsql.idp_fold;
+RESET provsql.prob_cache;
 
 CREATE TABLE chain(id int, grp int);
 INSERT INTO chain

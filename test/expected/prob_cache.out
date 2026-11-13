@@ -2,6 +2,12 @@
 prob_cache_reset
 
 (1 row)
+provsql.prob_cache
+auto
+(1 row)
+provsql.idp_fold
+auto
+(1 row)
 remove_provenance
 
 (1 row)
@@ -115,6 +121,42 @@ p_berlin_fold_only
 stats_fold_only
 {"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
 (1 row)
+prob_cache_reset
+
+(1 row)
+p_conj_named_auto
+0.229600
+(1 row)
+p_conj_named_auto_repeat
+0.229600
+(1 row)
+provsql.last_eval_method
+tree-decomposition
+(1 row)
+stats_named_auto
+{"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
+(1 row)
+p_conj_named_on
+0.229600
+(1 row)
+provsql.last_eval_method
+tree-decomposition,cache:tree-decomposition
+(1 row)
+p_conj_named_on_repeat
+0.229600
+(1 row)
+provsql.last_eval_method
+cache:tree-decomposition
+(1 row)
+stats_named_on
+{"hits": 4, "misses": 2, "entries": 2, "inserts": 2, "evictions": 0, "rejections": 0}
+(1 row)
+p_berlin_named_fold
+0.8200
+(1 row)
+provsql.last_eval_method
+fold
+(1 row)
 add_provenance
 
 (1 row)
@@ -128,7 +170,7 @@ p_chains_default
 0.994455
 (1 row)
 provsql.last_eval_method
-fold,tree-decomposition
+fold,tree-decomposition,cache:tree-decomposition
 (1 row)
 stats_after_chains_default
 {"hits": 1, "misses": 1, "entries": 1, "inserts": 1, "evictions": 0, "rejections": 0}

@@ -329,9 +329,10 @@ Set the toggle to :guilabel:`Semiring` so no Boolean shortcut fires, and
 the provenance is the literal circuit of the cyclic join -- Studio draws it,
 visibly bushy. Run :guilabel:`Marginal probability` with the default
 ``exact`` method: rather than trying methods in turn, ProvSQL's
-:ref:`cost-based chooser <probability-guarantees>` inspects the circuit and
-runs the exact method it expects to be cheapest, and Studio names it next to
-the result -- here *via d-tree*, ``≈ 0.8818`` in milliseconds. Forcing a
+:ref:`cost-based chooser <probability-guarantees>` inspects the circuit,
+splits it into independent parts, and runs on each the exact method it
+expects to be cheapest. Studio names what ran next to the result -- here
+*via fold,d-tree,sieve*, ``≈ 0.8818`` in milliseconds. Forcing a
 method shows what the chooser avoided: ``independent`` **errors**, while
 ``tree-decomposition`` or ``compilation`` agree on ``≈ 0.8818``.
 
@@ -371,8 +372,8 @@ Pick :guilabel:`Probability benchmark`: it times every probability method
 on the hard circuit, one row each, with the compiled d-DNNF size beside the
 run time. Observe the spread: the exact methods that finish (``d-tree``,
 ``tree-decomposition``, the compilers, the model counters) all agree to full
-precision, ``d-tree`` -- the chooser's pick above -- being the fastest of
-them; the samplers ``monte-carlo`` and ``karp-luby`` land near ``0.8818``;
+precision, ``d-tree`` -- one of the chooser's picks above -- being the
+fastest of them; the samplers ``monte-carlo`` and ``karp-luby`` land near ``0.8818``;
 ``independent`` shows its error; and methods that do not scale --
 ``possible-worlds`` enumeration, the ``panini-obdd`` compiler, the
 ``weightmc`` counter -- hit the ``statement_timeout``. The compiled sizes

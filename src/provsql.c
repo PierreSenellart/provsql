@@ -136,8 +136,16 @@ bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a gua
 int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route: it declines (falling through to joint-width / the cost-based chooser) once its compile has built more than this many gates, bounding the \f$O(|D|^k)\f$ blow-up of a high-level safe query on large data; @c provsql.mobius_max_gates GUC
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
-bool provsql_prob_cache = true;
-bool provsql_idp_fold = true;
+int provsql_prob_cache = PROVSQL_EVAL_OPT_AUTO;
+int provsql_idp_fold = PROVSQL_EVAL_OPT_AUTO;
+
+/** @brief Option table of the @c provsql.prob_cache and @c provsql.idp_fold GUCs. */
+static const struct config_enum_entry provsql_eval_opt_options[] = {
+  {"off", PROVSQL_EVAL_OPT_OFF, false},
+  {"auto", PROVSQL_EVAL_OPT_AUTO, false},
+  {"on", PROVSQL_EVAL_OPT_ON, false},
+  {NULL, 0, false}
+};
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
@@ -38979,43 +38987,52 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.prob_cache",
-                           "Cache compiled circuit representations keyed "
-                           "by canonical form.",
-                           "When on (default), the d-DNNF-producing "
-                           "probability methods (tree-decomposition, "
-                           "compilation) key a per-backend cache of "
-                           "compiled representations by the circuit's "
-                           "canonical form (invariant under tuple-variable "
-                           "renaming and commutative-gate reordering, with "
-                           "componentwise shared-island keys), so a "
-                           "structurally repeated circuit reuses the "
-                           "compiled artifact with its probabilities "
-                           "re-instantiated instead of recompiling. Set "
-                           "off to force a fresh compilation on every "
-                           "call (e.g. when benchmarking compilers).",
+  DefineCustomEnumVariable("provsql.prob_cache",
+                           "When compiled d-DNNFs are cached by canonical "
+                           "form.",
+                           "The d-DNNF-producing probability methods "
+                           "(tree-decomposition, compilation) can key a "
+                           "per-backend cache of compiled d-DNNFs by the "
+                           "circuit's canonical form (invariant under "
+                           "tuple-variable renaming and commutative-gate "
+                           "reordering, with componentwise shared-island "
+                           "keys), so a structurally repeated circuit "
+                           "reuses the compiled d-DNNF with its "
+                           "probabilities re-instantiated. 'auto' "
+                           "(default) uses the cache when ProvSQL chooses "
+                           "the method, and leaves a method called by name "
+                           "to run as named; 'on' also uses it for a "
+                           "method called by name, which is then answered "
+                           "only from a d-DNNF the same method compiled; "
+                           "'off' never uses it. A cached answer is "
+                           "reported as 'cache:<method>' in "
+                           "provsql.last_eval_method.",
                            &provsql_prob_cache,
-                           true,
+                           PROVSQL_EVAL_OPT_AUTO,
+                           provsql_eval_opt_options,
                            PGC_USERSET,
                            0,
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.idp_fold",
-                           "Split AND and OR gates into independent groups "
-                           "before evaluating.",
-                           "When on (default), the children of an AND or "
-                           "OR root are grouped by shared inputs, each "
-                           "group is evaluated separately, and the "
-                           "results are combined in closed form. The "
-                           "default strategy does this when the circuit "
-                           "is not read-once and then chooses a method "
-                           "for each group; tree-decomposition and "
-                           "compilation called by name do it before "
-                           "building their d-DNNFs. It works with "
-                           "provsql.prob_cache on or off.",
+  DefineCustomEnumVariable("provsql.idp_fold",
+                           "When AND and OR gates are split into "
+                           "independent groups before evaluation.",
+                           "The children of an AND or OR root can be "
+                           "grouped by shared inputs, each group "
+                           "evaluated separately, and the results "
+                           "combined in closed form. 'auto' (default) "
+                           "does this when ProvSQL chooses the method, on "
+                           "a circuit that is not read-once, choosing a "
+                           "method for each group; 'on' also does it "
+                           "before tree-decomposition or compilation "
+                           "called by name builds its d-DNNFs; 'off' "
+                           "never does it. A folded evaluation is "
+                           "reported as 'fold' in "
+                           "provsql.last_eval_method.",
                            &provsql_idp_fold,
-                           true,
+                           PROVSQL_EVAL_OPT_AUTO,
+                           provsql_eval_opt_options,
                            PGC_USERSET,
                            0,
                            NULL,

@@ -1206,6 +1206,44 @@ public:
   }
 };
 
+/// Whether a provsql.prob_cache / provsql.idp_fold setting applies to this
+/// evaluation: 'auto' covers the methods ProvSQL chooses, so that a method
+/// called by name runs as named; 'on' covers that call too.
+static bool evalOptActive(int setting, const EvalContext &ctx)
+{
+  return setting == PROVSQL_EVAL_OPT_ON
+         || (setting == PROVSQL_EVAL_OPT_AUTO && !ctx.explicitly_named);
+}
+
+/// Shared evaluate() of the d-DNNF-producing methods: build through the fold
+/// and the cache where they apply, and report what actually ran.  @p builder
+/// names the method as its cache entries record it; a call by name is answered
+/// only from an entry of that builder.
+template<typename BuildOn>
+static double evaluateViaDD(EvalContext &ctx, const std::string &builder,
+                            BuildOn buildOn)
+{
+  const bool cache = evalOptActive(provsql_prob_cache, ctx);
+  const bool fold = evalOptActive(provsql_idp_fold, ctx) && !ctx.fold_component;
+  if(!(cache || fold) || !probCacheEligible(ctx.c, ctx.gate))
+    return buildOn(ctx.c, ctx.gate, ctx).probabilityEvaluation();
+
+  ProbCacheReport report;
+  ProbCacheOptions options;
+  options.use_cache = cache;
+  options.fold = fold;
+  if(ctx.explicitly_named)
+    options.required_builder = builder;
+  options.last_builder = [&ctx]() { return ctx.actual_method; };
+  options.report = &report;
+  const double p = probCachedProbability(
+    ctx.c, ctx.gate,
+    [&](const BooleanCircuit &cc, gate_t g) { return buildOn(cc, g, ctx); },
+    nullptr, options);
+  ctx.actual_method = report.describe();
+  return p;
+}
+
 // makeDD's internal interpret-as-dd -> tree-decomposition -> compiler ladder is
 // lifted here into three first-class catalog members, so the chooser can see
 // and rank the three most cost-divergent exact compilers (linear / treewidth-
@@ -1342,17 +1380,7 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    const bool fold = provsql_idp_fold && !ctx.fold_component;
-    if((provsql_prob_cache || fold)
-       && probCacheEligible(ctx.c, ctx.gate)) {
-      ctx.actual_method = "tree-decomposition";
-      return probCachedProbability(
-        ctx.c, ctx.gate,
-        [&ctx](const BooleanCircuit &cc, gate_t g) {
-        return buildOn(cc, g, ctx);
-      }, nullptr, ProbCacheOptions{provsql_prob_cache, fold});
-    }
-    return buildDD(ctx).probabilityEvaluation();
+    return evaluateViaDD(ctx, "tree-decomposition", buildOn);
   }
 };
 
@@ -1398,19 +1426,12 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    const bool fold = provsql_idp_fold && !ctx.fold_component;
-    if((provsql_prob_cache || fold)
-       && probCacheEligible(ctx.c, ctx.gate)) {
-      if(ctx.explicitly_named)
-        BooleanCircuit::checkCompiler(ctx.args);
-      ctx.actual_method = "compilation";
-      return probCachedProbability(
-        ctx.c, ctx.gate,
-        [&ctx](const BooleanCircuit &cc, gate_t g) {
-        return buildOn(cc, g, ctx);
-      }, nullptr, ProbCacheOptions{provsql_prob_cache, fold});
-    }
-    return buildDD(ctx).probabilityEvaluation();
+    // A call by name is answered from the cache only by the compiler it
+    // names (resolved here, which also rejects an unknown one up front).
+    std::string builder = "compilation";
+    if(ctx.explicitly_named)
+      builder += ":" + BooleanCircuit::checkCompiler(ctx.args);
+    return evaluateViaDD(ctx, builder, buildOn);
   }
 };
 
@@ -2016,7 +2037,8 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
   const auto keep = [](const ProbabilityMethod *) {
     return std::optional<double>();
   };
-  const bool may_fold = provsql_idp_fold && tol.kind == ToleranceKind::Exact
+  const bool may_fold = evalOptActive(provsql_idp_fold, ctx)
+                        && tol.kind == ToleranceKind::Exact
                         && !ctx.fold_component && !ctx.inv_free_cert
                         && !std::isfinite(ctx.outside_cost)
                         && rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
@@ -2398,7 +2420,10 @@ static void record_last_eval_method(const std::string &actual_method)
     if(end == std::string::npos)
       end = actual_method.size();
     const std::string name = actual_method.substr(start, end - start);
-    if(!name.empty() && current.find(name) == std::string::npos) {
+    // Whole-name match: "tree-decomposition" is not already listed because
+    // "cache:tree-decomposition" is.
+    if(!name.empty()
+       && ("," + current + ",").find("," + name + ",") == std::string::npos) {
       if(!current.empty()) current += ",";
       current += name;
       changed = true;

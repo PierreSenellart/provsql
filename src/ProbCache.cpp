@@ -43,12 +43,20 @@ double instantiateAndEvaluate(const ProbCache::Entry &e,
   return dd.probabilityEvaluation();
 }
 
+void noteOnce(std::vector<std::string> &names, const std::string &name)
+{
+  if(std::find(names.begin(), names.end(), name) == names.end())
+    names.push_back(name);
+}
+
 void tryCacheCompiled(
   ProbCache &cache, const CanonicalForm &key, dDNNF &dd,
+  const std::string &builder,
   const std::function<std::string(const CanonicalLeaf &)> &leaf_uuid)
 {
   ProbCache::Entry e;
   e.form = key.form;
+  e.builder = builder;
   e.leaf_gate.assign(key.leaves.size(), gate_t{0});
   e.leaf_present.assign(key.leaves.size(), 0);
 
@@ -128,10 +136,12 @@ ProbCache &ProbCache::instance()
   return cache;
 }
 
-const ProbCache::Entry *ProbCache::find(const CanonicalForm &key)
+const ProbCache::Entry *ProbCache::find(const CanonicalForm &key,
+                                        const std::string &builder)
 {
   auto it = map_.find(key.form);
-  if(it == map_.end()) {
+  if(it == map_.end()
+     || (!builder.empty() && it->second->builder != builder)) {
     ++stats_.misses;
     return nullptr;
   }
@@ -152,8 +162,9 @@ bool ProbCache::insert(const CanonicalForm &key, Entry entry)
 {
   auto it = map_.find(key.form);
   if(it != map_.end()) {
-    lru_.splice(lru_.begin(), lru_, it->second);
-    return false;
+    bytes_ -= it->second->bytes;
+    lru_.erase(it->second);
+    map_.erase(it);
   }
   bytes_ += entry.bytes;
   lru_.push_front(std::move(entry));
@@ -205,11 +216,32 @@ bool probCacheEligible(const BooleanCircuit &c, gate_t root)
 
 namespace {
 
+/// Runs @p compile, recording the builder it used in the report.
+dDNNF compileNoted(const BooleanCircuit &c, gate_t root,
+                   const ProbCacheCompileFn &compile, bool *ran_compiler,
+                   const ProbCacheOptions &options, std::string &builder)
+{
+  if(ran_compiler)
+    *ran_compiler = true;
+  dDNNF dd = compile(c, root);
+  builder = options.last_builder ? options.last_builder() : std::string();
+  if(options.report)
+    noteOnce(options.report->built, builder);
+  return dd;
+}
+
 double cachedComponent(const BooleanCircuit &c, gate_t root,
                        const ProbCacheCompileFn &compile,
-                       bool *ran_compiler)
+                       bool *ran_compiler, const ProbCacheOptions &options)
 {
   ProbCache &cache = ProbCache::instance();
+  const auto lookup = [&](const CanonicalForm &cf) {
+    const ProbCache::Entry *e = cache.find(cf, options.required_builder);
+    if(e && options.report)
+      noteOnce(options.report->cached, e->builder);
+    return e;
+  };
+  std::string builder;
   const IslandKey key = computeIslandKey(c, root);
 
   std::unordered_map<gate_t, size_t, hash_gate_t> island_index;
@@ -221,19 +253,18 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
     const CanonicalForm &icf = key.islands[i];
     const gate_t g = key.island_roots[i];
     double p;
-    if(const auto *e = cache.find(icf)) {
+    if(const auto *e = lookup(icf)) {
       std::vector<double> probs;
       probs.reserve(icf.leaves.size());
       for(const CanonicalLeaf &leaf : icf.leaves)
         probs.push_back(c.getProb(leaf.gate));
       p = instantiateAndEvaluate(*e, probs);
     } else {
-      if(ran_compiler)
-        *ran_compiler = true;
       BooleanCircuit island;
       gate_t island_root = materialiseComponent(c, g, nullptr, {}, {}, island);
-      dDNNF dd = compile(island, island_root);
-      tryCacheCompiled(cache, icf, dd, [&](const CanonicalLeaf &leaf) {
+      dDNNF dd = compileNoted(island, island_root, compile, ran_compiler,
+                              options, builder);
+      tryCacheCompiled(cache, icf, dd, builder, [&](const CanonicalLeaf &leaf) {
         return c.getUUID(leaf.gate);
       });
       p = dd.probabilityEvaluation();
@@ -248,11 +279,8 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
     probs.push_back(leaf.is_abstract ? island_prob.at(leaf.gate)
                                      : c.getProb(leaf.gate));
 
-  if(const auto *e = cache.find(rcf))
+  if(const auto *e = lookup(rcf))
     return instantiateAndEvaluate(*e, probs);
-
-  if(ran_compiler)
-    *ran_compiler = true;
 
   auto residualLeafUuid = [&](const CanonicalLeaf &leaf) {
     return leaf.is_abstract ? islandLeafUuid(island_index.at(leaf.gate))
@@ -260,8 +288,8 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
   };
 
   if(key.island_roots.empty()) {
-    dDNNF dd = compile(c, root);
-    tryCacheCompiled(cache, rcf, dd, residualLeafUuid);
+    dDNNF dd = compileNoted(c, root, compile, ran_compiler, options, builder);
+    tryCacheCompiled(cache, rcf, dd, builder, residualLeafUuid);
     return dd.probabilityEvaluation();
   }
 
@@ -269,20 +297,21 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
   BooleanCircuit res;
   gate_t res_root = materialiseComponent(c, root, &frontier, island_index,
                                          island_prob, res);
-  dDNNF dd = compile(res, res_root);
-  tryCacheCompiled(cache, rcf, dd, residualLeafUuid);
+  dDNNF dd = compileNoted(res, res_root, compile, ran_compiler, options,
+                          builder);
+  tryCacheCompiled(cache, rcf, dd, builder, residualLeafUuid);
   return dd.probabilityEvaluation();
 }
 
 double evaluateComponent(const BooleanCircuit &c, gate_t root,
                          const ProbCacheCompileFn &compile,
-                         bool *ran_compiler, bool use_cache)
+                         bool *ran_compiler, const ProbCacheOptions &options)
 {
-  if(use_cache)
-    return cachedComponent(c, root, compile, ran_compiler);
-  if(ran_compiler)
-    *ran_compiler = true;
-  return compile(c, root).probabilityEvaluation();
+  if(options.use_cache)
+    return cachedComponent(c, root, compile, ran_compiler, options);
+  std::string builder;
+  return compileNoted(c, root, compile, ran_compiler, options, builder)
+         .probabilityEvaluation();
 }
 
 std::vector<std::vector<gate_t> > independentGroups(
@@ -419,17 +448,39 @@ double probCachedProbability(const BooleanCircuit &c, gate_t root,
     *ran_compiler = false;
   if(options.fold) {
     ProbFoldEval eval;
+    bool whole = false;
     eval.part = [&](BooleanCircuit &part, gate_t part_root, bool) {
       return evaluateComponent(part, part_root, compile, ran_compiler,
-                               options.use_cache);
+                               options);
     };
     eval.whole = [&]() {
-      return evaluateComponent(c, root, compile, ran_compiler,
-                               options.use_cache);
+      whole = true;
+      return evaluateComponent(c, root, compile, ran_compiler, options);
     };
-    return foldedProbability(c, root, eval, 0);
+    const double p = foldedProbability(c, root, eval, 0);
+    if(options.report)
+      options.report->folded = !whole;
+    return p;
   }
-  return evaluateComponent(c, root, compile, ran_compiler, options.use_cache);
+  return evaluateComponent(c, root, compile, ran_compiler, options);
+}
+
+std::string ProbCacheReport::describe() const
+{
+  std::string label;
+  const auto add = [&label](const std::string &name) {
+    if(!label.empty())
+      label += ",";
+    label += name;
+  };
+  if(folded)
+    add("fold");
+  for(const std::string &b : built)
+    if(!b.empty())
+      add(b);
+  for(const std::string &b : cached)
+    add(b.empty() ? "cache" : "cache:" + b);
+  return label;
 }
 
 }

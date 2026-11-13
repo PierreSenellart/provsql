@@ -208,6 +208,44 @@ static void testCacheEndToEnd() {
   assert(st.hits > 0);
   assert(st.inserts > 0);
 
+  // A caller requiring a builder is served only that builder's entries:
+  // another one's is a miss, recompiled and replaced, and the report says
+  // which builders ran and which were served.
+  {
+    ProbCacheReport report;
+    ProbCacheOptions named;
+    named.required_builder = "A";
+    named.last_builder = []() { return std::string("A"); };
+    named.report = &report;
+    const size_t entries = ProbCache::instance().stats().entries;
+    bool compiled = false;
+    double p = probCachedProbability(c2, r2, compile, &compiled, named);
+    assert(compiled);                    // the entry has no builder: a miss
+    assert(std::fabs(p - expected(0.9, 0.2, 0.7)) < 1e-12);
+    assert(report.describe() == "A");
+    assert(ProbCache::instance().stats().entries == entries);  // replaced
+
+    report = ProbCacheReport();
+    p = probCachedProbability(c1, r1, compile, &compiled, named);
+    assert(!compiled);                   // now compiled by A: a hit
+    assert(std::fabs(p - expected(0.5, 0.4, 0.3)) < 1e-12);
+    assert(report.describe() == "cache:A");
+
+    named.required_builder = "B";
+    named.last_builder = []() { return std::string("B"); };
+    report = ProbCacheReport();
+    probCachedProbability(c1, r1, compile, &compiled, named);
+    assert(compiled);                    // A's entry does not answer B
+    assert(report.describe() == "B");
+
+    ProbCacheOptions any;                // no requirement: any builder serves
+    report = ProbCacheReport();
+    any.report = &report;
+    probCachedProbability(c2, r2, compile, &compiled, any);
+    assert(!compiled);
+    assert(report.describe() == "cache:B");
+  }
+
   BooleanCircuit c3;
   gate_t a3 = c3.setGate("u", BooleanGate::IN, 0.25);
   gate_t b3 = c3.setGate("v", BooleanGate::IN, 0.5);
@@ -499,8 +537,11 @@ static void testFolding() {
     TreeDecomposition td(cc);
     return dDNNFTreeDecompositionBuilder{cc, g, td}.build();
   };
-  const ProbCacheOptions fold{true, true};
-  const ProbCacheOptions fold_only{false, true};
+  ProbCacheOptions fold;
+  fold.fold = true;
+  ProbCacheOptions fold_only;
+  fold_only.use_cache = false;
+  fold_only.fold = true;
   ProbCache &cache = ProbCache::instance();
 
   for(BooleanGate type : {BooleanGate::OR, BooleanGate::AND}) {
