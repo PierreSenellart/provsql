@@ -3275,6 +3275,7 @@ _PANEL_SETTINGS: list[tuple[str, str]] = [
     ("provsql.mobius_max_cnf", "advanced"),
     ("provsql.mobius_max_gates", "advanced"),
     ("provsql.prob_cache", "advanced"),
+    ("provsql.prob_cache_size", "advanced"),
     ("provsql.store_synchronous_commit", "advanced"),
     ("provsql.store_wal_logging", "advanced"),
     ("provsql.fallback_compiler", "tools"),

@@ -1047,7 +1047,8 @@ value. The panel's sections are:
   ``provsql.gate_cache_size``, ``provsql.idp_fold``,
   ``provsql.joint_max_states``, ``provsql.joint_max_treewidth``,
   ``provsql.mobius_max_cnf``, ``provsql.mobius_max_gates``,
-  ``provsql.prob_cache``) and the durability of the circuit
+  ``provsql.prob_cache``, ``provsql.prob_cache_size``) and the
+  durability of the circuit
   (``provsql.store_synchronous_commit``, ``provsql.store_wal_logging``).
 * **Session**: the visible part of ``search_path`` (``provsql`` is always
   pinned at the end).
