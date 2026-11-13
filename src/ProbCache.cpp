@@ -4,6 +4,10 @@
  */
 #include "ProbCache.h"
 
+extern "C" {
+#include "provsql_utils.h"
+}
+
 #include <algorithm>
 #include <cassert>
 #include <numeric>
@@ -12,8 +16,26 @@ namespace provsql {
 
 namespace {
 
-constexpr size_t MAX_PROB_CACHE_SIZE = 1536u << 20;
-constexpr size_t MAX_PROB_CACHE_ENTRY_SIZE = MAX_PROB_CACHE_SIZE / 4;
+/// Budget of the cache, in bytes: @c provsql.prob_cache_size, and no more
+/// than a quarter of @c provsql.max_memory when that is set.  What a
+/// statement adds to the cache counts in the memory its evaluations take,
+/// and the cache must not be what makes them pass the limit.
+size_t maxCacheBytes()
+{
+  size_t budget = static_cast<size_t>(provsql_prob_cache_size) * 1024;
+  if(provsql_max_memory > 0)
+    budget = std::min(budget,
+                      static_cast<size_t>(provsql_max_memory) * 1024 * 1024 / 4);
+  return budget;
+}
+
+/// Largest entry worth keeping: beyond a quarter of the budget, storing
+/// one d-DNNF would push out most of the others.
+size_t maxEntryBytes()
+{
+  return maxCacheBytes() / 4;
+}
+
 constexpr unsigned MAX_FOLD_DEPTH = 64;
 
 size_t estimateEntryBytes(const dDNNF &dd, const ProbCache::Entry &e)
@@ -23,7 +45,8 @@ size_t estimateEntryBytes(const dDNNF &dd, const ProbCache::Entry &e)
     wires += dd.getWires(g).size();
     uuid_bytes += dd.getUUID(g).size();
   }
-  return e.form.size()
+  // The form is held twice, as the key of the map and in the entry.
+  return 2 * e.form.size()
          + dd.getNbGates() * 96
          + wires * sizeof(gate_t)
          + uuid_bytes * 2
@@ -156,7 +179,7 @@ const ProbCache::Entry *ProbCache::find(const CanonicalForm &key,
 
 bool ProbCache::admits(size_t bytes)
 {
-  if(bytes <= MAX_PROB_CACHE_ENTRY_SIZE)
+  if(bytes <= maxEntryBytes())
     return true;
   ++stats_.rejections;
   return false;
@@ -174,13 +197,18 @@ bool ProbCache::insert(const CanonicalForm &key, Entry entry)
   lru_.push_front(std::move(entry));
   map_[key.form] = lru_.begin();
   ++stats_.inserts;
-  while(bytes_ > MAX_PROB_CACHE_SIZE && lru_.size() > 1) {
+  trim();
+  return true;
+}
+
+void ProbCache::trim()
+{
+  while(bytes_ > maxCacheBytes() && !lru_.empty()) {
     bytes_ -= lru_.back().bytes;
     map_.erase(lru_.back().form);
     lru_.pop_back();
     ++stats_.evictions;
   }
-  return true;
 }
 
 void ProbCache::reset()
@@ -196,6 +224,7 @@ ProbCacheStats ProbCache::stats() const
   ProbCacheStats s = stats_;
   s.entries = lru_.size();
   s.bytes = bytes_;
+  s.budget = maxCacheBytes();
   return s;
 }
 
@@ -239,6 +268,7 @@ double cachedComponent(const BooleanCircuit &c, gate_t root,
                        bool *ran_compiler, const ProbCacheOptions &options)
 {
   ProbCache &cache = ProbCache::instance();
+  cache.trim();
   const auto lookup = [&](const CanonicalForm &cf) {
     const ProbCache::Entry *e = cache.find(cf, options.required_builder);
     if(e && options.report)

@@ -34,15 +34,15 @@ FROM exc_lineage ORDER BY city;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_berlin FROM city_lineage WHERE city='Berlin';
-SELECT prob_cache_stats() - 'bytes' AS stats_after_berlin;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_berlin;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_new_york FROM city_lineage WHERE city='New York';
-SELECT prob_cache_stats() - 'bytes' AS stats_after_new_york;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_new_york;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_paris FROM city_lineage WHERE city='Paris';
-SELECT prob_cache_stats() - 'bytes' AS stats_after_paris;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_paris;
 
 CREATE TABLE conj AS SELECT provenance() AS lin FROM
   (SELECT DISTINCT 1 AS x FROM personnel WHERE city='Berlin') a
@@ -54,11 +54,11 @@ SELECT circuit_island_key(lin) AS island_key FROM conj;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_conj FROM conj;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_conj;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_conj;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_conj_repeat FROM conj;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_conj_repeat;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_conj_repeat;
 
 SELECT ROUND(probability_evaluate(lin,'possible-worlds')::numeric,6)
   AS p_conj_possible_worlds FROM conj;
@@ -71,32 +71,32 @@ SELECT circuit_island_key(lin) AS island_key FROM pair;
 
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_pair FROM pair;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_pair;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_pair;
 
 SELECT prob_cache_reset();
 SET provsql.prob_cache = off;
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_berlin_uncached FROM city_lineage WHERE city='Berlin';
-SELECT prob_cache_stats() - 'bytes' AS stats_cache_off;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_cache_off;
 SET provsql.prob_cache = on;
 
 SELECT prob_cache_reset();
 SET provsql.idp_fold = on;
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_pair_folded FROM pair;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_folded_pair;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_folded_pair;
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_berlin_folded FROM city_lineage WHERE city='Berlin';
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_new_york_folded FROM city_lineage WHERE city='New York';
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_conj_folded FROM conj;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_folded;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_folded;
 SELECT prob_cache_reset();
 SET provsql.prob_cache = off;
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_berlin_fold_only FROM city_lineage WHERE city='Berlin';
-SELECT prob_cache_stats() - 'bytes' AS stats_fold_only;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_fold_only;
 SET provsql.prob_cache = on;
 RESET provsql.idp_fold;
 
@@ -110,7 +110,7 @@ SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_conj_named_auto_repeat FROM conj;
 SHOW provsql.last_eval_method;
-SELECT prob_cache_stats() - 'bytes' AS stats_named_auto;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_named_auto;
 
 -- The same calls under 'on': the second is served from the cache, and says so.
 SET provsql.prob_cache = on;
@@ -122,7 +122,7 @@ SET provsql.last_eval_method = '';
 SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,6)
   AS p_conj_named_on_repeat FROM conj;
 SHOW provsql.last_eval_method;
-SELECT prob_cache_stats() - 'bytes' AS stats_named_on;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_named_on;
 
 -- Folding by name is reported as a fold.
 SET provsql.idp_fold = on;
@@ -148,7 +148,7 @@ SET provsql.last_eval_method = '';
 SELECT ROUND(probability_evaluate(lin)::numeric,6)
   AS p_chains_default FROM chains;
 SHOW provsql.last_eval_method;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_chains_default;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_chains_default;
 
 SELECT prob_cache_reset();
 SET provsql.idp_fold = off;
@@ -156,7 +156,7 @@ SET provsql.last_eval_method = '';
 SELECT ROUND(probability_evaluate(lin)::numeric,6)
   AS p_chains_default_unfolded FROM chains;
 SHOW provsql.last_eval_method;
-SELECT prob_cache_stats() - 'bytes' AS stats_after_chains_default_unfolded;
+SELECT prob_cache_stats() - '{bytes,budget}'::text[] AS stats_after_chains_default_unfolded;
 RESET provsql.idp_fold;
 SELECT prob_cache_reset();
 

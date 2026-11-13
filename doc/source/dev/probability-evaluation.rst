@@ -664,9 +664,14 @@ copies the stored d-DNNF, sets the probabilities of its inputs and
 evaluates it.  Each entry records the method that built it: the
 default strategy accepts any entry, whereas a method called by name is
 served only from an entry of its own (and of the same compiler), and
-replaces another's.  The estimated size of the cache is capped by a
-constant in :cfile:`ProbCache.cpp`, entries being dropped least
-recently used first; it is not governed by ``provsql.max_memory``.
+replaces another's.  The estimated size of the cache is capped by
+``provsql.prob_cache_size``: entries are dropped least recently used
+first, and a d-DNNF larger than a quarter of the budget is not stored.
+What a statement adds to the cache is memory its evaluations take, so
+it counts towards ``provsql.max_memory``; for the cache not to be what
+exhausts that limit, the budget is at most a quarter of it.
+The estimate errs on the high side (by 13 to 23 % of the memory
+actually taken, on the two families of circuits it was measured on).
 
 **Fold.**  The children of an AND or OR root are grouped by the inputs
 below them that they share.  Distinct groups are independent, so the

@@ -137,6 +137,7 @@ int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route:
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 int provsql_prob_cache = PROVSQL_EVAL_OPT_AUTO;
+int provsql_prob_cache_size = 65536; ///< Byte budget, in kB, of the per-backend cache of compiled d-DNNFs; @c provsql.prob_cache_size GUC
 int provsql_idp_fold = PROVSQL_EVAL_OPT_AUTO;
 
 /** @brief Option table of the @c provsql.prob_cache and @c provsql.idp_fold GUCs. */
@@ -39015,6 +39016,27 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
+  DefineCustomIntVariable("provsql.prob_cache_size",
+                          "Size of the per-backend cache of compiled "
+                          "d-DNNFs, in kilobytes.",
+                          "The d-DNNFs that provsql.prob_cache keeps for "
+                          "the session are counted at their estimated "
+                          "size. When the budget is exceeded the least "
+                          "recently used are dropped, and a d-DNNF larger "
+                          "than a quarter of the budget is not kept at "
+                          "all. When provsql.max_memory is set, the budget "
+                          "is at most a quarter of it. Lowering the "
+                          "budget takes effect at the next evaluation that "
+                          "uses the cache. Default 65536 (64 MB).",
+                          &provsql_prob_cache_size,
+                          65536,
+                          64,
+                          INT_MAX / 1024,
+                          PGC_USERSET,
+                          GUC_UNIT_KB,
+                          NULL,
+                          NULL,
+                          NULL);
   DefineCustomEnumVariable("provsql.idp_fold",
                            "When AND and OR gates are split into "
                            "independent groups before evaluation.",

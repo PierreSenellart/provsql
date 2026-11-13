@@ -98,3 +98,30 @@ t
 prob_cache_reset
 
 (1 row)
+large_exact|large_not_kept
+t|{"hits": 0, "misses": 1, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 1}
+(1 row)
+prob_cache_reset
+
+(1 row)
+wrong_small
+0
+(1 row)
+kept|some_left|within_budget|consistent
+14|t|t|t
+(1 row)
+default_budget|expected
+67108864|67108864
+(1 row)
+under_large_limit
+67108864
+(1 row)
+under_small_limit|expected
+26214400|26214400
+(1 row)
+smaller_setting|expected
+1048576|1048576
+(1 row)
+prob_cache_reset
+
+(1 row)

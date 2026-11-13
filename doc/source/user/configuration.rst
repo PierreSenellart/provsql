@@ -281,6 +281,15 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``'off'`` disables it. A cached answer appears as ``cache:<method>``
     in :ref:`provsql.last_eval_method <provsql-last-eval-method>`.
 
+.. _provsql-prob-cache-size:
+
+``provsql.prob_cache_size`` (default: ``64MB``)
+    Size of the cache of ``provsql.prob_cache``, per session. Past it,
+    the d-DNNFs least recently used are dropped; one larger than a
+    quarter of it is not kept. When
+    :ref:`provsql.max_memory <provsql-max-memory>` is set, the cache
+    takes at most a quarter of that limit.
+
 .. _provsql-idp-fold:
 
 ``provsql.idp_fold`` (default: ``'auto'``)

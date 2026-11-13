@@ -663,6 +663,10 @@ typedef enum {
  * cache of compiled d-DNNFs, keyed by canonical form, is consulted. */
 extern int provsql_prob_cache;
 
+/** @brief Backing variable of @c provsql.prob_cache_size: the budget, in
+ * kB, of the per-backend cache of compiled d-DNNFs. */
+extern int provsql_prob_cache_size;
+
 /** @brief Backing variable of @c provsql.idp_fold: when an AND or OR root is
  * split into independent groups evaluated separately. */
 extern int provsql_idp_fold;

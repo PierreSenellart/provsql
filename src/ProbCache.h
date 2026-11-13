@@ -43,14 +43,16 @@ struct ProbCacheStats {
   uint64_t rejections = 0;  ///< d-DNNFs too large to be stored
   size_t entries = 0;       ///< Entries held now
   size_t bytes = 0;         ///< Estimated size of the entries held now
+  size_t budget = 0;        ///< Size the entries may reach before some are dropped
 };
 
 /**
  * @brief The cache of compiled d-DNNFs of one backend.
  *
  * Entries are dropped least recently used first once their estimated
- * total size passes a fixed limit, and a d-DNNF larger than a quarter of
- * that limit is not stored.
+ * total size passes the budget, and a d-DNNF larger than a quarter of
+ * the budget is not stored.  The budget is @c provsql.prob_cache_size,
+ * lowered to a quarter of @c provsql.max_memory when that is smaller.
  */
 class ProbCache {
 public:
@@ -79,6 +81,10 @@ bool admits(size_t bytes);
 
 /// Stores @p entry under @p key, replacing an entry already there.
 bool insert(const CanonicalForm &key, Entry entry);
+
+/// Drops the least recently used entries until the cache fits its budget
+/// (which the setting may have lowered since the last insertion).
+void trim();
 
 /// Empties the cache and its counters.
 void reset();

@@ -252,6 +252,71 @@ SELECT count(*) FILTER (WHERE abs(fold_td(token) - p) > 1e-9)
 FROM fold_reference;
 SELECT (prob_cache_stats()->>'hits')::int > 0 AS hits;
 
+-- The budget of the cache, at its minimum of 64 kB.  The chain
+-- v0 v1 + v1 v2 + ... of k conjunctions has a form of its own for each k,
+-- and so has its dual (v0 + v1) (v1 + v2) ...  The chain of 40
+-- conjunctions compiles into a d-DNNF larger than a quarter of the budget,
+-- which is evaluated and not kept; the chains of 2 to 8 and their duals
+-- are kept one after the other until the first ones have to leave.
+CREATE FUNCTION fold_chain(k int, dual boolean = false) RETURNS uuid
+LANGUAGE plpgsql AS $$
+DECLARE
+  kids uuid[] := '{}';
+  name text := CASE WHEN dual THEN 'd' ELSE 'b' END || k;
+  inner_type provenance_gate := CASE WHEN dual THEN 'plus' ELSE 'times' END;
+  outer_type provenance_gate := CASE WHEN dual THEN 'times' ELSE 'plus' END;
+BEGIN
+  FOR i IN 1..k LOOP
+    kids := kids || fold_gate(name || '_pair' || i, inner_type,
+      fold_in(name || '_' || i - 1, 0.5), fold_in(name || '_' || i, 0.5));
+  END LOOP;
+  RETURN fold_gate(name, outer_type, VARIADIC kids);
+END $$;
+CREATE TABLE fold_budget AS
+  SELECT k, dual, fold_chain(k, dual) AS token
+  FROM generate_series(2, 8) k, (VALUES (false), (true)) d(dual);
+CREATE TABLE fold_budget_reference AS
+  SELECT k, dual, token, probability_evaluate(token, 'possible-worlds') AS p
+  FROM fold_budget ORDER BY dual, k;
+SET provsql.prob_cache = off;
+CREATE TABLE fold_large AS
+  SELECT token, fold_td(token) AS p FROM (SELECT fold_chain(40) AS token) t;
+SET provsql.prob_cache = on;
+SET provsql.prob_cache_size = 64;
+SELECT prob_cache_reset();
+SELECT abs(fold_td(token) - p) < 1e-12 AS large_exact,
+       prob_cache_stats() - '{bytes,budget}'::text[] AS large_not_kept
+FROM fold_large;
+SELECT prob_cache_reset();
+SELECT count(*) FILTER (WHERE abs(fold_td(token) - p) > 1e-12) AS wrong_small
+FROM fold_budget_reference;
+SELECT (prob_cache_stats()->>'inserts')::int AS kept,
+       (prob_cache_stats()->>'evictions')::int > 0 AS some_left,
+       (prob_cache_stats()->>'bytes')::int <= 64 * 1024 AS within_budget,
+       (prob_cache_stats()->>'entries')::int
+         = (prob_cache_stats()->>'inserts')::int
+           - (prob_cache_stats()->>'evictions')::int AS consistent;
+RESET provsql.prob_cache_size;
+
+-- The budget is the setting, and at most a quarter of provsql.max_memory
+-- when there is one.
+SELECT prob_cache_stats()->>'budget' AS default_budget,
+       64 * 1024 * 1024 AS expected;
+SET provsql.max_memory = '1GB';
+SELECT prob_cache_stats()->>'budget' AS under_large_limit;
+SET provsql.max_memory = '100MB';
+SELECT prob_cache_stats()->>'budget' AS under_small_limit,
+       100 * 1024 * 1024 / 4 AS expected;
+SET provsql.prob_cache_size = '1MB';
+SELECT prob_cache_stats()->>'budget' AS smaller_setting,
+       1024 * 1024 AS expected;
+RESET provsql.prob_cache_size;
+RESET provsql.max_memory;
+DROP TABLE fold_large;
+DROP TABLE fold_budget_reference;
+DROP TABLE fold_budget;
+DROP FUNCTION fold_chain(int, boolean);
+
 RESET provsql.prob_cache;
 RESET provsql.idp_fold;
 SELECT prob_cache_reset();

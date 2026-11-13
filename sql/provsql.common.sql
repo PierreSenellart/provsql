@@ -11604,9 +11604,9 @@ CREATE OR REPLACE FUNCTION circuit_island_key(token UUID)
  *
  * Returns a jsonb object: hits and misses (lookups served and not
  * served), inserts, evictions (entries dropped for room), rejections
- * (d-DNNFs too large to keep), and the entries and bytes held now.  The
- * counters run from the start of the session or the last
- * prob_cache_reset.
+ * (d-DNNFs too large to keep), the entries and bytes held now, and the
+ * budget in bytes that the entries may reach.  The counters run from the
+ * start of the session or the last prob_cache_reset.
  */
 CREATE OR REPLACE FUNCTION prob_cache_stats()
   RETURNS jsonb AS

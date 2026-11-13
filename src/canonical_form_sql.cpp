@@ -118,6 +118,7 @@ Datum prob_cache_stats(PG_FUNCTION_ARGS)
         << ",\"rejections\":" << s.rejections
         << ",\"entries\":" << s.entries
         << ",\"bytes\":" << s.bytes
+        << ",\"budget\":" << s.budget
         << '}';
     Datum json_datum = DirectFunctionCall1(
       jsonb_in, CStringGetDatum(pstrdup(out.str().c_str())));
