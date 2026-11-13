@@ -56,9 +56,9 @@ void tryCacheCompiled(
   for(size_t i = 0; i < key.leaves.size(); ++i) {
     const std::string u = leaf_uuid(key.leaves[i]);
     if(u.empty())
-      return;
+        return;
     if(!dd.hasGate(u))
-      continue;
+        continue;
     gate_t g = dd.getGate(u);
     if(dd.getGateType(g) != BooleanGate::IN)
       return;
@@ -81,7 +81,7 @@ void tryCacheCompiled(
     }
   }
 
-  e.bytes = estimateEntryBytes(dd, e);
+  e.bytes=estimateEntryBytes(dd, e);
   if(!cache.admits(e.bytes))
     return;
   e.dd = dd;
@@ -98,7 +98,7 @@ gate_t materialiseComponent(
   std::unordered_map<gate_t, gate_t, hash_gate_t> old2new;
   old2new.reserve(nodes.size());
 
-  auto isAbstract = [&](gate_t g) {
+  auto isAbstract =[&](gate_t g) {
     return g != root && frontier && frontier->count(g) != 0;
   };
 
@@ -362,8 +362,7 @@ gate_t materialiseGroup(const BooleanCircuit &c, BooleanGate type,
 }
 
 double foldedProbability(const BooleanCircuit &c, gate_t g,
-                         const ProbCacheCompileFn &compile,
-                         bool *ran_compiler, bool use_cache, unsigned depth)
+                         const ProbFoldEval &eval, unsigned depth)
 {
   const BooleanGate type = c.getGateType(g);
   if(type == BooleanGate::IN)
@@ -383,13 +382,11 @@ double foldedProbability(const BooleanCircuit &c, gate_t g,
       for(const auto &group : groups) {
         double p;
         if(group.size() == 1) {
-          p = foldedProbability(c, group.front(), compile, ran_compiler,
-                                use_cache, depth + 1);
+          p = foldedProbability(c, group.front(), eval, depth + 1);
         } else {
           BooleanCircuit part;
           const gate_t part_root = materialiseGroup(c, type, group, part);
-          p = evaluateComponent(part, part_root, compile, ran_compiler,
-                                use_cache);
+          p = eval.part(part, part_root, true);
         }
         product *= type == BooleanGate::AND ? p : 1. - p;
       }
@@ -398,13 +395,19 @@ double foldedProbability(const BooleanCircuit &c, gate_t g,
   }
 
   if(depth == 0)
-    return evaluateComponent(c, g, compile, ran_compiler, use_cache);
+    return eval.whole();
 
   BooleanCircuit part;
   const gate_t part_root = materialiseComponent(c, g, nullptr, {}, {}, part);
-  return evaluateComponent(part, part_root, compile, ran_compiler, use_cache);
+  return eval.part(part, part_root, false);
 }
 
+}
+
+double probFoldedProbability(const BooleanCircuit &c, gate_t root,
+                             const ProbFoldEval &eval)
+{
+  return foldedProbability(c, root, eval, 0);
 }
 
 double probCachedProbability(const BooleanCircuit &c, gate_t root,
@@ -414,9 +417,18 @@ double probCachedProbability(const BooleanCircuit &c, gate_t root,
 {
   if(ran_compiler)
     *ran_compiler = false;
-  if(options.fold)
-    return foldedProbability(c, root, compile, ran_compiler,
-                             options.use_cache, 0);
+  if(options.fold) {
+    ProbFoldEval eval;
+    eval.part = [&](BooleanCircuit &part, gate_t part_root, bool) {
+      return evaluateComponent(part, part_root, compile, ran_compiler,
+                               options.use_cache);
+    };
+    eval.whole = [&]() {
+      return evaluateComponent(c, root, compile, ran_compiler,
+                               options.use_cache);
+    };
+    return foldedProbability(c, root, eval, 0);
+  }
   return evaluateComponent(c, root, compile, ran_compiler, options.use_cache);
 }
 

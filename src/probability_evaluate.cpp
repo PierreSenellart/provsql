@@ -50,6 +50,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <csignal>
 #include <string>
 #include <sstream>
@@ -906,6 +907,8 @@ struct EvalContext {
   double outside_cost = std::numeric_limits<double>::infinity();
   bool multivalued_rewritten = false;
   std::string actual_method;
+  bool linked_group = false;
+  bool fold_component = false;
 
   void ensureMultivaluedRewritten() {
     if(!multivalued_rewritten) {
@@ -1052,7 +1055,8 @@ public:
   // keeping explicit 'independent' available on any circuit as the escape
   // hatch that names the computation rather than its producer.
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    return rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
+    return !ctx.linked_group
+           && rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = ctx.c.independentEvaluation(ctx.gate);
@@ -1311,14 +1315,15 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if((provsql_prob_cache || provsql_idp_fold)
+    const bool fold = provsql_idp_fold && !ctx.fold_component;
+    if((provsql_prob_cache || fold)
        && probCacheEligible(ctx.c, ctx.gate)) {
       ctx.actual_method = "tree-decomposition";
       return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
-      }, nullptr, ProbCacheOptions{provsql_prob_cache, provsql_idp_fold});
+      }, nullptr, ProbCacheOptions{provsql_prob_cache, fold});
     }
     return buildDD(ctx).probabilityEvaluation();
   }
@@ -1366,14 +1371,17 @@ public:
     return buildOn(ctx.c, ctx.gate, ctx);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if((provsql_prob_cache || provsql_idp_fold)
+    const bool fold = provsql_idp_fold && !ctx.fold_component;
+    if((provsql_prob_cache || fold)
        && probCacheEligible(ctx.c, ctx.gate)) {
+      if(ctx.explicitly_named)
+        BooleanCircuit::checkCompiler(ctx.args);
       ctx.actual_method = "compilation";
       return probCachedProbability(
         ctx.c, ctx.gate,
         [&ctx](const BooleanCircuit &cc, gate_t g) {
         return buildOn(cc, g, ctx);
-      }, nullptr, ProbCacheOptions{provsql_prob_cache, provsql_idp_fold});
+      }, nullptr, ProbCacheOptions{provsql_prob_cache, fold});
     }
     return buildDD(ctx).probabilityEvaluation();
   }
@@ -1826,9 +1834,10 @@ namespace {
 /// @c buildDD respectively); everything else -- lazy feature acquisition, the
 /// cheapest-first ranking, the speculative budget, and dropping a method that
 /// throws -- is identical for both, so it lives here once.
-template<class R, class Run>
+template<class R, class Run, class Dropped>
 R runPortfolio(EvalContext &ctx, const Tolerance &tol,
-               std::vector<const ProbabilityMethod *> portfolio, Run run)
+               std::vector<const ProbabilityMethod *> portfolio, Run run,
+               Dropped dropped)
 {
   // Each step either RUNS the cheapest ready method or ACQUIRES the cheapest
   // pending feature -- and we acquire a feature only when no ready method is
@@ -1914,6 +1923,8 @@ R runPortfolio(EvalContext &ctx, const Tolerance &tol,
         have_last_error = true;
         portfolio.erase(std::remove(portfolio.begin(), portfolio.end(), best),
                         portfolio.end());
+        if(std::optional<R> r = dropped(best))
+          return std::move(*r);
       }
     } else if(have_pending) {
       if(provsql_verbose >= 50) {
@@ -1951,8 +1962,76 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
        // be excluded by admissibility, not left to lose on cost.
        && (tol.delta > 0. || m->isDeterministic()))
       portfolio.push_back(m.get());
+
+  const auto keep = [](const ProbabilityMethod *) {
+    return std::optional<double>();
+  };
+  const bool may_fold = provsql_idp_fold && tol.kind == ToleranceKind::Exact
+                        && !ctx.fold_component && !ctx.inv_free_cert
+                        && !std::isfinite(ctx.outside_cost)
+                        && rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
+  if(!may_fold)
+    return runPortfolio<double>(ctx, tol, std::move(portfolio),
+      [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); }, keep);
+
+  const std::vector<const ProbabilityMethod *> all = portfolio;
+  const auto fold = [&](const ProbabilityMethod *failed)
+                    -> std::optional<double> {
+    if(failed->name() != "independent")
+      return std::nullopt;
+    const BooleanGate type = ctx.c.getGateType(ctx.gate);
+    if(type != BooleanGate::AND && type != BooleanGate::OR)
+      return std::nullopt;
+    if(!probCacheEligible(ctx.c, ctx.gate))
+      return std::nullopt;
+
+    std::vector<const ProbabilityMethod *> rest;
+    for(const ProbabilityMethod *m : all)
+      if(m != failed)
+        rest.push_back(m);
+
+    std::vector<std::string> used;
+     bool whole = false;
+    ProbFoldEval eval;
+    eval.part = [&](BooleanCircuit &part, gate_t part_root, bool linked) {
+      EvalContext sub{nullptr, gate_t{}, pg_uuid_t{}, part, part_root, nullptr,
+                      false, ctx.args, false, part.getInputs().size(),
+                      part.getNbGates()};
+      sub.linked_group = linked;
+      sub.fold_component = true;
+      const double p = runPortfolio<double>(sub, tol, all,
+        [&](const ProbabilityMethod *m){ return m->evaluate(sub, tol); },
+        keep);
+      if(std::find(used.begin(), used.end(), sub.actual_method) == used.end())
+        used.push_back(sub.actual_method);
+      return p;
+    };
+    eval.whole = [&]() {
+      whole = true;
+      ctx.fold_component = true;
+      return runPortfolio<double>(ctx, tol, rest,
+        [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); },
+        keep);
+    };
+    try {
+      const double r = probFoldedProbability(ctx.c, ctx.gate, eval);
+      if(!whole) {
+        std::string name = "fold";
+        for(const std::string &u : used)
+          if(!u.empty())
+            name += "," + u;
+        ctx.actual_method = name;
+      }
+      return r;
+    } catch(CircuitException &) 
+      {
+      if(provsql_interrupted)
+        throw;
+      return std::nullopt;
+      }
+  };
   return runPortfolio<double>(ctx, tol, std::move(portfolio),
-    [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); });
+    [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); }, fold);
 }
 
 dDNNF MethodCatalog::chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) const
@@ -1967,7 +2046,8 @@ dDNNF MethodCatalog::chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) co
     if(m->producesDD())
       portfolio.push_back(m.get());
   return runPortfolio<dDNNF>(ctx, tol, std::move(portfolio),
-    [&](const ProbabilityMethod *m){ return m->buildDD(ctx); });
+    [&](const ProbabilityMethod *m){ return m->buildDD(ctx); },
+    [](const ProbabilityMethod *) { return std::optional<dDNNF>(); });
 }
 
 const MethodCatalog &MethodCatalog::instance()
@@ -2261,12 +2341,23 @@ static void record_last_eval_method(const std::string &actual_method)
   if(actual_method.empty())
     return;
   std::string current = provsql_last_eval_method ? provsql_last_eval_method : "";
-  if(current.find(actual_method) == std::string::npos) {
-    if(!current.empty()) current += ",";
-    current += actual_method;
+  bool changed = false;
+  size_t start = 0;
+  while(start <= actual_method.size()) {
+    size_t end = actual_method.find(',', start);
+    if(end == std::string::npos)
+      end = actual_method.size();
+    const std::string name = actual_method.substr(start, end - start);
+    if(!name.empty() && current.find(name) == std::string::npos) {
+      if(!current.empty()) current += ",";
+      current += name;
+      changed = true;
+    }
+    start = end + 1;
+  }
+  if(changed)
     SetConfigOption("provsql.last_eval_method", current.c_str(),
                     PGC_USERSET, PGC_S_SESSION);
-  }
 }
 
 /**

@@ -62,7 +62,13 @@ struct ProbCacheOptions {
   bool fold = false;
 };
 
+struct ProbFoldEval {std::function<double(BooleanCircuit &, gate_t, bool)> part;
+  std::function<double()> whole;
+};
+
 bool probCacheEligible(const BooleanCircuit &c, gate_t root);
+
+double probFoldedProbability(const BooleanCircuit &c, gate_t root,const ProbFoldEval &eval);
 
 double probCachedProbability(const BooleanCircuit &c, gate_t root,
                              const ProbCacheCompileFn &compile,

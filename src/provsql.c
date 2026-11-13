@@ -137,7 +137,7 @@ int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route:
 int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_prob_cache = true;
-bool provsql_idp_fold = false;
+bool provsql_idp_fold = true;
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
@@ -39003,15 +39003,19 @@ void _PG_init(void) {
                            NULL);
   DefineCustomBoolVariable("provsql.idp_fold",
                            "Split AND and OR gates into independent groups "
-                           "before compiling.",
-                           "When on, the d-DNNF-producing probability "
-                           "methods group the children of an AND or OR "
-                           "gate by shared inputs, evaluate each group "
-                           "separately, and combine the results in closed "
-                           "form, so that a flat gate needs no compiler. "
-                           "It works with provsql.prob_cache on or off.",
+                           "before evaluating.",
+                           "When on (default), the children of an AND or "
+                           "OR root are grouped by shared inputs, each "
+                           "group is evaluated separately, and the "
+                           "results are combined in closed form. The "
+                           "default strategy does this when the circuit "
+                           "is not read-once and then chooses a method "
+                           "for each group; tree-decomposition and "
+                           "compilation called by name do it before "
+                           "building their d-DNNFs. It works with "
+                           "provsql.prob_cache on or off.",
                            &provsql_idp_fold,
-                           false,
+                           true,
                            PGC_USERSET,
                            0,
                            NULL,

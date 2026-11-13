@@ -115,3 +115,36 @@ p_berlin_fold_only
 stats_fold_only
 {"hits": 0, "misses": 0, "entries": 0, "inserts": 0, "evictions": 0, "rejections": 0}
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+prob_cache_reset
+
+(1 row)
+p_chains_default
+0.994455
+(1 row)
+provsql.last_eval_method
+fold,tree-decomposition
+(1 row)
+stats_after_chains_default
+{"hits": 1, "misses": 1, "entries": 1, "inserts": 1, "evictions": 0, "rejections": 0}
+(1 row)
+prob_cache_reset
+
+(1 row)
+p_chains_default_unfolded
+0.994455
+(1 row)
+provsql.last_eval_method
+tree-decomposition
+(1 row)
+stats_after_chains_default_unfolded
+{"hits": 0, "misses": 1, "entries": 1, "inserts": 1, "evictions": 0, "rejections": 0}
+(1 row)
+prob_cache_reset
+
+(1 row)

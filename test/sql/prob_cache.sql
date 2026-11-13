@@ -2,6 +2,7 @@
 \pset format unaligned
 
 SELECT prob_cache_reset();
+SET provsql.idp_fold = off;
 
 CREATE TABLE city_lineage AS
   SELECT city, provenance() AS lin FROM (SELECT DISTINCT city FROM personnel) t;
@@ -88,8 +89,37 @@ SELECT ROUND(probability_evaluate(lin,'tree-decomposition')::numeric,4)
   AS p_berlin_fold_only FROM city_lineage WHERE city='Berlin';
 SELECT prob_cache_stats() - 'bytes' AS stats_fold_only;
 SET provsql.prob_cache = on;
-SET provsql.idp_fold = off;
+RESET provsql.idp_fold;
 
+CREATE TABLE chain(id int, grp int);
+INSERT INTO chain
+  SELECT i, g FROM generate_series(1,13) i, generate_series(1,2) g;
+SELECT add_provenance('chain');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM chain; END $$;
+CREATE TABLE chains AS SELECT provenance() AS lin FROM
+  (SELECT DISTINCT 1 FROM chain a, chain b
+   WHERE a.grp=b.grp AND b.id=a.id+1) t;
+SELECT remove_provenance('chains');
+
+SELECT prob_cache_reset();
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin)::numeric,6)
+  AS p_chains_default FROM chains;
+SHOW provsql.last_eval_method;
+SELECT prob_cache_stats() - 'bytes' AS stats_after_chains_default;
+
+SELECT prob_cache_reset();
+SET provsql.idp_fold = off;
+SET provsql.last_eval_method = '';
+SELECT ROUND(probability_evaluate(lin)::numeric,6)
+  AS p_chains_default_unfolded FROM chains;
+SHOW provsql.last_eval_method;
+SELECT prob_cache_stats() - 'bytes' AS stats_after_chains_default_unfolded;
+RESET provsql.idp_fold;
+SELECT prob_cache_reset();
+
+DROP TABLE chains;
+DROP TABLE chain;
 DROP TABLE city_lineage;
 DROP TABLE exc_lineage;
 DROP TABLE conj;

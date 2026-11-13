@@ -356,6 +356,8 @@ double possibleWorlds(gate_t g) const;
 dDNNF compilation(gate_t g, std::string compiler,
                   std::string *resolved = nullptr) const;
 
+static std::string checkCompiler(std::string compiler);
+
 /**
  * @brief Parse a c2d/d4 NNF stream into a @c dDNNF over this circuit's input
  *        gates.

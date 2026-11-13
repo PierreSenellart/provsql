@@ -17,7 +17,7 @@ uid|pid|pr
 4|4|0.128906
 (4 rows)
 provsql.last_eval_method
-possible-worlds,possible-worlds-aggregates
+possible-worlds,fold,possible-worlds-aggregates
 (1 row)
 remove_provenance
 
@@ -28,5 +28,5 @@ id|pr
 3|0.500000
 (3 rows)
 provsql.last_eval_method
-possible-worlds,possible-worlds-aggregates
+possible-worlds,fold,possible-worlds-aggregates
 (1 row)
