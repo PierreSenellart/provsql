@@ -338,6 +338,10 @@ INTERNAL_FUNCTIONS = {
     'rv_sum_or_null_ffunc', 'stddev_pop_rv_ffunc', 'stddev_samp_rv_ffunc', 'ucq_joint_compile_stats',
     'ucq_joint_compile_stats_tracked', 'ucq_joint_gather', 'ucq_joint_materialize_tracked', 'ucq_joint_provenance_answer',
     'ucq_mobius_compile_stats', 'ucq_mobius_materialize_tracked', 'ucq_mobius_provenance_answer',
+    # Diagnostics of the canonical form and of the cache of compiled d-DNNFs
+    # (regression test prob_cache); not in the user guide yet.
+    'circuit_canonical_form', 'circuit_island_key', 'prob_cache_reset',
+    'prob_cache_stats',
 }
 
 if DOXYGEN_SQL_HTML.exists():
