@@ -1044,9 +1044,10 @@ value. The panel's sections are:
 * **Messages**: ``provsql.verbose_level``.
 * **Advanced**, folded: the parameters rarely changed, which tune the
   evaluation routes (``provsql.ess_warn_fraction``,
-  ``provsql.gate_cache_size``, ``provsql.joint_max_states``,
-  ``provsql.joint_max_treewidth``, ``provsql.mobius_max_cnf``,
-  ``provsql.mobius_max_gates``) and the durability of the circuit
+  ``provsql.gate_cache_size``, ``provsql.idp_fold``,
+  ``provsql.joint_max_states``, ``provsql.joint_max_treewidth``,
+  ``provsql.mobius_max_cnf``, ``provsql.mobius_max_gates``,
+  ``provsql.prob_cache``) and the durability of the circuit
   (``provsql.store_synchronous_commit``, ``provsql.store_wal_logging``).
 * **Session**: the visible part of ``search_path`` (``provsql`` is always
   pinned at the end).

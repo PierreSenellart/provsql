@@ -71,6 +71,35 @@ def test_config_simplify_on_load_round_trip(client):
     assert cfg["effective"]["provsql.simplify_on_load"] == "off"
 
 
+def test_config_eval_optimisations_are_three_valued(client):
+    """`provsql.prob_cache` and `provsql.idp_fold` are offered in the
+    advanced section with their three values, round-trip, and reach the
+    session a query runs in."""
+    by_name = {d["name"]: d
+               for d in client.get("/api/config").get_json()["settings"]}
+    for key in ("provsql.prob_cache", "provsql.idp_fold"):
+        if key not in by_name:
+            pytest.skip(f"{key} is not in the installed extension")
+        assert by_name[key]["group"] == "advanced"
+        assert by_name[key]["enumvals"] == ["off", "auto", "on"]
+        assert by_name[key]["value"] == "auto"
+        try:
+            for value in ("on", "off"):
+                resp = client.post("/api/config",
+                                   json={"key": key, "value": value})
+                assert resp.status_code == 200, resp.data
+                cfg = client.get("/api/config").get_json()
+                assert cfg["effective"][key] == value
+            r = client.post("/api/exec", json={"sql": f"SHOW {key}",
+                                               "mode": "circuit"})
+            assert r.get_json()["blocks"][-1]["rows"][0][0] == "off"
+            resp = client.post("/api/config",
+                               json={"key": key, "value": "sometimes"})
+            assert resp.status_code == 400
+        finally:
+            client.post("/api/config", json={"key": key, "value": "auto"})
+
+
 def test_config_monte_carlo_seed_accepts_negative_one(client):
     resp = client.post("/api/config",
                        json={"key": "provsql.monte_carlo_seed", "value": "-1"})
