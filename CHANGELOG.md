@@ -5,6 +5,90 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.14.0] - 2026-11-17
+
+ProvSQL 1.14.0 computes exact probabilities faster. When a lineage
+splits into parts that share no input tuple, each part is now evaluated
+separately. And the d-DNNFs compiled in a session are kept: a later
+lineage with the same structure, over other tuples or with other
+probabilities, reuses them instead of being compiled again. Both are on
+by default, with no change to queries. The choice of a probability
+method is also more robust: a method that takes longer than expected is
+retried later with a larger budget instead of being abandoned, and an
+external compiler that runs far too long is stopped. The splitting and
+the cache were contributed by Aryak Sen (#111).
+
+###### Splitting independent parts
+
+- When a lineage is an AND or an OR of parts that share no input
+  tuple, the parts are grouped by the tuples they share and each group is
+  evaluated separately. The probability of an AND is then the product of
+  those of its groups, and that of an OR is one minus the product of
+  their complements. A group with a single part is split again. A query
+  whose answer combines many unrelated groups, such as the lines of each
+  order, is then as fast to evaluate as its hardest group.
+- With the default method, splitting is tried when `independent` fails,
+  and a method is chosen for each group. The new setting
+  **`provsql.idp_fold`** (default `auto`) can turn it `off`, or `on` for
+  a method called by name, which then runs on each group.
+- `provsql.last_eval_method` and Studio report such an evaluation as
+  `fold`, followed by the methods used on the groups.
+
+###### Reusing compiled d-DNNFs
+
+- Each session keeps the d-DNNFs built by `tree-decomposition` and
+  `compilation`, indexed by a canonical form of the circuit, which
+  records its structure but not its input tuples. A circuit is looked up
+  piece by piece (first its independent parts, then the rest), and only
+  the pieces not found are compiled. The answers of a single query often
+  have the same structure, so most of them need no compilation.
+- The new setting **`provsql.prob_cache`** (default `auto`, which uses
+  the cache with the default method only) can turn it `off`, or `on` for
+  `tree-decomposition` and `compilation` called by name; each of these
+  then only reuses d-DNNFs it compiled itself.
+- **`provsql.prob_cache_size`** (default 64 MB) limits the cache of each
+  session. The least recently used d-DNNFs are removed first, and a
+  d-DNNF larger than a quarter of the limit is not kept. When
+  `provsql.max_memory` is set, the cache uses at most a quarter of it.
+- `provsql.last_eval_method` reports a result taken from the cache as
+  `cache:<method>`.
+- Four functions, meant for tests and debugging, show how the cache
+  works: `circuit_canonical_form` and `circuit_island_key` return the
+  keys of a circuit, and `prob_cache_stats` and `prob_cache_reset` show
+  and empty the cache of the session.
+
+###### Choosing a probability method
+
+- **A method that exceeds its budget is retried.** When tree
+  decomposition or the d-tree takes more than the budget it was given, it
+  is put back in the list of methods with a higher cost and may be tried
+  again with a larger budget. The time wasted on it is thus at most a
+  constant multiple of the time it finally takes. When a circuit is
+  evaluated in parts, the parts share one budget.
+- **An external compiler that runs too long is stopped.** A
+  command-line compiler chosen automatically is stopped after ten times
+  the expected cost of the next-best method, and put back in the list
+  with that cost. A compiler called by name, or the last method left,
+  still runs until `statement_timeout`. Compilers reached through KCMCP
+  are not stopped this way.
+- When tree decomposition fails on one part of a circuit, it is tried
+  on the whole circuit, where it may succeed.
+- An error about a missing external compiler is no longer hidden when
+  the method was retried.
+
+###### Upgrading
+
+`ALTER EXTENSION provsql UPDATE` from 1.13.1 only creates the four
+debugging functions `circuit_canonical_form`, `circuit_island_key`,
+`prob_cache_stats`, and `prob_cache_reset`. No gate type, type,
+operator, cast, or aggregate changes, and the circuit store format is
+unchanged. New configuration parameters: `provsql.idp_fold`,
+`provsql.prob_cache`, `provsql.prob_cache_size`. With the default
+method, `provsql.last_eval_method` may now report `fold` or `cache:…`;
+the probabilities themselves are unchanged.
+
+ProvSQL Studio 1.9.1 is released alongside.
+
 ## [1.13.1] - 2026-11-01
 
 ProvSQL 1.13.1 is a bug-fix release for **bounded and interruptible
