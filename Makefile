@@ -182,6 +182,29 @@ deploy: website
 	# -c hashes content so Jekyll's fresh mtimes don't trigger spurious transfers
 	rsync -avzcP website/_site/ provsql:/var/www/provsql/
 
+# The demo videos are kept out of git; their master copies live beside
+# their papers, in a backed-up repository checked out at VIDEOS_SRC.
+# website/videos.list names the files to publish, one per line (blank lines
+# and # comments ignored): a file name, or the end of a path when the name
+# alone is ambiguous, looked for at any depth under VIDEOS_SRC. Each must
+# match exactly one file. They land flat in provsql.org/videos/. Nothing is
+# deleted there, so a video dropped from the list stays online.
+VIDEOS_SRC ?= $(HOME)/svn/recherche
+## deploy-videos        Rsync the videos of website/videos.list to provsql.org/videos/
+.PHONY: deploy-videos
+deploy-videos:
+	@set -e; files=; \
+	while IFS= read -r v || [ -n "$$v" ]; do \
+	  case "$$v" in ''|'#'*) continue ;; esac; \
+	  m=$$(find "$(VIDEOS_SRC)" -name .svn -prune -o -type f -path "*/$$v" -print || true); \
+	  n=$$(printf '%s' "$$m" | grep -c '^' || true); \
+	  [ "$$n" = 1 ] || { echo "$$v: $$n matches under $(VIDEOS_SRC)$${m:+:}"; \
+	    [ -z "$$m" ] || echo "$$m"; exit 1; }; \
+	  files="$$files$$m\n"; \
+	done < website/videos.list; \
+	printf "$$files" | tr '\n' '\0' \
+	  | xargs -0 sh -c 'set -x; rsync -avzcP --chmod=F644,D755 "$$@" provsql:/var/www/provsql/videos/' rsync
+
 ## ===========================================================================
 ## Playground & WASM (in-browser build; heavy, local-only)
 ## ===========================================================================

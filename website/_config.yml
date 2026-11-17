@@ -88,6 +88,7 @@ exclude:
   - Gemfile.lock
   - README.md
   - vendor/
+  - videos.list
   # Pre-built docs copied verbatim by passthrough_docs.rb plugin
   - docs/
   - doxygen-sql/
