@@ -140,3 +140,23 @@ dangling_indices|unreferenced|bad_wires|bad_extra
 name|formula
 #1|𝟙
 (1 row)
+prob_cache_reset
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+k|kappa
+ab|(OR V V)
+cd|(OR V V)
+(2 rows)
+k|p
+ab|0.7000
+cd|0.4000
+(2 rows)
+cache_hits|cache_misses
+1|1
+(1 row)
