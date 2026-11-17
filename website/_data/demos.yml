@@ -1,6 +1,14 @@
 # Each entry: title, url, description, date (YYYY-MM-DD), thumbnail (optional)
 # paper_doi: DOI of the accompanying demonstration paper (optional)
 # paper_pdf: PDF link for the accompanying paper (optional)
+# mp4: local copy of the video, published by `make deploy-videos` (optional)
+
+- title: "ProvSQL Studio: Inspecting Probabilistic Query Evaluation"
+  url: "https://www.youtube.com/watch?v=xZgQ8zOa_Ms"
+  description: "Demonstration of ProvSQL Studio, the web front end to ProvSQL, on a peer-review database where bids, expertise, and paper topics are uncertain. Studio shows what a single probability hides: which method the optimizer chose, the guarantee it meets when a relative or additive one is requested instead of a method, the provenance circuit, the Tseytin CNF handed to an external compiler and the d-DNNF that d4 returns, and a benchmark of every probability method on the same circuit."
+  date: 2026-11-17
+  thumbnail: "https://i.ytimg.com/vi/xZgQ8zOa_Ms/maxresdefault.jpg"
+  mp4: "/videos/studio_demo.mp4"
 
 - title: "Preserving LLM Output Distributions for Probabilistic Query Evaluation"
   url: "https://www.youtube.com/watch?v=VWvf6BEABKM"

@@ -15,6 +15,7 @@ Video demonstrations of ProvSQL in action.
 
 {% if demo.paper_pdf %}<a href="{{ demo.paper_pdf }}" class="btn btn--small btn--inverse">Paper PDF</a>{% endif %}
 {% if demo.paper_doi %}<a href="https://doi.org/{{ demo.paper_doi }}" class="btn btn--small btn--inverse">Paper DOI</a>{% endif %}
+{% if demo.mp4 %}<a href="{{ demo.mp4 }}" class="btn btn--small btn--inverse" download>Download MP4</a>{% endif %}
 
 {% if demo.thumbnail %}
 <a href="{{ demo.url }}" target="_blank" class="video-thumb-link">
