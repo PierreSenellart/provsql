@@ -646,3 +646,11 @@ ul.studio-modes {
     color: #6B4FA0;
   }
 }
+
+// Vector diagrams in page content (overview): scale to the full column
+// width; their intrinsic SVG size is smaller than the column.
+.page__content img.diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+}

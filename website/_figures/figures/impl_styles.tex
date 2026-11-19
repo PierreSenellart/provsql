@@ -1,0 +1,84 @@
+\definecolor{pvrewritefill}{HTML}{F8F3AA}
+\definecolor{pvrewriteline}{HTML}{A89A00}
+\definecolor{pvinputblue}{HTML}{17377D}
+\tikzset{
+  pvline/.style={line width=0.5pt, line join=round},
+  pvarrow/.style={-{Stealth[length=1.8mm, width=1.5mm]}, line width=0.6pt, draw=black!75},
+  pvboth/.style={{Stealth[length=1.8mm, width=1.5mm]}-{Stealth[length=1.8mm, width=1.5mm]}, line width=0.6pt, draw=black!75},
+  pvpanel/.style={pvline, rounded corners=1.6mm, draw=#1!65, fill=#1!7},
+  pvbackend/.style={pvline, rounded corners=1.6mm, draw=isA!60, fill=isA!14},
+  pvpipe/.style={pvline, draw=isA!85, fill=isA!30},
+  pvrewrite/.style={pvline, rounded corners=1.6mm, draw=pvrewriteline, fill=pvrewritefill},
+  pvinstance/.style={pvline, rounded corners=1.6mm, draw=isD!70, fill=isD!14},
+  pvplain/.style={pvline, rounded corners=1.6mm, draw=black!65, fill=white},
+  pvtitle/.style={font=\footnotesize\bfseries, inner sep=0pt},
+  pvtext/.style={font=\footnotesize, align=center, inner sep=0pt},
+  pvsmall/.style={font=\scriptsize, align=center, inner sep=0pt},
+  pvcell/.style={pvsmall, text height=1.45ex, text depth=.4ex},
+  pvstep/.style={pvline, rounded corners=1.2mm, draw=#1!75, fill=white, font=\footnotesize, align=center, inner sep=2pt},
+  pvgate/.style={circle, draw=isB, fill=isB, line width=0.4pt, minimum size=3mm, inner sep=0pt},
+  pvroot/.style={pvgate, draw=treered, fill=treered, text=white},
+  pvrootlabel/.style={pvroot, minimum size=3.6mm, text=white, font=\tiny},
+  pvleaflabel/.style={pvgate, draw=pvinputblue, fill=pvinputblue, text=white, minimum size=3.6mm, font=\tiny},
+  pvwire/.style={-{Stealth[length=1.15mm, width=1mm]}, line width=0.4pt, draw=black!75},
+}
+\newcommand{\pvdoc}[7][black]{
+  \begin{scope}[shift={(#3,#4)}]
+    \pgfmathsetmacro{\pvw}{#5/2}\pgfmathsetmacro{\pvh}{#6/2}
+    \path[pvline, draw=#1!70, fill=white]
+      (-\pvw,-\pvh) -- (-\pvw,\pvh) -- ({\pvw-.2},\pvh) -- (\pvw,{\pvh-.2}) -- (\pvw,-\pvh) -- cycle;
+    \path[pvline, draw=#1!70, fill=#1!18]
+      ({\pvw-.2},\pvh) -- ({\pvw-.2},{\pvh-.2}) -- (\pvw,{\pvh-.2}) -- cycle;
+    \node[pvtext, minimum width=#5 cm, minimum height=#6 cm] (#2) at (0,0) {#7};
+  \end{scope}}
+\newcommand{\pvcyl}[6]{
+  \begin{scope}[shift={(#2,#3)}]
+    \pgfmathsetmacro{\pvw}{#4/2}\pgfmathsetmacro{\pvh}{#5/2}\def\pvr{.13}
+    \path[pvline, draw=isA, fill=isA!12]
+      (-\pvw,{\pvh-\pvr}) -- (-\pvw,{-\pvh+\pvr})
+      arc[start angle=180, end angle=360, x radius=\pvw, y radius=\pvr]
+      -- (\pvw,{\pvh-\pvr})
+      arc[start angle=0, end angle=180, x radius=\pvw, y radius=\pvr] -- cycle;
+    \path[pvline, draw=isA, fill=isA!28] (0,{\pvh-\pvr}) ellipse[x radius=\pvw, y radius=\pvr];
+    \node[minimum width=#4 cm, minimum height=#5 cm, inner sep=0pt] (#1) at (0,0) {};
+    \node[pvtext] at (0,{-\pvr/1.4}) {#6};
+  \end{scope}}
+\newcommand{\pvdrum}[6]{
+  \begin{scope}[shift={(#2,#3)}]
+    \pgfmathsetmacro{\pvw}{#4/2}\pgfmathsetmacro{\pvh}{#5/2}
+    \path[pvline, draw=#1, fill=white]
+      (-\pvw,{\pvh-#6}) -- (-\pvw,{-\pvh+#6})
+      arc[start angle=180, end angle=360, x radius=\pvw, y radius=#6]
+      -- (\pvw,{\pvh-#6})
+      arc[start angle=0, end angle=180, x radius=\pvw, y radius=#6] -- cycle;
+    \path[pvline, draw=#1, fill=white] (0,{\pvh-#6}) ellipse[x radius=\pvw, y radius=#6];
+  \end{scope}}
+\newcommand{\pvstack}[7][isC]{
+  \begin{scope}[shift={(#3,#4)}]
+    \pgfmathsetmacro{\pvw}{#5/2}\pgfmathsetmacro{\pvh}{#6/2}
+    \path[pvline, draw=#1!85, fill=#1!8] ({-\pvw+.16},{-\pvh}) rectangle (\pvw,{\pvh-.16});
+    \path[pvline, draw=#1!85, fill=#1!12] ({-\pvw+.08},{-\pvh+.08}) rectangle ({\pvw-.08},{\pvh-.08});
+    \path[pvline, draw=#1!85, fill=#1!18] (-\pvw,{-\pvh+.16}) rectangle ({\pvw-.16},\pvh);
+    \node[minimum width=#5 cm, minimum height=#6 cm, inner sep=0pt] (#2) at (0,0) {};
+    \node[pvtext] at (-.08,.08) {#7};
+  \end{scope}}
+\newcommand{\pvcircuitsheet}[4]{
+  \pgfmathsetmacro{\pvm}{((#2)+(#4))/2}
+  \path[fill=isC!22] ({#1},{#2}) rectangle ({#3},\pvm);
+  \path[fill=isB!20] ({#1},\pvm) rectangle ({#3},{#4});
+  \path[pvline, draw=black!65] ({#1},{#2}) rectangle ({#3},{#4});}
+\newcommand{\pvcircuitstack}[6]{
+  \begin{scope}[shift={(#2,#3)}]
+    \pgfmathsetmacro{\pvw}{#4/2}\pgfmathsetmacro{\pvh}{#5/2}
+    \pvcircuitsheet{-\pvw+.16}{-\pvh}{\pvw}{\pvh-.16}
+    \pvcircuitsheet{-\pvw+.08}{-\pvh+.08}{\pvw-.08}{\pvh-.08}
+    \pvcircuitsheet{-\pvw}{-\pvh+.16}{\pvw-.16}{\pvh}
+    \node[minimum width=#4 cm, minimum height=#5 cm, inner sep=0pt] (#1) at (0,0) {};
+    \node[pvstep=black, font=\scriptsize, inner xsep=3pt, inner ysep=3pt] at (-.08,.08) {#6};
+  \end{scope}}
+\newcommand{\pvperson}[3]{
+  \begin{scope}[shift={(#1,#2)}, scale=#3]
+    \path[pvline, draw=black!70, fill=black!15] (0,.3) circle[radius=.15];
+    \path[pvline, draw=black!70, fill=black!15]
+      (-.3,-.32) -- (-.3,-.2) arc[start angle=180, end angle=0, radius=.3] -- (.3,-.32) -- cycle;
+  \end{scope}}

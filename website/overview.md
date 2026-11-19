@@ -218,11 +218,17 @@ papers related to ProvSQL.
 
 ## Architecture {#architecture}
 
-The diagram below shows the end-to-end flow of a query through ProvSQL
-(see the [architecture chapter](/docs/dev/architecture.html) in the
-developer guide for details):
+The diagram below shows how ProvSQL tracks provenance (see the
+[architecture chapter](/docs/dev/architecture.html) in the developer
+guide for details): queries are rewritten to build a provenance circuit,
+whose gates are stored by a background worker in memory-mapped files.
 
-![ProvSQL dataflow](/assets/images/dataflow.svg)
+![Provenance tracking in ProvSQL](/assets/images/architecture.svg){: .diagram}
+
+The circuit is then evaluated in a semiring of choice, from a mapping of
+base-tuple UUIDs to semiring values:
+
+![Semiring instantiation in ProvSQL](/assets/images/semiring-instantiation.svg){: .diagram}
 
 - [SQL API reference](/doxygen-sql/html/) – user-facing SQL functions
 - [C/C++ API reference](/doxygen-c/html/) – internal implementation

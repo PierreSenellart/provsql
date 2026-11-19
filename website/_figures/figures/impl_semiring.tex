@@ -1,0 +1,58 @@
+\begin{tikzpicture}
+  \path[use as bounding box] (0,0) rectangle (15,4.25);
+  \path[pvinstance] (0,0) rectangle (7.25,4.25);
+  \pvdoc[chaptercolor]{k}{1.32}{3.05}{2.24}{1.2}{$\mathbb K$\\[-1pt]{\scriptsize\itshape semiring of choice}}
+  \node[pvline, draw=chaptercolor!75, fill=white, minimum width=2.5cm, minimum height=1.25cm, inner sep=0pt] (cls) at (5.7,3.05) {};
+  \path[fill=white, draw=chaptercolor!75, pvline] (4.45,3.33) rectangle (6.95,3.675);
+  \node[pvsmall] at (5.7,3.5) {Class for $\mathbb K$};
+  \node[pvsmall] at (5.1,3.05) {$\oplus=\mathbb K_\oplus$};
+  \node[pvsmall] at (6.3,3.05) {$\otimes=\mathbb K_\otimes$};
+  \node[pvsmall] at (5.1,2.65) {$\ominus=\mathbb K_\ominus$};
+  \node[pvsmall] at (6.3,2.65) {$\delta=\mathbb K_\delta$};
+  \pvdrum{black!65}{1.32}{1.2}{2.44}{1.5}{.1}
+  \node[pvtext] at (1.32,1.14) {Relations\\[-2pt]Annotated with\\[-2pt]Abstract UUIDs};
+  \pvdrum{black!65}{5.7}{1.2}{2.5}{1.1}{.1}
+  \node[pvtext] at (5.7,1.14) {Base UUIDs $\to\mathbb K$};
+  \draw[pvarrow] (k) -- node[pvsmall, above=2pt] {\emph{compiled into}\\[-1pt]\emph{a C++ class}} (cls);
+  \draw[pvarrow] (2.54,1.2) -- node[pvsmall, above=2pt] {\emph{provenance}\\[-1pt]\emph{mapping}} (4.45,1.2);
+  \begin{scope}[xshift=-1.9cm]
+  \path[fill=isB!20] (9.5,1.76) -- (9.5,3.34) arc[start angle=180, end angle=90, radius=.16] -- (11.79,3.5) arc[start angle=90, end angle=0, radius=.16] -- (11.95,1.76) -- cycle;
+  \path[fill=isC!22] (9.5,1.76) -- (11.95,1.76) -- (11.95,.91) arc[start angle=0, end angle=-90, radius=.16] -- (9.66,.75) arc[start angle=270, end angle=180, radius=.16] -- cycle;
+  \input{figures/impl_evalcircuit}
+  \end{scope}
+  \draw[pvarrow] (cls.east) -- (7.6,3.05);
+  \draw[pvarrow] (6.95,1.2) -- (7.6,1.2);
+  \path[pvplain] (10.5,.75) rectangle (15,3.5);
+  \node[pvtitle] at (12.75,3.27) {Result};
+  \path[fill=white] (10.65,.9) rectangle (14.85,3.05);
+  \path[fill=isB!20] (12.9,.9) rectangle (14.85,3.05);
+  \draw[pvline, draw=black!60] (10.65,.9) rectangle (14.85,3.05);
+  \draw[pvline, draw=black!60] (11.51,.9) -- (11.51,3.05);
+  \draw[pvline, draw=black!60] (12.9,.9) -- (12.9,3.05);
+  \draw[pvline, draw=black!60] (10.65,2.47) -- (14.85,2.47);
+  \node[pvcell] at (11.08,2.76) {Tuples};
+  \node[pvsmall] at (12.205,2.76) {Annotation\\[-2pt]in $\mathbb K$};
+  \node[pvcell] at (13.875,2.76) {\emph{provsql}};
+  \node[pvcell] at (11.08,2.2) {$\vdots$};
+  \node[pvcell] at (12.205,2.2) {$\vdots$};
+  \node[pvcell] at (13.48,2.2) {$\vdots$};
+  \node[pvcell] at (14.57,2.2) {$\vdots$};
+  \node[pvcell] at (11.08,1.68) {$t_i$};
+  \node[pvcell] at (12.205,1.68) {$k_i$};
+  \node[pvcell] at (13.48,1.68) {UUIDv5};
+  \node[pvcell] at (14.165,1.68) {$\mapsto$};
+  \node[pvrootlabel] at (14.57,1.68) {$t_i$};
+  \node[pvcell] at (11.08,1.16) {$\vdots$};
+  \node[pvcell] at (12.205,1.16) {$\vdots$};
+  \node[pvcell] at (13.48,1.16) {$\vdots$};
+  \node[pvcell] at (14.57,1.16) {$\vdots$};
+  \draw[pvarrow] (10.05,2.12) -- (10.5,2.12);
+  \path[pvinstance, rounded corners=.5mm] (7.6,.19) rectangle (7.84,.41);
+  \node[pvsmall, anchor=west] at (7.91,.3) {Semiring Instantiation};
+  \begin{scope}
+    \clip[rounded corners=.5mm] (10.5,.19) rectangle (10.74,.41);
+    \path[fill=isB!20] (10.5,.3) rectangle (10.74,.41);
+    \path[fill=isC!22] (10.5,.19) rectangle (10.74,.3);
+  \end{scope}
+  \node[pvsmall, anchor=west] at (10.81,.3) {Provenance Circuits};
+\end{tikzpicture}%

@@ -1,0 +1,10 @@
+% Standalone build of a figure from the PhD thesis of Aryak Sen.
+% White-background variant for the README (GitHub dark theme); the
+% website uses the transparent architecture.svg.
+% Build: lualatex NAME.tex && pdftocairo -svg NAME.pdf ../assets/images/NAME.svg
+\documentclass[11pt,border=2pt]{standalone}
+\input{preamble}
+\pagecolor{white}
+\begin{document}
+\input{figures/impl_tracking}
+\end{document}
