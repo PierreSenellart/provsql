@@ -1,7 +1,9 @@
 % Standalone build of a figure from the PhD thesis of Aryak Sen.
 % White-background variant for the README (GitHub dark theme); the
 % website uses the transparent architecture.svg.
-% Build: lualatex NAME.tex && pdftocairo -svg NAME.pdf ../assets/images/NAME.svg
+% Build: lualatex NAME.tex && pdftocairo -svg NAME.pdf ../assets/images/NAME.svg,
+% then double the width and height attributes of the root <svg> element
+% (keeping its viewBox) so that GitHub shows it at full column width
 \documentclass[11pt,border=2pt]{standalone}
 \input{preamble}
 \pagecolor{white}
