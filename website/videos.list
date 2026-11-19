@@ -1,0 +1,5 @@
+# Videos published to provsql.org/videos/ by `make deploy-videos`: one per
+# line, a file name looked for at any depth under VIDEOS_SRC (see the
+# Makefile), or the end of its path if the name alone is ambiguous
+studio_demo.mp4
+studio_demo.vtt

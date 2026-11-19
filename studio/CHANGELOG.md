@@ -14,6 +14,26 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.9.1] - 2026-11-17
+
+Companion release for ProvSQL extension 1.14.0, which splits a lineage
+into independent parts and reuses compiled d-DNNFs when evaluating
+probabilities. Requires extension **>= 1.13.0**; the new settings
+appear only when the extension provides them.
+
+### Changed
+
+- **New settings in the Advanced section** of the configuration panel:
+  `provsql.idp_fold`, `provsql.prob_cache`, and
+  `provsql.prob_cache_size`.
+
+### Fixed
+
+- **Formulas in the bundled notebooks.** Bare `_`, `*`, and `~` inside
+  mathematics are escaped when the case-study notebooks are generated,
+  so that Markdown emphasis no longer splits a formula (case studies 5
+  to 8).
+
 ## [1.9.0] - 2026-10-17
 
 Companion release for ProvSQL extension 1.13.0, which reports every

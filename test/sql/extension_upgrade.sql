@@ -308,6 +308,33 @@ DROP TABLE upgrade_tx;
 -- 1.13.1 surface check: sr_formula_rows, the formula as rows, exists.
 SELECT name, formula FROM sr_formula_rows(gate_one());
 
+-- 1.14.0 surface check: the cache of compiled d-DNNFs, keyed by the
+-- canonical form of a circuit.  The lineages of two different pairs of
+-- tuples have the same form, so with the cache forced on for a method
+-- called by name, the second evaluation is a hit.
+SELECT prob_cache_reset();
+SET provsql.prob_cache = on;
+SET provsql.idp_fold = off;
+CREATE TABLE upgrade_cache_in (name text, p float8);
+INSERT INTO upgrade_cache_in VALUES
+  ('alice', 0.5), ('bob', 0.4), ('carol', 0.2), ('dave', 0.25);
+SELECT add_provenance('upgrade_cache_in');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM upgrade_cache_in; END $$;
+CREATE TABLE upgrade_cache AS
+  SELECT 'ab' AS k, provenance() AS lin
+    FROM (SELECT DISTINCT 1 FROM upgrade_cache_in WHERE name IN ('alice','bob')) t
+  UNION ALL
+  SELECT 'cd', provenance()
+    FROM (SELECT DISTINCT 1 FROM upgrade_cache_in WHERE name IN ('carol','dave')) t;
+SELECT remove_provenance('upgrade_cache');
+SELECT k, circuit_canonical_form(lin) AS kappa FROM upgrade_cache ORDER BY k;
+SELECT k, round(probability_evaluate(lin, 'tree-decomposition')::numeric, 4) AS p
+  FROM upgrade_cache ORDER BY k;
+SELECT prob_cache_stats()->>'hits' AS cache_hits,
+       prob_cache_stats()->>'misses' AS cache_misses;
+RESET provsql.prob_cache;
+RESET provsql.idp_fold;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_untracked,
            upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,
@@ -315,7 +342,8 @@ DROP TABLE upgrade_untracked,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
            upgrade_cnt, upgrade_cnt_r, upgrade_cond,
            upgrade_maint, upgrade_maint_map,
-           upgrade_stat, upgrade_case, upgrade_case_r;
+           upgrade_stat, upgrade_case, upgrade_case_r,
+           upgrade_cache, upgrade_cache_in;
 RESET client_min_messages;
 
 \else
