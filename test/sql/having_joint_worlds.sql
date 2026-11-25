@@ -102,6 +102,39 @@ DROP TABLE hjw_big;
 DROP TABLE hjw_o_w;
 DROP TABLE hjw_o;
 
+-- IS [NOT] NULL on an aggregate is a condition on the count of its value
+-- rows (>= 1, = 0), over the same worlds.  Group 1: a NULL row b (3); group
+-- 2: a value row a (2) and a NULL row b (3).
+--   IS NULL      group 1: {b}, 3        group 2: {b}, 3 ⊗ (1 ⊖ 2) = 0
+--   IS NOT NULL  group 2: {a} and {a, b}, 2 ⊗ (1 ⊖ 3) ⊕ 2 ⊗ 3 = 6
+--   scalar max IS NULL: the worlds without a, each annotated (1 ⊖ 2 ⊕ ...) = 0
+CREATE TABLE hjw_n(id int, g int, v int, w int);
+INSERT INTO hjw_n VALUES (1, 1, NULL, 3), (2, 2, 5, 2), (3, 2, NULL, 3);
+SELECT add_provenance('hjw_n');
+SELECT create_provenance_mapping('hjw_n_w', 'hjw_n', 'w');
+CREATE TABLE hjw_r AS
+  SELECT g, sr_counting(provenance(), 'hjw_n_w') AS n,
+         sr_boolean(provenance()) AS b
+  FROM hjw_n GROUP BY g HAVING sum(v) IS NULL;
+SELECT remove_provenance('hjw_r');
+SELECT 'sum IS NULL' AS q, g, n, b FROM hjw_r ORDER BY g;
+DROP TABLE hjw_r;
+CREATE TABLE hjw_r AS
+  SELECT g, sr_counting(provenance(), 'hjw_n_w') AS n,
+         sr_boolean(provenance()) AS b
+  FROM hjw_n GROUP BY g HAVING sum(v) IS NOT NULL;
+SELECT remove_provenance('hjw_r');
+SELECT 'sum IS NOT NULL' AS q, g, n, b FROM hjw_r ORDER BY g;
+DROP TABLE hjw_r;
+CREATE TABLE hjw_r AS
+  SELECT sr_counting(provenance(), 'hjw_n_w') AS n, sr_boolean(provenance()) AS b
+  FROM hjw_n HAVING max(v) IS NULL;
+SELECT remove_provenance('hjw_r');
+SELECT 'scalar max IS NULL' AS q, n, b FROM hjw_r;
+DROP TABLE hjw_r;
+DROP TABLE hjw_n_w;
+DROP TABLE hjw_n;
+
 CREATE TABLE hjw_dept(d int, name int, w int);
 INSERT INTO hjw_dept VALUES (1, 30, 2), (2, 30, 2), (3, 40, 2);
 CREATE TABLE hjw_e(id int, dept int, w int);

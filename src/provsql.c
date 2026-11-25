@@ -5715,21 +5715,18 @@ static bool aggregate_null_has_reading(Oid aggfnoid,
  * @c Kz, present but not contributing); a FILTER is already folded into @c V by
  * @c make_aggregation_expression.  A NULL-keeping aggregate (@c array_agg, ...)
  * is instead NULL exactly when it reads no row at all: its value rows are the
- * rows passing its FILTER (all rows without one), whatever their value.  Then:
+ * rows passing its FILTER (all rows without one), whatever their value.
  *
- * - @c IS @c NOT @c NULL → @c δ(⊕Kn): a value row is present.
- * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕Kn": the single result row
- *   always exists and is NULL exactly when no value row is present.
- * - @c IS @c NULL, grouped → @c "δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn)": the group is present via a
- *   null-valued row while no value row is present, so the aggregate is NULL.
- *   (When the group has no null-valued rows @c Kz is empty and this collapses to
- *   @c gate_zero, matching the pre-fix behaviour; the all-NULL-valued group, once
- *   an unsupported edge, is now handled.)
- *
- * Splitting on @p V (not the whole-group @c ⊕) is what fixes both directions when
- * null-valued rows are present: the old code used @c ⊕ over every row, so
- * @c IS @c NOT @c NULL over-counted (a null-only world looked non-NULL) and
- * grouped @c IS @c NULL was dropped entirely.
+ * The aggregate is NULL in a world exactly when no value row is present
+ * there, so the test is a condition on the count of the value rows: @c IS
+ * @c NOT @c NULL is @c "count >= 1" and @c IS @c NULL is @c "count = 0",
+ * built as a @c provenance_cmp over a count of the group's rows, each
+ * contributing 1 when it is a value row and 0 otherwise, and resolved, as any
+ * condition on an aggregate, over the worlds of those rows: in the empty one
+ * too for a scalar aggregation, whose row is always there, and not for a
+ * grouped one.  The closed forms @c δ(⊕Kn) (@c IS @c NOT @c NULL) and
+ * @c "δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn)" (@c IS @c NULL, grouped) that this used to give are
+ * its provenance only in a Boolean algebra.
  *
  * The aggregate must be a direct @c provenance_aggregate call (an @c agg_token
  * @c Var coming from a subquery exposes no token array and is rejected).
@@ -5738,7 +5735,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
                                                const constants_t *constants,
                                                bool negated) {
   Node *arg = (Node *)nt->arg;
-  FuncExpr *pa, *plusKn;
+  FuncExpr *pa;
   Node *V, *K;
   Expr *value_rows, *other_rows;
   Aggref *base_arr;
@@ -5892,63 +5889,86 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
   if (negated)
     ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
 
-  /* ⊕Kn: the OR of the value-row tokens. */
-  plusKn = having_null_filtered_plus(constants, base_arr, K, value_rows);
-
-  if (ntt == IS_NOT_NULL) {
-    /* δ(⊕Kn): a value row is present. */
-    FuncExpr *delta = makeNode(FuncExpr);
-    delta->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-    delta->funcresulttype = constants->OID_TYPE_UUID;
-    delta->args = list_make1(plusKn);
-    delta->location = -1;
-    return delta;
-  }
-
-  /* IS NULL: no value row present, i.e. 1 ⊖ ⊕Kn. */
+  /* The aggregate is NULL in a world exactly when no value row is present
+   * there: the test is a condition on count(value rows) -- IS NOT NULL is
+   * count >= 1, IS NULL is count = 0 -- over the worlds of the group's rows.
+   * Built as such a count, whose rows contribute 1 when they are value rows
+   * and 0 otherwise, and compared with a constant, it is resolved like any
+   * condition on an aggregate, jointly over those worlds: δ(⊕Kn) and
+   * δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn), which this used to give, are that only in a Boolean
+   * algebra (over the counting semiring, IS NOT NULL over a value row a and a
+   * row b without one is a ⊗ (1 ⊖ b) ⊕ a ⊗ b, not δ(a)). */
   {
-    FuncExpr *one = makeNode(FuncExpr);
-    FuncExpr *monus = makeNode(FuncExpr);
-    one->funcid = constants->OID_FUNCTION_GATE_ONE;
-    one->funcresulttype = constants->OID_TYPE_UUID;
-    one->args = NIL;
-    one->location = -1;
-    monus->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
-    monus->funcresulttype = constants->OID_TYPE_UUID;
-    monus->args = list_make2(one, plusKn); /* 1 ⊖ ⊕Kn */
-    monus->location = -1;
+    Aggref *tokens = (Aggref *)copyObject(base_arr);
+    TargetEntry *te = (TargetEntry *)linitial(tokens->args);
+    Aggref *count = (Aggref *)copyObject(base_arr);
+    Const *one = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                           Int32GetDatum(1), false, true);
+    Const *zero = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                            Int32GetDatum(0), false, true);
+    Expr *row_value = value_rows == NULL
+      ? (Expr *)one
+      : make_case_when(copyObject(value_rows), (Expr *)one, (Expr *)zero);
+    FuncExpr *semimod, *pa_count, *lhs, *rhs, *gone, *cmp;
+    Const *bound;
+    Oid opno;
 
-    if (is_scalar)
-      return monus; /* the single result row always exists */
+    semimod = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_SEMIMOD,
+                           constants->OID_TYPE_UUID,
+                           list_make2(row_value, copyObject(K)),
+                           InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    te->expr = (Expr *)semimod;
+    /* Every row of the group, which a NULL-keeping aggregate's FILTER (the
+     * one its token array carries) would leave out: a row failing it still
+     * witnesses the group, and contributes 0. */
+    tokens->aggfilter = NULL;
 
-    /* Grouped: the group must also be present, which -- given no value row --
-     * means a null-valued row is present: δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn). */
-    {
-      FuncExpr *plusKz =
-        having_null_filtered_plus(constants, base_arr, K, other_rows);
-      FuncExpr *deltaKz = makeNode(FuncExpr);
-      FuncExpr *times = makeNode(FuncExpr);
-      ArrayExpr *factors = makeNode(ArrayExpr);
+    /* The plain count of the value rows, the value shown. */
+    count->aggfnoid = F_COUNT_;
+    count->aggtype = INT8OID;
+    count->args = NIL;
+    count->aggargtypes = NIL;
+    count->aggorder = NIL;
+    count->aggdistinct = NIL;
+    count->aggstar = true;
+    count->aggfilter = value_rows == NULL ? NULL
+                                          : (Expr *)copyObject(value_rows);
 
-      deltaKz->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-      deltaKz->funcresulttype = constants->OID_TYPE_UUID;
-      deltaKz->args = list_make1(plusKz);
-      deltaKz->location = -1;
+    pa_count = makeFuncExpr(
+      constants->OID_FUNCTION_PROVENANCE_AGGREGATE, constants->OID_TYPE_AGG_TOKEN,
+      list_make5(makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+                           Int32GetDatum(F_COUNT_ANY), false, true),
+                 makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+                           Int32GetDatum(INT8OID), false, true),
+                 count, tokens,
+                 makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
+                           BoolGetDatum(is_scalar), false, true)),
+      InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    lhs = makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_UUID,
+                       constants->OID_TYPE_UUID, list_make1(pa_count),
+                       InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
 
-      factors->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-      factors->array_collid = InvalidOid;
-      factors->element_typeid = constants->OID_TYPE_UUID;
-      factors->elements = list_make2(deltaKz, monus);
-      factors->multidims = false;
-      factors->location = -1;
+    bound = makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                      Int64GetDatum(ntt == IS_NOT_NULL ? 1 : 0), false,
+                      FLOAT8PASSBYVAL);
+    gone = uuid_const_gate(constants->OID_FUNCTION_GATE_ONE, constants);
+    rhs = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_SEMIMOD,
+                       constants->OID_TYPE_UUID,
+                       list_make2(bound, gone),
+                       InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
 
-      times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-      times->funcresulttype = constants->OID_TYPE_UUID;
-      times->funcvariadic = true;
-      times->args = list_make1(factors);
-      times->location = -1;
-      return times;
-    }
+    opno = OpernameGetOprid(list_make1(makeString(ntt == IS_NOT_NULL ? ">=" : "=")),
+                            INT8OID, INT8OID);
+    cmp = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_CMP,
+                       constants->OID_TYPE_UUID,
+                       list_make3(lhs,
+                                  makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                            sizeof(int32), Int32GetDatum(opno),
+                                            false, true),
+                                  rhs),
+                       InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    (void)other_rows;
+    return cmp;
   }
 }
 
