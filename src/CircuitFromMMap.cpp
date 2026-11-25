@@ -219,6 +219,10 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
  */
 static void applyLoadTimeSimplification(GenericCircuit &gc)
 {
+  /* The rows an aggregate reads no value from are set apart first: every
+   * pass below, and every evaluator after them, reads an aggregate's wires
+   * as contributions with a value.  Structural, so not gated. */
+  gc.detachNoValueOccurrences();
   /* A comparison whose two sides are the very same gate is settled by the
    * operator alone -- and settling it true is the OR over the group's
    * k-gates, not gate_one.  It has to be decided BEFORE the folds below,

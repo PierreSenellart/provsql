@@ -241,6 +241,11 @@ typedef struct constants_t {
    *  aggregates that see their NULL inputs (@c array_agg, ...); @c InvalidOid
    *  on a schema that predates it. */
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
+  /** @brief OID of @c provenance_semimod_skipping, the variant used for
+   *  aggregates that skip their NULL inputs (@c sum, @c min, ...), which keeps
+   *  a row read for no value in the aggregate's family; @c InvalidOid on a
+   *  schema that predates it. */
+  Oid OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING;
   /** @brief OID of @c row_number_as_rank, which @c row_number() over tracked
    *  relations is rewritten into; @c InvalidOid on a schema that predates
    *  it. */
@@ -979,5 +984,10 @@ void provsql_gate_builders_forget(void);
 /** @brief UUID of the constant value gate standing for the NULL value, the
  *  result of @c gate_null(). */
 #define PROVSQL_GATE_NULL_UUID "417134e7-a404-57a7-86fd-2577ebe0f3ba"
+/** @brief UUID of the constant value gate of a row an aggregate reads no
+ *  value from (a NULL argument of an aggregate that skips NULLs, a row its
+ *  @c FILTER leaves out), the result of @c gate_novalue(): the row is in the
+ *  aggregate's family, and contributes nothing to its value. */
+#define PROVSQL_GATE_NOVALUE_UUID "384a6dde-a33c-5f4d-b6f9-0e04a6b564e6"
 
 #endif /* PROVSQL_UTILS_H */

@@ -115,7 +115,7 @@ q|count_differ|sum_differ|array_differ
 distinct gates|t|t|t
 (1 row)
 q|count_all|count_filter|sum_filter|string_agg_f|array_all|array_filter|json_all
-children|1 1 1|0 1 1|6 7|q|<null> p q|p q|<null> p q
+children|1 1 1|0 1 1|<none> 6 7|<none> <none> q|<null> p q|p q|<null> p q
 (1 row)
 WARNING:  ProvSQL: an order-dependent aggregate reads rows whose order the query does not determine (without ORDER BY, or tying on it, with different values): their order in the database as it is is read in every world
 DETAIL:  provsql-reason: aggregate-order-undetermined; scope: deliberate
@@ -123,7 +123,7 @@ remove_provenance
 
 (1 row)
 q|strict|nonstrict|choose|nonstrict_filter
-user-defined|5 7|<null> 5 7|5 7|<null> 7
+user-defined|<none> 5 7|<null> 5 7|<none> 5 7|<null> 7
 (1 row)
 add_provenance
 
@@ -150,7 +150,7 @@ remove_provenance
 
 (1 row)
 q|s2|gate|children
-folded|26 (*)|agg|12 14
+folded|26 (*)|agg|<none> 12 14
 (1 row)
 remove_provenance
 

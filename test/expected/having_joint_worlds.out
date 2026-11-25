@@ -1,0 +1,35 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|dept|n|b
+min < 60|1|6|t
+min < 60|2|6|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|dept|n|b
+sum < 60|1|6|t
+sum < 60|2|0|f
+(2 rows)
+remove_provenance
+
+(1 row)
+q|dept|n|b
+min filter < 60|1|6|t
+min filter < 60|2|6|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|dept|n|b
+count filter >= 1|1|6|t
+count filter >= 1|2|6|t
+(2 rows)

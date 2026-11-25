@@ -1571,6 +1571,22 @@ $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'null');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/**
+ * @brief Return the UUID of the value gate of a row an aggregate reads no
+ *        value from
+ *
+ * An aggregate that skips its NULL inputs (@c sum, @c min, @c max, ...)
+ * reads no value from a row whose argument is NULL, nor from one its
+ * @c FILTER leaves out; the row is still one of the group's, and is kept as
+ * a child @c semimod(token, gate_novalue()) of the aggregate's gate (see
+ * provenance_semimod_skipping()).  Its seed <tt>'novalue'</tt> is no
+ * <tt>'value' || text</tt>, so no actual value shares it.
+ */
+CREATE OR REPLACE FUNCTION gate_novalue() RETURNS uuid AS
+$$
+  SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'novalue');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 /** @} */
 
 /** @defgroup semiring_operations Semiring operations
@@ -3234,7 +3250,7 @@ BEGIN
   WHERE p.oid = (provsql.get_infos(token)).info1;
 
   vals := ARRAY(SELECT provsql.get_extra((provsql.get_children(sm))[2])
-                FROM unnest(provsql.get_children(token)) AS sm);
+                FROM unnest(provsql.agg_valued_children(token)) AS sm);
   n := coalesce(array_length(vals, 1), 0);
   /* NULL is a value of the aggregate like any other -- the one it takes where
    * no row contributes, which an aggregation over the whole table reaches in
@@ -3289,14 +3305,14 @@ BEGIN
    * (maximum, choice) one of their values.  The combinations no world
    * realises (two contributions that depend on each other) are emitted too,
    * and their rows have a provenance of zero. */
-  IF EXISTS (SELECT 1 FROM unnest(provsql.get_children(token)) AS sm
+  IF EXISTS (SELECT 1 FROM unnest(provsql.agg_valued_children(token)) AS sm
              WHERE provsql.get_gate_type(sm) = 'semimod'
                AND provsql.get_gate_type((provsql.get_children(sm))[2])
                      <> 'value') THEN
     sums := ARRAY[]::numeric[];
     vals := ARRAY[]::text[];
     FOR cv IN SELECT (provsql.get_children(sm))[2]
-              FROM unnest(provsql.get_children(token)) AS sm
+              FROM unnest(provsql.agg_valued_children(token)) AS sm
               WHERE provsql.get_gate_type(sm) = 'semimod' LOOP
       cvals := CASE WHEN provsql.get_gate_type(cv) = 'value'
                     THEN ARRAY[provsql.get_extra(cv)]
@@ -8071,6 +8087,42 @@ CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUI
   'provsql','provenance_semimod_nullable' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
+ * @brief Semimodule gate for an aggregate that skips its NULL inputs
+ *
+ * Variant of provenance_semimod() used by the query rewriter for @c sum,
+ * @c min, @c max and the other aggregates that read no value from a NULL
+ * input: a NULL value -- a NULL argument, or a row the aggregate's
+ * @c FILTER leaves out -- still yields a semimod gate, over the constant
+ * value gate gate_novalue().  The row contributes nothing to the value, but
+ * it is one of the group's, and a condition on the aggregate reads its
+ * presence among the worlds of the group.
+ *
+ * @param val the scalar value, possibly NULL
+ * @param token the provenance token to multiply
+ */
+CREATE OR REPLACE FUNCTION provenance_semimod_skipping(val anyelement, token UUID)
+  RETURNS UUID AS
+  'provsql','provenance_semimod_skipping' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+/**
+ * @brief The children of an aggregate's gate that contribute a value
+ *
+ * The children of @p token, those over gate_novalue() left out: the rows the
+ * aggregate reads no value from (see provenance_semimod_skipping()) are
+ * members of its family, but no contributions to its value (internal use).
+ *
+ * @param token the gate
+ */
+CREATE OR REPLACE FUNCTION agg_valued_children(token uuid)
+  RETURNS uuid[] AS
+$$
+  SELECT coalesce(array_agg(c ORDER BY o), ARRAY[]::uuid[])
+    FROM unnest(provsql.get_children(token)) WITH ORDINALITY AS u(c, o)
+   WHERE NOT (provsql.get_gate_type(c) = 'semimod'
+              AND (provsql.get_children(c))[2] = provsql.gate_novalue())
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief The rank of a row standing for its row number (internal)
  *
  * Called by the query rewriter for <tt>row_number() OVER (…)</tt> over
@@ -8224,7 +8276,7 @@ BEGIN
     SELECT provsql.provenance_plus(coalesce(array_agg((provsql.get_children(c))[1]),
                                             ARRAY[]::uuid[]))
       INTO p
-      FROM unnest(provsql.get_children(g)) AS c
+      FROM unnest(provsql.agg_valued_children(g)) AS c
      WHERE provsql.get_gate_type(c) = 'semimod';
     RETURN CASE WHEN want_null THEN provsql.provenance_monus(provsql.gate_one(), p)
                 ELSE p END;
@@ -8752,7 +8804,7 @@ BEGIN
     WHERE oid=(get_infos(token)).info1
     INTO aggregation_function;
 
-  child_pairs := get_children(token);
+  child_pairs := agg_valued_children(token);
   n := COALESCE(array_length(child_pairs, 1), 0);
 
   -- A contribution whose value is itself an aggregate (an avg of a count, a

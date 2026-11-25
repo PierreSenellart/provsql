@@ -4788,9 +4788,16 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
     expr_s->args = list_make2(arg, row_token);
   } else {
     /* A NULL-skipping aggregate: agg(x) FILTER (WHERE f) is
-     * agg(CASE WHEN f THEN x END).  provenance_semimod drops NULL values, so
-     * a row failing f is no child of the gate, and the per-row value
-     * HAVING ... IS [NOT] NULL splits on is NULL for it. */
+     * agg(CASE WHEN f THEN x END).  A row the aggregate reads no value from
+     * -- x NULL, or f failing -- is still a row of the group, and a condition
+     * on the aggregate reads its presence: provenance_semimod_skipping keeps
+     * it as a child of the gate over gate_novalue(), which the evaluators
+     * set apart from the values (GenericCircuit::detachNoValueOccurrences).
+     * On a schema without it, provenance_semimod drops NULL values, and with
+     * them the row.  The per-row value HAVING ... IS [NOT] NULL splits on is
+     * NULL for it either way. */
+    if (OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING))
+      expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING;
     if (filter != NULL)
       arg = make_case_when(filter, arg, NULL);
     expr_s->args = list_make2(arg, row_token);
@@ -5789,7 +5796,8 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     te = (TargetEntry *)linitial(arr->args);
     if (!IsA(te->expr, FuncExpr) ||
         (((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD &&
-         ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
+         ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE &&
+         ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING))
       provsql_unsupported(PROVSQL_GAP, "null-test-aggregate-of-aggregates",
                           "the NULL-ness of an aggregate of aggregate results "
                           "(a COALESCE or IS [NOT] NULL over it) is not "
@@ -25695,7 +25703,8 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
      * statement reports, and so must the contribution, which would otherwise
      * record the token's display text, "4 (*)", read by no evaluator as a
      * number.  Its parameter is polymorphic, so the rule below keeps it. */
-    if (fe->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_SEMIMOD &&
+    if ((fe->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_SEMIMOD ||
+         fe->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING) &&
         list_length(fe->args) == 2 &&
         exprType((Node *)linitial(fe->args)) ==
           ctx->constants->OID_TYPE_AGG_TOKEN) {

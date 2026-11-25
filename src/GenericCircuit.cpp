@@ -507,3 +507,31 @@ FixSystemLinear GenericCircuit::linearizeFixSystem(gate_t sys) const
   }
   return out;
 }
+
+void GenericCircuit::detachNoValueOccurrences()
+{
+  const uuid novalue(PROVSQL_GATE_NOVALUE_UUID);
+  for (gate_t g{0}; static_cast<std::size_t>(g) < getNbGates(); ++g) {
+    if (getGateType(g) != gate_agg)
+      continue;
+    auto &w = getWires(g);
+    std::vector<gate_t> kept;
+    std::vector<gate_t> detached;
+    for (gate_t ch : w) {
+      if (getGateType(ch) == gate_semimod) {
+        const auto &sw = getWires(ch);
+        if (sw.size() == 2 && getUUID(sw[1]) == novalue) {
+          detached.push_back(sw[0]);
+          continue;
+        }
+      }
+      kept.push_back(ch);
+    }
+    if (!detached.empty()) {
+      w = std::move(kept);
+      auto &d = novalue_occurrences[g];
+      d.insert(d.end(), detached.begin(), detached.end());
+    }
+  }
+}
+

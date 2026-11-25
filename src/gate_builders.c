@@ -630,6 +630,29 @@ Datum provenance_semimod_nullable(PG_FUNCTION_ARGS) {
   return semimod_gate(&value_token, token);
 }
 
+PG_FUNCTION_INFO_V1(provenance_semimod_skipping);
+/**
+ * @brief @c provenance_semimod for the aggregates that skip their NULL inputs
+ *        (@c sum, @c min, @c max, ...): a NULL value gives a gate over the
+ *        constant value gate @c gate_novalue().
+ *
+ * The aggregate reads no value from such a row, but the row is one of the
+ * group's: its presence is part of the worlds of the aggregate, which a
+ * condition on it reads, exactly as a row a @c FILTER leaves out is.
+ */
+Datum provenance_semimod_skipping(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token = semimod_token_argument(fcinfo);
+  pg_uuid_t value_token;
+
+  if (PG_ARGISNULL(0))
+    value_token = value_gate("novalue", "", "");
+  else {
+    char *str = varchar_of_argument(fcinfo, 0);
+    value_token = value_gate("value", str, str);
+  }
+  return semimod_gate(&value_token, token);
+}
+
 static bool same_token(const pg_uuid_t *a, const pg_uuid_t *b);
 
 PG_FUNCTION_INFO_V1(provenance_semimod_nested);
@@ -747,6 +770,29 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
   if (!PG_ARGISNULL(3)) {
     memset(&nothing, 0xFF, sizeof(nothing));
     n = filtered_tokens(PG_GETARG_ARRAYTYPE_P(3), &nothing, &tokens);
+  }
+
+  /* An aggregate without a value: the rows it reads no value from (children
+   * over gate_novalue(), see provenance_semimod_skipping) are left out, so
+   * that a group none of whose rows has a value keeps the token it had before
+   * such rows were kept -- none, or the circuit of the rows absent from the
+   * database as it is.  Only these groups are read back; the others keep
+   * them, at no cost. */
+  if (val == NULL && n > 0) {
+    pg_uuid_t novalue = constant_uuid(PROVSQL_GATE_NOVALUE_UUID);
+    int i, kept = 0;
+
+    for (i = 0; i < n; ++i) {
+      unsigned m = 0;
+      pg_uuid_t *wires = NULL;
+      bool drop = provsql_fetch_gate(&tokens[i], &m, &wires) == gate_semimod &&
+                  m == 2 && memcmp(wires[1].data, novalue.data, UUID_LEN) == 0;
+
+      free(wires);
+      if (!drop)
+        tokens[kept++] = tokens[i];
+    }
+    n = kept;
   }
 
   /* A group without rows is no group; a scalar aggregation over no row has a

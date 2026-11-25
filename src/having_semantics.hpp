@@ -128,6 +128,19 @@ void provsql_having(
             "of its group, in no order of the query: it has no value in a "
             "semiring whose multiplication does not commute.");
 
+  // A row an aggregate reads no value from -- a NULL argument of sum, min,
+  // ..., a row its FILTER leaves out -- is still a row of the group, whose
+  // presence the worlds of a condition on the aggregate read
+  // (GenericCircuit::getNoValueOccurrences).  In a Boolean algebra (a
+  // commutative semiring, absorptive, with an idempotent product and
+  // exclusive) its presence is neutral: the worlds that differ in it alone
+  // sum to the world without it, so the evaluation may leave such rows out,
+  // as it does.  Elsewhere it is not -- over the counting semiring,
+  // a ⊗ (1 ⊖ b) ⊕ a ⊗ b is not a -- and a condition reading such an
+  // aggregate is resolved by the joint enumeration, which takes the rows in.
+  const bool boolean_algebra =
+    S.absorptive() && S.mul_idempotent() && S.exclusive();
+
   // Whether the world enumeration over these contributor annotations can
   // be built *certified*: the semiring persists d-DNNF certificates
   // (circuit-building BoolExpr), every contributor is an independent
@@ -448,6 +461,13 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
           if (!parse_number(ms, m)) return false;
           ai.contribs.emplace_back(idx, m);
         }
+        // The rows read for no value: in the worlds, without a value.
+        if (!boolean_algebra)
+          for (gate_t kg : c.getNoValueOccurrences(gx))
+            if (!kindex.count(kg)) {
+              kindex[kg] = static_cast<int>(kgates.size());
+              kgates.push_back(kg);
+            }
         aggs.emplace(gx, std::move(ai));
         return true;
       }
@@ -1292,6 +1312,23 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
       return true;
     };
 
+    // An aggregate with rows read for no value, outside a Boolean algebra:
+    // the joint enumeration, the only one to take those rows in its worlds.
+    // Where it declines (another aggregate, a value that is no number, too
+    // many rows), the paths below, which leave the rows out.
+    std::function<bool(gate_t)> reads_novalue = [&](gate_t gx) -> bool {
+      if (c.getGateType(gx) == gate_agg)
+        return !c.getNoValueOccurrences(gx).empty();
+      if (c.getGateType(gx) == gate_arith)
+        for (gate_t ch : c.getWires(gx))
+          if (reads_novalue(ch))
+            return true;
+      return false;
+    };
+    if (!boolean_algebra && (reads_novalue(L) || reads_novalue(R)) &&
+        build_general(L, R, op))
+      return true;
+
     if (c.getGateType(L) == gate_agg && build_from(L, R, op))
       return true;
     if (c.getGateType(R) == gate_agg && build_from(R, L, flip_op(op)))
@@ -1427,6 +1464,9 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
                 semimod_extract_string_and_K(c, ch, ms, kg))
               fam.insert(kg);
           }
+          if (!boolean_algebra)
+            for (gate_t kg : c.getNoValueOccurrences(x))
+              fam.insert(kg);
         } else if (t == gate_arith || t == gate_cmp)
           for (gate_t ch : c.getWires(x))
             family_walk(ch, fam);

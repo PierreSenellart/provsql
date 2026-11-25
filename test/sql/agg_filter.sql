@@ -3,11 +3,13 @@
 
 -- FILTER on aggregates, and NULL inputs of aggregates that see them.
 --
--- The circuit of an aggregate must range over exactly the inputs the
--- aggregate reads:
+-- The circuit of an aggregate must range over the rows of the group, with
+-- the values the aggregate reads:
 --  * a NULL-skipping aggregate (sum, min, avg, string_agg, ...) with
---    FILTER (WHERE f) is agg(CASE WHEN f THEN x END): a row failing f is no
---    child of the gate;
+--    FILTER (WHERE f) is agg(CASE WHEN f THEN x END): a row failing f, like a
+--    row whose input is NULL, is a child of the gate with no value (over
+--    gate_novalue(), shown <none>), since the row still witnesses the group
+--    and a condition on the aggregate reads its presence;
 --  * count keeps such a row as a child of value 0, since the row still
 --    witnesses the group (count ... = 0 must not hold in the empty world of a
 --    grouped query);
@@ -139,20 +141,24 @@ SELECT 'distinct gates' AS q,
        agg_token_uuid(s) <> agg_token_uuid(sf) AS sum_differ,
        agg_token_uuid(aa) <> agg_token_uuid(aaf) AS array_differ FROM af_g;
 
--- The values the children carry; the value gate of a NULL input is gate_null().
+-- The values the children carry; the value gate of a NULL input is gate_null(),
+-- that of a row read for no value gate_novalue().
 CREATE FUNCTION af_children(u uuid) RETURNS text LANGUAGE sql AS $$
   SELECT string_agg(
            CASE WHEN (provsql.get_children(ch))[2] = provsql.gate_null()
                 THEN '<null>'
+                WHEN (provsql.get_children(ch))[2] = provsql.gate_novalue()
+                THEN '<none>'
                 ELSE provsql.get_extra((provsql.get_children(ch))[2]) END,
-           ' ' ORDER BY (provsql.get_children(ch))[2] <> provsql.gate_null(),
+           ' ' ORDER BY (provsql.get_children(ch))[2] <> provsql.gate_novalue(),
+                        (provsql.get_children(ch))[2] <> provsql.gate_null(),
                         provsql.get_extra((provsql.get_children(ch))[2]))
   FROM unnest(provsql.get_children(u)) AS ch $$;
 SELECT 'children' AS q,
        af_children(agg_token_uuid(c))   AS count_all,    -- 1 1 1
        af_children(agg_token_uuid(cf))  AS count_filter, -- 0 1 1
-       af_children(agg_token_uuid(sf))  AS sum_filter,   -- 6 7
-       af_children(agg_token_uuid(st))  AS string_agg_f, -- q  (a filtered, b NULL)
+       af_children(agg_token_uuid(sf))  AS sum_filter,   -- <none> 6 7
+       af_children(agg_token_uuid(st))  AS string_agg_f, -- <none> <none> q  (a filtered, b NULL)
        af_children(agg_token_uuid(aa))  AS array_all,    -- <null> p q
        af_children(agg_token_uuid(aaf)) AS array_filter, -- p q
        af_children(agg_token_uuid(ja))  AS json_all      -- <null> p q
@@ -171,9 +177,9 @@ CREATE TABLE af_u AS SELECT g,
   FROM af WHERE g=1 GROUP BY g;
 SELECT remove_provenance('af_u');
 SELECT 'user-defined' AS q,
-       af_children(agg_token_uuid(us))  AS strict,          -- 5 7
+       af_children(agg_token_uuid(us))  AS strict,          -- <none> 5 7
        af_children(agg_token_uuid(uc))  AS nonstrict,       -- <null> 5 7
-       af_children(agg_token_uuid(ch))  AS choose,          -- 5 7
+       af_children(agg_token_uuid(ch))  AS choose,          -- <none> 5 7
        af_children(agg_token_uuid(ucf)) AS nonstrict_filter -- <null> 7
   FROM af_u;
 
@@ -218,7 +224,7 @@ CREATE TABLE af_f AS SELECT g, sum(v) FILTER (WHERE v>5) * 2 AS s2
   FROM af WHERE g=1 GROUP BY g;
 SELECT remove_provenance('af_f');
 SELECT 'folded' AS q, s2, get_gate_type(agg_token_uuid(s2)) AS gate,
-       af_children(agg_token_uuid(s2)) AS children FROM af_f;   -- 26, agg, 12 14
+       af_children(agg_token_uuid(s2)) AS children FROM af_f;   -- 26, agg, <none> 12 14
 
 -- >= 14 after doubling: c present = 0.2
 CREATE TABLE af_t15 AS SELECT g, af_p(provenance()) AS p FROM af WHERE g=1

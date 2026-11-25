@@ -372,16 +372,32 @@ Which rows are children of the ``agg`` gate
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The invariant is that the children of an ``agg`` gate are exactly
-the inputs the aggregate reads; the value-aware evaluators
-(``HAVING``, moments, sampling) rely on it.  Three cases, decided in
+the rows of the group, each with the value the aggregate reads from it,
+if any: the value-aware evaluators (``HAVING``, moments, sampling) read
+the values, and the provenance of a condition on the aggregate reads the
+worlds of all the rows.  Three cases, decided in
 :cfunc:`make_row_semimod`:
 
 - **NULL-skipping aggregates** (``sum``, ``min``, ``max``, ``avg``,
-  ``string_agg``, ``choose``, ...).  :sqlfunc:`provenance_semimod`
-  returns ``NULL`` for a ``NULL`` value and
-  :sqlfunc:`provenance_aggregate` drops such entries.  A ``FILTER
-  (WHERE f)`` is folded into the argument as ``CASE WHEN f THEN arg
-  END``.
+  ``string_agg``, ``choose``, ...).  A ``FILTER (WHERE f)`` is folded
+  into the argument as ``CASE WHEN f THEN arg END``, and
+  :sqlfunc:`provenance_semimod_skipping` maps a ``NULL`` value -- a
+  ``NULL`` argument, or a row the ``FILTER`` leaves out -- to the
+  constant value gate :sqlfunc:`gate_novalue` (``GATE_NOVALUE_UUID`` on
+  the |cpp| side): the aggregate reads no value from the row, but the
+  row is one of the group's.  At load time,
+  ``GenericCircuit::detachNoValueOccurrences`` moves these children off
+  the ``agg`` gate into a side table, so that every evaluator sees the
+  contributions alone; ``provsql_having`` reads the side table
+  (``getNoValueOccurrences``) over a semiring that is not a Boolean
+  algebra, where the presence of such a row is not neutral (over the
+  counting semiring, ``min(x) < 60`` over a row ``a`` of value 50 and a
+  row ``b`` of value ``NULL`` is ``a ⊗ (𝟙 ⊖ b) ⊕ a ⊗ b``, not ``a``), and
+  resolves the condition by its joint enumeration.  The SQL functions
+  that read the values of an aggregate's children use
+  :sqlfunc:`agg_valued_children`.  A group none of whose rows has a value
+  keeps the token it had before (:sqlfunc:`provenance_aggregate` drops
+  the rows without a value when the aggregate has none).
 - ``count``.  A row that does not count *stays* a child, of value 0:
   it still witnesses its group, and a lifted ``HAVING count(...) = 0``
   replaces the group's δ, so dropping the row would let the comparison

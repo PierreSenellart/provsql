@@ -139,6 +139,7 @@ _SQL_FUNC_MAP = {
     'gate_zero':                '/doxygen-sql/html/group__internal__constants.html#ga13455054a9c6a90a9088d8666b105812',
     'gate_one':                 '/doxygen-sql/html/group__internal__constants.html#ga27aad07a447f5b1f17018ac09ef4ea32',
     'gate_null':                '/doxygen-sql/html/group__internal__constants.html#gab90c762d40201c8ff236e9d04d5abfaa',
+    'gate_novalue':             '/doxygen-sql/html/group__internal__constants.html#gacd81d5065efb6b736eeecf896372d977',
 
     'set_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#ga17334fe1d3969d969eaa18e32a93b4e0',
     'setup_search_path':        '/doxygen-sql/html/namespaceprovsql.html#a98dc558afe958f364b3c13ebe22bc1f7',
@@ -157,6 +158,8 @@ _SQL_FUNC_MAP = {
     'plain':                    '/doxygen-sql/html/group__aggregate__provenance.html#gadd4022a0b0f1e64975b8d1a9613edf17',
     'provenance_semimod':       '/doxygen-sql/html/group__aggregate__provenance.html#ga9a5934a6cee96b33c666d3456d960672',
     'provenance_semimod_nullable': '/doxygen-sql/html/group__aggregate__provenance.html#gafbe959567b7a3d11ef955cc650544a9a',
+    'provenance_semimod_skipping': '/doxygen-sql/html/group__aggregate__provenance.html#gaf9fd0d163b6079de23c73049b9b18254',
+    'agg_valued_children':      '/doxygen-sql/html/group__aggregate__provenance.html#ga53f86ed43e65ff2d418c47562ff7de80',
     'provenance_times':         '/doxygen-sql/html/group__semiring__operations.html#ga78437a737b6eb9bb21772ec9fb7fcd1d',
     'provenance_assume':        '/doxygen-sql/html/group__gate__manipulation.html#gae31bbf78903ba4280cf212e410f32425',
     'ucq_joint_provenance':     '/doxygen-sql/html/group__probability.html#ga4fb000a5372382935fd480edbf63fe67',

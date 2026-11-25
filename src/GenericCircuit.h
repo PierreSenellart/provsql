@@ -73,6 +73,7 @@ std::map<gate_t, std::string> extra;                   ///< Per-gate string extr
 std::set<gate_t> inputs;                               ///< Set of input (leaf) gate IDs
 std::vector<double> prob;                              ///< Per-gate probability values
 std::set<gate_t> boolean_assumed_gates;                ///< Side-band Boolean-assumption marker set by the Boolean-only fold rules ; an evaluator visiting a gate in this set refuses to proceed under a semiring that does not admit a homomorphism from Boolean functions.  In-memory only ; never persisted to mmap.  Distinct from the @c gate_assumed enum (used by the safe-query rewriter to encode the same restriction at the persistent layer).
+std::map<gate_t, std::vector<gate_t> > novalue_occurrences; ///< Per @c gate_agg, the provenance gates of the rows the aggregate reads no value from (a NULL argument of an aggregate that skips NULLs, a row its @c FILTER leaves out), detached from its wires by @c detachNoValueOccurrences.  In-memory only.
 std::set<gate_t> absorptive_assumed_gates;             ///< Side-band absorptive-assumption marker set by the absorptive fold rules (plus-idempotence, plus-with-one absorber, plus-absorbs-times -- sound in every absorptive semiring) ; an evaluator visiting a gate in this set refuses unless the semiring is absorptive or tolerates the (stronger) Boolean rewrite.  In-memory only.
 
 public:
@@ -503,6 +504,33 @@ bool isBooleanAssumed(gate_t g) const {
  *        one) and throws a @c CircuitException otherwise.
  */
 void markAbsorptiveAssumed(gate_t g) { absorptive_assumed_gates.insert(g); }
+
+/**
+ * @brief Set apart, for each @c gate_agg, the rows it reads no value from.
+ *
+ * An aggregate that skips NULLs keeps a row it reads no value from -- a NULL
+ * argument, a row its @c FILTER leaves out -- as a child
+ * @c semimod(k, gate_novalue()): the row is one of the group's, so the worlds
+ * of the aggregate include its presence, but it contributes nothing to the
+ * value in any of them.  Every evaluator reading an aggregate's children takes
+ * them as contributions with a value; this moves those children off the wires
+ * of the @c gate_agg, keeping their provenance gates @c k in a side table, so
+ * that the evaluators see the contributions alone, and only those that read
+ * the worlds of the group (@c provsql_having, over a semiring that is not a
+ * Boolean algebra, where the presence of such a row is not neutral) consult
+ * the side table.  Run first at load time.
+ */
+void detachNoValueOccurrences();
+
+/**
+ * @brief The provenance gates of the rows @p agg reads no value from (see
+ *        @c detachNoValueOccurrences); empty for most aggregates.
+ */
+const std::vector<gate_t> &getNoValueOccurrences(gate_t agg) const {
+  static const std::vector<gate_t> none;
+  auto it = novalue_occurrences.find(agg);
+  return it == novalue_occurrences.end() ? none : it->second;
+}
 
 /** @brief Report whether @p g carries the absorptive-assumption flag. */
 bool isAbsorptiveAssumed(gate_t g) const {

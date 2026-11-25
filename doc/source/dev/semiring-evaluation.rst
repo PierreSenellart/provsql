@@ -270,7 +270,10 @@ declared, and an operation the semiring does not provide throws.
    * - ``exclusive()``, ``mul_idempotent()`` (false)
      - together, the product of two conditions on one group is their
        joint provenance (``product_is_joint()``), so the ``HAVING``
-       evaluator need not resolve them jointly.
+       evaluator need not resolve them jointly.  With ``absorptive()`` as well (a Boolean algebra), the rows
+       an aggregate reads no value from are neutral in the worlds of a
+       condition on it, which may then leave them out (see
+       :doc:`aggregation`).
    * - ``compatibleWithBooleanRewrite()`` (false)
      - the safe-query rewriting is sound here (see `Boolean-Rewrite
        Compatibility`_).

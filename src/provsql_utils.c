@@ -431,6 +431,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   /* Optional: absent from schemas older than 1.13.0. */
   constants.OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE =
     get_provsql_func_oid("provenance_semimod_nullable");
+  /* Optional: absent from schemas older than 1.15.0. */
+  constants.OID_FUNCTION_PROVENANCE_SEMIMOD_SKIPPING =
+    get_provsql_func_oid("provenance_semimod_skipping");
   /* Optional: absent from schemas older than 1.13.0. */
   constants.OID_FUNCTION_ROW_NUMBER_AS_RANK =
     get_provsql_func_oid("row_number_as_rank");
