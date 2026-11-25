@@ -3,17 +3,21 @@
 
 -- The provenance of a condition on aggregates is the sum of the annotations
 -- of the worlds where it holds, the worlds of all the rows it reads, in
--- every semiring, which only a semiring that is not a Boolean algebra tells
--- apart from the shortcut it replaces.
+-- every semiring: two consequences that only a semiring which is not a
+-- Boolean algebra tells apart from the shortcuts they replace.
 --
 --  * A row an aggregate reads no value from -- a NULL argument of sum or min,
 --    a row its FILTER leaves out -- is one of those rows: with a row a of
 --    value 50 and a row b of value NULL, min < 60 holds in {a} and {a, b},
 --    whose annotations sum to a ⊗ (1 ⊖ b) ⊕ a ⊗ b, and not to a.
+--  * A disjunction with a regular condition that holds -- name = 30 OR
+--    EXISTS (...) -- holds in every world of the rows the EXISTS reads: over
+--    one matching row e, (1 ⊖ e) ⊕ e, and not 1 ⊕ e.
 --
 -- Rows are annotated in the counting semiring by their column w (2 and 3),
--- where 1 ⊖ 3 = 0: a ⊗ (1 ⊖ b) ⊕ a ⊗ b is 2 ⊗ 3 = 6 and a is 2.  In the
--- Boolean semiring both forms coincide, and the answers there are unchanged.
+-- where 1 ⊖ 3 = 0: a ⊗ (1 ⊖ b) ⊕ a ⊗ b is 2 ⊗ 3 = 6 and a is 2; (1 ⊖ e) ⊕ e
+-- is 3 and 1 ⊕ e is 4.  In the Boolean semiring both forms coincide, and the
+-- answers there are unchanged.
 
 CREATE TABLE hjw_emp(id int, dept int, sal int, w int);
 INSERT INTO hjw_emp VALUES
@@ -60,5 +64,33 @@ SELECT remove_provenance('hjw_r');
 SELECT 'count filter >= 1' AS q, dept, n, b FROM hjw_r ORDER BY dept;
 DROP TABLE hjw_r;
 
+CREATE TABLE hjw_dept(d int, name int, w int);
+INSERT INTO hjw_dept VALUES (1, 30, 2), (2, 30, 2), (3, 40, 2);
+CREATE TABLE hjw_e(id int, dept int, w int);
+INSERT INTO hjw_e VALUES (1, 1, 3), (2, 3, 3);
+SELECT add_provenance('hjw_dept');
+SELECT add_provenance('hjw_e');
+SELECT create_provenance_mapping('hjw_dept_w', 'hjw_dept', 'w');
+SELECT create_provenance_mapping('hjw_e_w', 'hjw_e', 'w');
+CREATE TABLE hjw_w AS
+  SELECT * FROM hjw_dept_w UNION ALL SELECT * FROM hjw_e_w;
+
+-- dept 1 (d) has one employee (e): d ⊗ ((1 ⊖ e) ⊕ e) = 2 ⊗ 3 = 6.  dept 2
+-- has none: d ⊗ (1 ⊖ 0) = 2.  dept 3 fails name = 30 and has one employee:
+-- d ⊗ e = 6.
+CREATE TABLE hjw_r AS
+  SELECT d, sr_counting(provenance(), 'hjw_w') AS n,
+         sr_boolean(provenance()) AS b
+  FROM hjw_dept
+  WHERE name = 30 OR EXISTS (SELECT 1 FROM hjw_e WHERE hjw_e.dept = hjw_dept.d);
+SELECT remove_provenance('hjw_r');
+SELECT 'name = 30 OR EXISTS' AS q, d, n, b FROM hjw_r ORDER BY d;
+DROP TABLE hjw_r;
+
+DROP TABLE hjw_w;
+DROP TABLE hjw_dept_w;
+DROP TABLE hjw_e_w;
 DROP TABLE hjw_emp_w;
+DROP TABLE hjw_e;
+DROP TABLE hjw_dept;
 DROP TABLE hjw_emp;

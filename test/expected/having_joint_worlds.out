@@ -33,3 +33,23 @@ q|dept|n|b
 count filter >= 1|1|6|t
 count filter >= 1|2|6|t
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|d|n|b
+name = 30 OR EXISTS|1|6|t
+name = 30 OR EXISTS|2|2|t
+name = 30 OR EXISTS|3|6|t
+(3 rows)

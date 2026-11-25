@@ -1531,6 +1531,40 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
       if (!seen.insert(p).second)
         continue;
       gate_type pt = c.getGateType(p);
+      // A disjunction of conditions with a regular condition that holds --
+      // WHERE name = 30 OR EXISTS (...), the regular one an indicator 𝟙 --
+      // holds in every world of the families it reads: its provenance is the
+      // sum of the annotations of those worlds, and not 𝟙 ⊕ the provenance
+      // of the rest, which counts twice the worlds where the rest holds too.
+      // Resolved with the joint enumeration, over a predicate true
+      // everywhere, when every other child is a combination of conditions.
+      if (pt == gate_plus) {
+        const auto &pw = c.getWires(p);
+        bool has_true = false, only_conditions = true;
+        std::vector<JointAtom> atoms;
+        for (gate_t ch : pw) {
+          if (c.getGateType(ch) == gate_one) {
+            has_true = true;
+            continue;
+          }
+          std::set<gate_t> fam;
+          bool fam_set = false;
+          FNode k;
+          if (!as_combination(ch, fam, fam_set, k, atoms)) {
+            only_conditions = false;
+            break;
+          }
+        }
+        typename SemiringT::value_type joint;
+        if (has_true && only_conditions && !atoms.empty() &&
+            build_joint(atoms, [](const std::vector<bool> &) { return true; },
+                        joint)) {
+          gate_t n = c.addGate();
+          mapping[n] = std::move(joint);
+          c.getWires(p) = std::vector<gate_t>{n};
+          continue;
+        }
+      }
       if (pt == gate_times || pt == gate_plus) {
         // The children that are combinations of conditions, by family.
         std::map<std::set<gate_t>, std::vector<std::pair<gate_t, FNode>>> groups;

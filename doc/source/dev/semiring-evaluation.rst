@@ -270,7 +270,11 @@ declared, and an operation the semiring does not provide throws.
    * - ``exclusive()``, ``mul_idempotent()`` (false)
      - together, the product of two conditions on one group is their
        joint provenance (``product_is_joint()``), so the ``HAVING``
-       evaluator need not resolve them jointly.  With ``absorptive()`` as well (a Boolean algebra), the rows
+       evaluator need not resolve them jointly; otherwise it does, and
+       resolves a disjunction of conditions with a regular condition that
+       holds (an indicator :math:`\mathbbm{1}`) as the sum over all the
+       worlds of the rows they read, not :math:`\mathbbm{1} \oplus` the
+       rest.  With ``absorptive()`` as well (a Boolean algebra), the rows
        an aggregate reads no value from are neutral in the worlds of a
        condition on it, which may then leave them out (see
        :doc:`aggregation`).
