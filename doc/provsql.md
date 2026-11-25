@@ -15,6 +15,8 @@ evaluations, as a PostgreSQL extension.
 
 Website: **<https://provsql.org/>** – Documentation: **<https://provsql.org/docs/>**
 
+[![Provenance tracking in ProvSQL: queries are rewritten to build a provenance circuit, whose gates are stored by a background worker in memory-mapped files](https://provsql.org/assets/images/architecture-white.svg)](https://provsql.org/overview/#architecture)
+
 ## Quick Install
 
 **Prerequisites:** PostgreSQL ≥ 11, a C++17 compiler, PostgreSQL development

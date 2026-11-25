@@ -1,0 +1,99 @@
+\begin{tikzpicture}
+  \path[use as bounding box] (0,0) rectangle (15,8);
+  \begin{scope}[yshift=-.4cm]
+  \path[pvbackend] (2.58,6.18) rectangle (11.69,8.38);
+  \path[pvbackend] (2.5,6.1) rectangle (11.61,8.3);
+  \path[pvbackend] (2.42,6.02) rectangle (11.53,8.22);
+  \path[pvpanel=black] (0,6.12) rectangle (1.4,8.12);
+  \pvperson{.7}{7.28}{1.1}
+  \node[pvtext] at (.7,6.52) {User};
+  \path[pvrewrite] (2.55,6.12) rectangle (7.45,8.12);
+  \pvdoc[chaptercolor]{q}{3.2}{7.12}{.9}{1.0}{$q$}
+  \node[pvstep=chaptercolor, minimum width=1.9cm, minimum height=.82cm] (rules) at (4.98,7.12) {Rewriting\\[-1pt]Rules};
+  \pvdoc[chaptercolor]{qh}{6.75}{7.12}{.9}{1.0}{$\hat q$}
+  \draw[pvarrow] (q) -- (rules);
+  \draw[pvarrow] (rules) -- (qh);
+  \draw[pvarrow] (1.4,7.12) -- node[pvsmall, above=2pt, pos=.33] {\emph{queries}} (q);
+  \node[pvstep=isA, minimum width=1.8cm, minimum height=1.42cm] (eval) at (8.55,7.12) {PostgreSQL\\[-1pt]Query\\[-1pt]Evaluator};
+  \draw[pvarrow] (qh.east) -- (eval.west);
+  \node[pvstep=chaptercolor, minimum width=1.3cm, minimum height=.72cm] (udf) at (10.75,7.67) {ProvSQL\\[-1pt]UDFs};
+  \draw[pvboth] (9.45,7.67) -- node[pvsmall, above=3.5pt] {\emph{calls}} (udf.west);
+  \pvdrum{isA!75}{10.75}{6.495}{1.2}{.75}{.08}
+  \node[pvsmall] at (10.75,6.42) {Local\\[-1pt]Cache};
+  \draw[pvboth] (udf.south) -- (10.75,6.87);
+  \pvdrum{black!65}{5.175}{4.3}{6.75}{2.6}{.16}
+  \node[pvtitle] at (5.175,5.44) {Database};
+  \path[fill=white] (2.1,3.17) rectangle (8.25,5.15);
+  \path[fill=isC!22] (6.1,3.17) rectangle (8.25,4.81);
+  \draw[pvline, draw=black!60] (2.1,3.17) rectangle (8.25,5.15);
+  \draw[pvline, draw=black!60] (2.1,4.81) -- (8.25,4.81);
+  \draw[pvline, draw=black!60] (2.1,4.47) -- (8.25,4.47);
+  \draw[pvline, draw=black!60] (6.1,3.17) -- (6.1,4.81);
+  \node[pvcell] at (5.175,4.98) {Relation $R_i$};
+  \node[pvcell] at (2.9,4.64) {attr$_1$};
+  \node[pvcell] at (4.1,4.64) {$\cdots$};
+  \node[pvcell] at (5.3,4.64) {attr$_n$};
+  \node[pvcell] at (7.175,4.64) {\emph{provsql}};
+  \node[pvcell] at (2.9,4.235) {$a_1$};
+  \node[pvcell] at (4.1,4.235) {$\cdots$};
+  \node[pvcell] at (5.3,4.235) {$n_1$};
+  \node[pvcell] at (6.72,4.235) {UUIDv4};
+  \node[pvcell] at (7.405,4.235) {$\mapsto$};
+  \node[pvleaflabel] at (7.81,4.235) {$x_1$};
+  \node[pvcell] at (2.9,3.765) {$a_2$};
+  \node[pvcell] at (4.1,3.765) {$\cdots$};
+  \node[pvcell] at (5.3,3.765) {$n_2$};
+  \node[pvcell] at (6.72,3.765) {UUIDv4};
+  \node[pvcell] at (7.405,3.765) {$\mapsto$};
+  \node[pvleaflabel] at (7.81,3.765) {$x_2$};
+  \node[pvcell] at (2.9,3.35) {$\vdots$};
+  \node[pvcell] at (5.3,3.35) {$\vdots$};
+  \node[pvcell] at (6.72,3.35) {$\vdots$};
+  \node[pvcell] at (7.81,3.35) {$\vdots$};
+  \path[pvplain] (8.75,3) rectangle (12.05,5.6);
+  \node[pvtitle] at (10.4,5.37) {Result};
+  \path[fill=white] (8.95,3.17) rectangle (11.85,5.15);
+  \path[fill=isB!20] (9.83,3.17) rectangle (11.85,5.15);
+  \draw[pvline, draw=black!60] (8.95,3.17) rectangle (11.85,5.15);
+  \draw[pvline, draw=black!60] (9.83,3.17) -- (9.83,5.15);
+  \draw[pvline, draw=black!60] (8.95,4.77) -- (11.85,4.77);
+  \node[pvcell] at (9.39,4.96) {Tuples};
+  \node[pvcell] at (10.84,4.96) {\emph{provsql}};
+  \node[pvcell] at (9.39,4.5) {$t_1$};
+  \node[pvcell] at (10.44,4.5) {UUIDv5};
+  \node[pvcell] at (11.125,4.5) {$\mapsto$};
+  \node[pvrootlabel] at (11.53,4.5) {$t_1$};
+  \node[pvcell] at (9.39,3.97) {$\vdots$};
+  \node[pvcell] at (10.44,3.97) {$\vdots$};
+  \node[pvcell] at (11.53,3.97) {$\vdots$};
+  \node[pvcell] at (9.39,3.44) {$t_m$};
+  \node[pvcell] at (10.44,3.44) {UUIDv5};
+  \node[pvcell] at (11.125,3.44) {$\mapsto$};
+  \node[pvrootlabel] at (11.53,3.44) {$t_m$};
+  \draw[pvboth] (8.15,6.41) -- (8.15,5.84) -- (5.175,5.84) -- (5.175,5.6);
+  \draw[pvarrow] (8.95,6.41) -- (8.95,5.84) -- (10.4,5.84) -- (10.4,5.6);
+  \node[pvstep=isA, minimum width=2.4cm, minimum height=1.1cm] (work) at (13.8,7.67) {PostgreSQL\\[-1pt]Worker Process};
+  \path[pvpipe] (11.4,7.86) -- (12.38,7.86) -- (12.38,7.935) -- (12.6,7.795) -- (12.38,7.655) -- (12.38,7.73) -- (11.4,7.73) -- cycle;
+  \path[pvpipe] (12.6,7.61) -- (11.62,7.61) -- (11.62,7.685) -- (11.4,7.545) -- (11.62,7.405) -- (11.62,7.48) -- (12.6,7.48) -- cycle;
+  \node[pvsmall] at (12.145,8.08) {\emph{IPC}};
+  \pvcircuitstack{files}{13.8}{4.3}{2.4}{1.72}{Memory-Mapped\\[-1pt]Files}
+  \draw[pvarrow] (13.35,5.16) -- node[pvsmall, left=2pt] {\emph{reads}} (13.35,7.12);
+  \draw[pvarrow] (14.25,7.12) -- node[pvsmall, right=2pt] {\emph{writes}} (14.25,5.16);
+  \path[pvrewrite, rounded corners=.5mm] (0,4.99) rectangle (.24,5.21);
+  \node[pvsmall, anchor=west, align=left] at (.3,5.1) {Query\\[-1pt]Rewriting};
+  \path[pvbackend, rounded corners=.5mm] (0,4.19) rectangle (.24,4.41);
+  \node[pvsmall, anchor=west, align=left] at (.3,4.3) {PostgreSQL\\[-1pt]Backends};
+  \begin{scope}
+    \clip[rounded corners=.5mm] (0,3.39) rectangle (.24,3.61);
+    \path[fill=isB!20] (0,3.5) rectangle (.24,3.61);
+    \path[fill=isC!22] (0,3.39) rectangle (.24,3.5);
+  \end{scope}
+  \node[pvsmall, anchor=west, align=left] at (.3,3.5) {Provenance\\[-1pt]Circuits};
+  \end{scope}
+  \path[fill=isB!20] (0,.975) -- (0,2.23) arc[start angle=180, end angle=90, radius=.16] -- (14.84,2.39) arc[start angle=90, end angle=0, radius=.16] -- (15,.975) -- cycle;
+  \path[fill=isC!22] (0,.975) -- (15,.975) -- (15,.16) arc[start angle=0, end angle=-90, radius=.16] -- (.16,0) arc[start angle=270, end angle=180, radius=.16] -- cycle;
+  \node[pvsmall] at (13.5,1.62) {UUIDv5 Inner Gates};
+  \node[pvsmall] at (13.5,.55) {UUIDv4 Leaf Gates};
+  \input{figures/impl_circuits}
+  \draw[pvarrow] (13.8,2.39) -- node[pvsmall, left=3pt] {\emph{stored in}} (files);
+\end{tikzpicture}%
