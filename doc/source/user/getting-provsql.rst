@@ -44,7 +44,7 @@ To clone the development version directly:
 Prerequisites
 ^^^^^^^^^^^^^
 
-1. **PostgreSQL ≥ 11.** ProvSQL is tested with versions 11–18 under Linux
+1. **PostgreSQL ≥ 11.** ProvSQL is tested with versions 11–19 under Linux
    (x86-64), and with some of them under Linux (ARM), macOS (ARM), and
    Windows Subsystem for Linux.
    Native Windows builds of PostgreSQL (e.g., the EDB installer) are not

@@ -40,7 +40,7 @@ PostgreSQL bugs with |cpp| extensions.
 PostgreSQL Version Compatibility
 --------------------------------
 
-ProvSQL supports PostgreSQL 11 through 18.  Version-specific C code
+ProvSQL supports PostgreSQL 11 through 19.  Version-specific C code
 uses the ``PG_VERSION_NUM`` macro (from PostgreSQL's own ``pg_config.h``):
 
 .. code-block:: c
@@ -315,7 +315,7 @@ The test itself:
    evaluator still work.
 
 The test is scheduled on **every PostgreSQL version in the CI
-matrix** (10 through 18), because it lives inside the standard
+matrix** (11 through 19), because it lives inside the standard
 pg_regress suite -- but the upgrade replay itself is only exercised
 on PostgreSQL 12+: older versions disallow multiple
 ``ALTER TYPE ... ADD VALUE`` statements inside a single
@@ -602,8 +602,8 @@ Nine GitHub Actions workflows are defined:
    * - Workflow
      - What it does
    * - ``build_and_test.yml``
-     - Builds and tests on Linux with PostgreSQL 11--18 (Docker-based),
-       and with PostgreSQL 18 on arm64 Linux.
+     - Builds and tests on Linux with PostgreSQL 11--19 (Docker-based),
+       and with PostgreSQL 19 on arm64 Linux.
        Also builds and pushes the Docker image on tagged releases.
        Runs on pushes to ``master``, on pull requests, and on version tags.
    * - ``macos.yml``
@@ -632,8 +632,8 @@ Nine GitHub Actions workflows are defined:
        ``src/**``, ``sql/**``, ``wasm/**``, or the workflow file.
    * - ``studio.yml``
      - Lint, package smoke, notebook-drift check, and
-       pytest on a Py 3.11–3.14 × PG 14/18 matrix for ProvSQL
-       Studio, and Playwright e2e on Py 3.11 × PG 14 and Py 3.14 × PG 18.
+       pytest on a Py 3.11–3.14 × PG 14/19 matrix for ProvSQL
+       Studio, and Playwright e2e on Py 3.11 × PG 14 and Py 3.14 × PG 19.
        Runs on pushes to ``master`` and pull requests that touch
        ``studio/**``, ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, the
        workflow file, or the sources of the generated example

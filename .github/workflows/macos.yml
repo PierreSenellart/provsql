@@ -60,7 +60,7 @@ jobs:
   build:
     strategy:
       matrix:
-        pg: [15, 18]
+        pg: [15, 19]
     name: macOS – PostgreSQL ${{ matrix.pg }}
     runs-on: macos-latest
     steps:

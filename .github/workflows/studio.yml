@@ -97,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [14, 18]
+        pg: [14, 19]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
       - uses: actions/checkout@v7
@@ -124,7 +124,7 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.11', '3.12', '3.13', '3.14']
-        pg: [14, 18]
+        pg: [14, 19]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main
@@ -169,7 +169,7 @@ jobs:
           - python: '3.11'
             pg: 14
           - python: '3.14'
-            pg: 18
+            pg: 19
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main

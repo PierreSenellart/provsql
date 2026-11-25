@@ -154,8 +154,8 @@ checker can validate them.
    describe user-visible changes; that is what the maintainer
    draws from when assembling release notes.
 
-CI runs on Linux (PostgreSQL 11–18), macOS, and WSL for the
-extension, and on a Py 3.10/3.11/3.12/3.13 × PG 14/15/16 matrix
+CI runs on Linux (PostgreSQL 11–19), macOS, and WSL for the
+extension, and on a Py 3.11–3.14 × PG 14/19 matrix
 for Studio. Failures on any applicable workflow block merging.
 
 ## License
