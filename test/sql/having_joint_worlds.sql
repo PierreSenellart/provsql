@@ -64,6 +64,44 @@ SELECT remove_provenance('hjw_r');
 SELECT 'count filter >= 1' AS q, dept, n, b FROM hjw_r ORDER BY dept;
 DROP TABLE hjw_r;
 
+-- The same over other aggregates: bool_and over (true, NULL), min over
+-- texts ('a', NULL): 6.
+CREATE TABLE hjw_o(id int, g int, f boolean, s text, w int);
+INSERT INTO hjw_o VALUES (1, 1, true, 'a', 2), (2, 1, NULL, NULL, 3);
+SELECT add_provenance('hjw_o');
+SELECT create_provenance_mapping('hjw_o_w', 'hjw_o', 'w');
+CREATE TABLE hjw_r AS
+  SELECT g, sr_counting(provenance(), 'hjw_o_w') AS n,
+         sr_boolean(provenance()) AS b
+  FROM hjw_o GROUP BY g HAVING bool_and(f);
+SELECT remove_provenance('hjw_r');
+SELECT 'bool_and' AS q, g, n, b FROM hjw_r;
+DROP TABLE hjw_r;
+CREATE TABLE hjw_r AS
+  SELECT g, sr_counting(provenance(), 'hjw_o_w') AS n,
+         sr_boolean(provenance()) AS b
+  FROM hjw_o GROUP BY g HAVING min(s) < 'b';
+SELECT remove_provenance('hjw_r');
+SELECT 'min over text' AS q, g, n, b FROM hjw_r;
+DROP TABLE hjw_r;
+
+-- A group too large for the joint enumeration (25 rows, 7 of them NULL) is
+-- evaluated without the rows read for no value, with a warning: the answer
+-- is then exact in a Boolean algebra only.
+CREATE TABLE hjw_big(id int, v int);
+INSERT INTO hjw_big SELECT i, CASE WHEN i <= 7 THEN NULL ELSE 1 END
+  FROM generate_series(1, 25) i;
+SELECT add_provenance('hjw_big');
+CREATE TABLE hjw_r AS
+  SELECT sr_counting(provenance(), 'hjw_o_w') AS n, sr_boolean(provenance()) AS b
+  FROM hjw_big HAVING min(v) < 2;
+SELECT remove_provenance('hjw_r');
+SELECT 'too large' AS q, n, b FROM hjw_r;
+DROP TABLE hjw_r;
+DROP TABLE hjw_big;
+DROP TABLE hjw_o_w;
+DROP TABLE hjw_o;
+
 CREATE TABLE hjw_dept(d int, name int, w int);
 INSERT INTO hjw_dept VALUES (1, 30, 2), (2, 30, 2), (3, 40, 2);
 CREATE TABLE hjw_e(id int, dept int, w int);

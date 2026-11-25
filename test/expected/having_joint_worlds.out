@@ -36,6 +36,34 @@ count filter >= 1|2|6|t
 add_provenance
 
 (1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|n|b
+bool_and|1|6|t
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|n|b
+min over text|1|6|t
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: a condition on an aggregate whose group has rows it reads no value from (a NULL argument, a row its FILTER leaves out) is evaluated without those rows, which is the provenance of the condition only in a Boolean algebra: the joint enumeration that takes them in does not read this aggregate, or the group is too large for it
+remove_provenance
+
+(1 row)
+q|n|b
+too large|1|t
+(1 row)
+add_provenance
+
+(1 row)
 add_provenance
 
 (1 row)

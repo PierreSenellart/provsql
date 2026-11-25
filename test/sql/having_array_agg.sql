@@ -75,12 +75,17 @@ CREATE TABLE r9 AS
   JOIN (SELECT array_agg(nm ORDER BY nm) AS a FROM hc) r ON l.a = r.a;
 SELECT remove_provenance('r9'); SELECT 'array = array' AS q, g, p FROM r9 ORDER BY g, p;
 
--- Another comparison of two aggregates, which no pass resolves (text min
--- against text min): refused, rather than reported as an internal error.
-SELECT probability_evaluate(provenance())
+-- Another comparison of two aggregates, text min against text min: the
+-- joint enumeration reads the texts by their order.  Group A's minimum is
+-- the overall one whenever A has a row (0.75: 'a' if present, else 'b',
+-- before 'c'); group B's only when 'c' alone is there (0.5 * 0.25).
+CREATE TABLE r10 AS
+  SELECT l.g, round(probability_evaluate(provenance())::numeric,4) AS p
   FROM (SELECT g, min(nm) AS m FROM haa GROUP BY g) l
   JOIN (SELECT min(nm) AS m FROM haa) r ON l.m = r.m;
+SELECT remove_provenance('r10'); SELECT 'min = min' AS q, g, p FROM r10 ORDER BY g;
 
 DROP TABLE r1; DROP TABLE r2; DROP TABLE r3; DROP TABLE r4;
 DROP TABLE r5; DROP TABLE r6; DROP TABLE r7; DROP TABLE r8; DROP TABLE r9;
+DROP TABLE r10;
 DROP TABLE haa; DROP TABLE hb; DROP TABLE hc;

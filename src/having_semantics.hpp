@@ -406,7 +406,15 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
 
     // A number, the whole text of it: a date such as 2022-08-05 is not
     // 2022.
-    auto parse_number = [](const std::string &s, double &out) -> bool {
+    // Values of a type that is no number, which a MIN or a MAX compares by
+    // the type's order: their ranks under it (see below), read as numbers.
+    std::map<std::string, double> ordered_rank;
+    auto parse_number = [&](const std::string &s, double &out) -> bool {
+      auto r = ordered_rank.find(s);
+      if (r != ordered_rank.end()) { out = r->second; return true; }
+      // A Boolean, as bool_and / bool_or read it: false below true.
+      if (s == "t" || s == "true") { out = 1; return true; }
+      if (s == "f" || s == "false") { out = 0; return true; }
       try {
         std::size_t pos = 0;
         out = std::stod(s, &pos);
@@ -415,6 +423,52 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
         return false;
       }
     };
+
+    // MIN and MAX over a type that is no number (text, dates, ...) depend
+    // only on the order of the values, so each value, and each constant they
+    // are compared with, is read as its rank under the type's comparison.
+    // Only when every aggregate the conditions read is a MIN or a MAX: no
+    // other one, nor any arithmetic, means anything over ranks.
+    {
+      std::vector<std::string> texts;
+      unsigned typ = 0;
+      bool all_minmax = true, any_agg = false;
+      std::function<void(gate_t)> texts_of = [&](gate_t gx) {
+        gate_type gt = c.getGateType(gx);
+        std::string ms;
+        gate_t kg{};
+        if (gt == gate_agg) {
+          AggregationOperator k = getAggregationOperator(c.getInfos(gx).first);
+          any_agg = true;
+          if (k != AggregationOperator::MIN && k != AggregationOperator::MAX)
+            all_minmax = false;
+          typ = c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK;
+          for (gate_t ch : c.getWires(gx))
+            if (semimod_extract_string_and_K(c, ch, ms, kg))
+              texts.push_back(ms);
+        } else if (gt == gate_arith) {
+          all_minmax = false;
+        } else if (gt == gate_value) {
+          texts.push_back(c.getExtra(gx));
+        } else if (gt == gate_semimod &&
+                   semimod_extract_string_and_K(c, gx, ms, kg)) {
+          texts.push_back(ms);
+        }
+      };
+      for (const JointAtom &a : atoms) {
+        texts_of(a.L);
+        texts_of(a.R);
+      }
+      double d;
+      bool need = std::any_of(texts.begin(), texts.end(),
+                              [&](const std::string &t) { return !parse_number(t, d); });
+      std::vector<long> ranks;
+      long threshold_rank;
+      if (need && any_agg && all_minmax && typ != 0 && !texts.empty() &&
+          rank_values_by_type(typ, texts, texts[0], ranks, threshold_rank))
+        for (std::size_t i = 0; i < texts.size(); ++i)
+          ordered_rank[texts[i]] = static_cast<double>(ranks[i]);
+    }
 
     std::function<bool(gate_t)> collect = [&](gate_t gx) -> bool {
       gate_type gt = c.getGateType(gx);
@@ -438,6 +492,8 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
         case AggregationOperator::MIN:
         case AggregationOperator::MAX:
         case AggregationOperator::CHOOSE:
+        case AggregationOperator::AND:
+        case AggregationOperator::OR:
           break;
         default:
           return false;
@@ -556,6 +612,10 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
         // choose() is PICKFIRST: the value of the first present contributor,
         // in the order of the gate's wires (see ChooseAgg).
         case AggregationOperator::CHOOSE: if (cnt == 0) return false; out = fst; return true;
+        // bool_and / bool_or: the least and the greatest of the values
+        // present, false being 0 and true 1.
+        case AggregationOperator::AND: if (cnt == 0) return false; out = mn; return true;
+        case AggregationOperator::OR:  if (cnt == 0) return false; out = mx; return true;
         default:
           // collect admits no other kind: one reaching here would read as
           // "no value" in every world, so it raises instead.
@@ -1325,9 +1385,22 @@ auto build_joint = [&](const std::vector<JointAtom> &atoms,
             return true;
       return false;
     };
-    if (!boolean_algebra && (reads_novalue(L) || reads_novalue(R)) &&
-        build_general(L, R, op))
-      return true;
+    if (!boolean_algebra && (reads_novalue(L) || reads_novalue(R))) {
+      if (build_general(L, R, op))
+        return true;
+      /* Once per statement, as each row's token is evaluated on its own. */
+      static TimestampTz warned_at = 0;
+      if (warned_at != GetCurrentStatementStartTimestamp()) {
+        warned_at = GetCurrentStatementStartTimestamp();
+        provsql_warning(
+          "a condition on an aggregate whose group has rows it reads no "
+          "value from (a NULL argument, a row its FILTER leaves out) is "
+          "evaluated without those rows, which is the provenance of the "
+          "condition only in a Boolean algebra: the joint enumeration that "
+          "takes them in does not read this aggregate, or the group is too "
+          "large for it");
+      }
+    }
 
     if (c.getGateType(L) == gate_agg && build_from(L, R, op))
       return true;
