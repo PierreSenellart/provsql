@@ -1,0 +1,16 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+sd_deep
+
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value: provenance not tracked, although the statement tracks sd_t
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap; reader: other
+HINT:  Mark it plain() to say so.
+remove_provenance
+
+(1 row)
+g|f
+1|10
+(1 row)

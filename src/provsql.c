@@ -254,9 +254,13 @@ static int provsql_executor_depth = 0;
 unsigned provsql_stmt_serial = 0;
 
 /** @brief @c provsql_executor_depth when each open subtransaction started,
- *  by nesting level, to restore it when the subtransaction aborts. */
-#define PROVSQL_MAX_SUBXACT_DEPTH 64
-static int provsql_subxact_depth[PROVSQL_MAX_SUBXACT_DEPTH];
+ *  by nesting level, to restore it when the subtransaction aborts.  Grown as
+ *  deeper levels open (@c provsql_subxact_callback): a fixed bound left the
+ *  levels past it untracked, so that an error in one of them left the depth
+ *  raised for the rest of the transaction, and with it every warning gated
+ *  on a depth of 0 silenced. */
+static int *provsql_subxact_depth = NULL;
+static int provsql_subxact_capacity = 0;
 
 /** @brief An aggregate of the statement being planned reads the value of
  *  another as a plain value, the pair not being one the reaggregation carries
@@ -286,11 +290,22 @@ static void provsql_subxact_callback(SubXactEvent event,
   (void) mySubid;
   (void) parentSubid;
   (void) arg;
-  if (level <= 0 || level >= PROVSQL_MAX_SUBXACT_DEPTH)
+  if (level <= 0)
     return;
-  if (event == SUBXACT_EVENT_START_SUB)
+  if (event == SUBXACT_EVENT_START_SUB) {
+    if (level >= provsql_subxact_capacity) {
+      int capacity = provsql_subxact_capacity > 0 ? provsql_subxact_capacity : 64;
+
+      while (capacity <= level)
+        capacity *= 2;
+      provsql_subxact_depth = provsql_subxact_depth == NULL
+        ? MemoryContextAlloc(TopMemoryContext, sizeof(int) * capacity)
+        : repalloc(provsql_subxact_depth, sizeof(int) * capacity);
+      provsql_subxact_capacity = capacity;
+    }
     provsql_subxact_depth[level] = provsql_executor_depth;
-  else if (event == SUBXACT_EVENT_ABORT_SUB)
+  } else if (event == SUBXACT_EVENT_ABORT_SUB &&
+             level < provsql_subxact_capacity)
     provsql_executor_depth = provsql_subxact_depth[level];
 }
 static post_parse_analyze_hook_type prev_post_parse_analyze = NULL; ///< Previous post-parse-analysis hook (chained)
