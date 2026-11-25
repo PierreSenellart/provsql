@@ -1,9 +1,6 @@
 \set ECHO none
 \pset format unaligned
 
-SELECT
-    provenance ();
-
 SELECT DISTINCT ON (city)
     city, count(*)
 FROM

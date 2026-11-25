@@ -15191,9 +15191,11 @@ static bool calls_provenance_walker(Node *node, void *data) {
  *
  * A @c SubLink subselect (scalar / @c IN / @c EXISTS) is planned standalone, so
  * it never goes through this hook -- a @c provenance() call inside one is never
- * rewritten and falls through to its runtime stub (NULL or a misleading error).
- * ProvSQL does not propagate provenance through a @c SubLink, so we detect the
- * @c provenance() use up front and raise a clear error instead.
+ * rewritten and falls through to its runtime fallback, which returns the
+ * semiring one: right for a row of untracked data, silently wrong for a row of
+ * a tracked relation.  ProvSQL does not propagate provenance through a
+ * @c SubLink, so we detect the @c provenance() use up front and raise a clear
+ * error instead.
  *
  * Only the explicit @c provenance() call is flagged, not a mere read of a
  * tracked relation's columns: @c (SELECT @c array_agg(provsql) @c FROM @c t) and
@@ -37376,7 +37378,8 @@ static PlannedStmt *provsql_planner(Query *q,
     /* A subquery over a provenance-tracked relation used in an expression
      * context (scalar subquery / IN / EXISTS) is not supported -- and would
      * otherwise slip past has_provenance() (which does not descend into
-     * SubLinks) and leave provenance() to fail at runtime.  Flag it clearly. */
+     * SubLinks) and leave provenance() to return the semiring one at runtime,
+     * as for untracked data.  Flag it clearly. */
     if (provsql_active && constants.ok &&
         provenance_in_sublink_walker((Node *)q, (void *)&constants))
       provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "provenance-in-sublink", "a subquery over a provenance-tracked relation cannot be "

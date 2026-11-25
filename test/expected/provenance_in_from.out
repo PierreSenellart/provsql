@@ -1,2 +1,13 @@
 \set ECHO none
-ERROR:  ProvSQL: provenance() called on a table without provenance
+remove_provenance
+
+(1 row)
+name|from_one|row_tracked
+Dave|t|t
+Ellen|t|t
+John|t|t
+Magdalen|t|t
+Nancy|t|t
+Paul|t|t
+Susan|t|t
+(7 rows)

@@ -158,13 +158,16 @@ def test_duplicate_column_names_kept_in_cells(temporal_client):
     assert d["result"][0]["cells"] == ["A", "1"]
 
 
-def test_query_without_provenance_gives_clear_error(temporal_client):
-    # A query that reads no provenance-tracked relation has no provenance
-    # column; the error must explain that, not just "temporal query failed".
+def test_query_without_provenance_is_always_valid(temporal_client):
+    # A query that reads no provenance-tracked relation returns rows present
+    # in every world: provenance() is the semiring one, so each row is valid
+    # at all times.
     r = _temporal(temporal_client, source="query", query="SELECT 1 AS x",
                   mapping="public.sensor_validity", timeop="full")
-    assert r.status_code == 400
-    assert "no provenance column" in r.get_json()["error"]
+    assert r.status_code == 200
+    rows = r.get_json()["result"]
+    assert [row["cells"] for row in rows] == [["1"]]
+    assert rows[0]["valid_time"] == [{"lower": None, "upper": None}]
 
 
 def test_sql_error_surfaces_postgres_message(temporal_client):

@@ -32,7 +32,7 @@ test: store_durability
 # Basic checks.  identify_token and resolve_input answer from the content of
 # every tracked table, so each runs alone; the gate-cache pair must run in
 # two backends, one after the other.
-test: provenance_in_from subquery
+test: provenance_in_from provenance_certain subquery
 test: create_provenance_mapping
 test: identify_token
 test: circuit_subgraph simplify_identities

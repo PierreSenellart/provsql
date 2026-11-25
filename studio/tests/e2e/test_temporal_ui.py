@@ -157,19 +157,20 @@ def test_query_runs_exactly_once(
     assert cols == ["reading", "provsql"], cols
 
 
-def test_non_temporal_query_still_shows_output(
+def test_untracked_query_is_always_valid(
     page: Page, temporal_studio_url: str
 ) -> None:
-    """A query that cannot be placed on a timeline (no provenance column) still
-    shows its output in the result table, with an empty timeline (it falls back
-    to running the query for the result table)."""
+    """A query over no provenance-tracked relation returns rows present in
+    every world: each is one lane, valid at all times, and the result table
+    shows its output."""
     _goto_temporal(page, temporal_studio_url)
     page.locator('.cv-temporal__src[data-source="query"]').click()
     page.locator('.cv-temporal__op[data-timeop="full"]').click()
     page.locator("#request").fill("SELECT 42 AS answer")
     page.locator("#temporal-mapping").select_option("provsql.time_validity_view")
     page.locator("#run-btn").click()
-    expect(page.locator(".cv-temporal__lane")).to_have_count(0, timeout=8000)
+    expect(page.locator(".cv-temporal__lane")).to_have_count(1, timeout=8000)
+    expect(page.locator(".cv-temporal__never")).to_have_count(0)
     expect(page.locator("#result-body")).to_contain_text("42", timeout=8000)
 
 

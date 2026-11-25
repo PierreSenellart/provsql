@@ -1,5 +1,4 @@
 \set ECHO none
-ERROR:  ProvSQL: provenance() called on a table without provenance
 ERROR:  ProvSQL: DISTINCT ON not supported
 DETAIL:  provsql-reason: distinct-on; scope: gap
 ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.

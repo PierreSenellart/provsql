@@ -1,16 +1,14 @@
 /**
  * @file provenance.c
- * @brief SQL function @c provenance() – error stub for untracked tables.
+ * @brief SQL function @c provenance() – the certain provenance @c gate_one().
  *
- * The SQL function @c provsql.provenance() is added to every table that
- * has provenance tracking enabled.  When a query references the
- * @c provsql column of such a table directly (without going through the
- * planner hook), this stub is called and immediately raises an error.
- *
- * In normal operation the planner hook rewrites queries that reference
- * provenance-tracked tables before this function can be called, so the
- * error message is only seen if @c provenance() is invoked on a relation
- * that does not have a @c provsql column.
+ * In a query over provenance-tracked data the planner hook replaces every
+ * call to @c provsql.provenance() by the provenance of the row, so this
+ * function only runs where nothing gives the row a provenance: a query
+ * over untracked relations, @c VALUES, or no relation at all, or one
+ * planned with @c provsql.active off.  Such a row is in every possible
+ * world, and its provenance is the semiring one, which is what an
+ * untracked row already gets inside a tracked query.
  */
 #include "postgres.h"
 #include "fmgr.h"
@@ -23,12 +21,12 @@
 PG_FUNCTION_INFO_V1(provenance);
 
 /**
- * @brief Error stub for @c provsql.provenance() on untracked tables.
+ * @brief @c provsql.provenance() where the planner hook left it in place.
  *
- * Always raises a @c provsql_error and never returns.
- * @return Never returns (always raises an error).
+ * @return The UUID of @c gate_one(), the semiring one.
  */
 Datum provenance(PG_FUNCTION_ARGS)
 {
-  provsql_error("provenance() called on a table without provenance");
+  const constants_t constants = get_constants(true);
+  return OidFunctionCall0(constants.OID_FUNCTION_GATE_ONE);
 }

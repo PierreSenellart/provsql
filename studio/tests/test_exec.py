@@ -366,9 +366,9 @@ def test_resource_limit_error_shows_its_hint(client):
 
 
 def test_where_mode_falls_back_when_no_provenance_relation(client):
-    # SELECT against a table that has no provsql column. The wrap would
-    # otherwise raise "provenance() called on a table without provenance";
-    # /api/exec must roll the savepoint back, retry unwrapped, and surface
+    # SELECT against a table that has no provsql column: nothing to wrap,
+    # provenance() giving every row the semiring one (an error before
+    # extension 1.15). /api/exec must run the query unwrapped and surface
     # an info notice instead of an error block.
     sql = (
         "CREATE TEMPORARY TABLE t_untagged (id int, label text);"

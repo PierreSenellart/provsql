@@ -1187,10 +1187,11 @@ def create_app(
             diag = getattr(e, "diag", None)
             primary = ((diag.message_primary if diag and diag.message_primary
                         else str(e)) or "").strip()
-            # The most common -- and least obvious -- failure: the query reads no
-            # provenance-tracked relation, so provenance() has nothing to
-            # resolve and there is no validity to draw. Translate ProvSQL's
-            # internal error into actionable guidance (a client error, not 500).
+            # Before extension 1.15, a query that reads no provenance-tracked
+            # relation failed here, provenance() having nothing to resolve
+            # (since then it is the semiring one, valid at all times).
+            # Translate that error into actionable guidance (a client error,
+            # not 500).
             if "without provenance" in primary:
                 return jsonify({
                     "error": "This query has no provenance column, so there is "

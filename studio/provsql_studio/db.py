@@ -2500,6 +2500,31 @@ def _resolve_compiled_semiring(
 _NO_PROV_MARKER = "called on a table without provenance"
 
 
+class _NoTrackedData(Exception):
+    """The query of a where-provenance wrap reads no tracked data."""
+
+
+def _reads_no_tracked_data(cur, sql: str) -> bool:
+    """Whether `sql` reads no provenance-tracked data.
+
+    ProvSQL adds a `provsql` column to the output of a query over tracked
+    data, and only then, so planning the query under `LIMIT 0` (which runs
+    nothing) and looking at its columns tells. Such a query has no
+    where-provenance to show: `provenance()` gives every row the semiring
+    one (extension 1.15+; before, it raised the error `_NO_PROV_MARKER`
+    matches). An error is not an answer: the wrap then reports it."""
+    cur.execute("SAVEPOINT tracked_probe")
+    try:
+        cur.execute(f"SELECT * FROM ({sql}) t LIMIT 0")
+        names = [c.name for c in (cur.description or [])]
+    except psycopg.Error:
+        cur.execute("ROLLBACK TO SAVEPOINT tracked_probe")
+        cur.execute("RELEASE SAVEPOINT tracked_probe")
+        return False
+    cur.execute("RELEASE SAVEPOINT tracked_probe")
+    return "provsql" not in names
+
+
 # Dump-style data-loading statement: `COPY <table> ... FROM stdin ...;`
 # sitting alone on its line, as pg_dump writes it. Matched both by
 # app._split_statements (which carves the statement plus its inline data
@@ -2825,9 +2850,11 @@ def exec_batch_on(
                 capture[0] = False
                 cur.execute("SAVEPOINT before_wrap")
                 try:
+                    if _reads_no_tracked_data(cur, last):
+                        raise _NoTrackedData
                     cur.execute(wrapped_sql)
-                except psycopg.Error as e:
-                    if _NO_PROV_MARKER in str(e):
+                except (psycopg.Error, _NoTrackedData) as e:
+                    if isinstance(e, _NoTrackedData) or _NO_PROV_MARKER in str(e):
                         cur.execute("ROLLBACK TO SAVEPOINT before_wrap")
                         meta["wrapped"] = False
                         meta["notices"].append({

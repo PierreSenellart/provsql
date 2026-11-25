@@ -117,8 +117,10 @@ and algorithms are in |cpp|.
 
 *SQL-callable functions*
 
-- :cfile:`provenance.c` -- error stub for the :sqlfunc:`provenance`
-  SQL function (reached only when a query bypasses the planner hook).
+- :cfile:`provenance.c` -- the :sqlfunc:`provenance` SQL function where
+  the planner hook leaves it in place (a query over no provenance-tracked
+  data): it returns :sqlfunc:`gate_one`, the provenance of a row present
+  in every world.
 - :cfile:`provenance_evaluate.c` -- SQL-level semiring evaluation
   (user-defined ``plus``/``times``/... functions).
 - :cfile:`agg_token.c` / :cfile:`agg_token.h` -- the ``agg_token``

@@ -343,6 +343,19 @@ current output tuple:
 The token can be passed to semiring evaluation functions
 (see :doc:`semirings`) or to probability/Shapley functions.
 
+A row that no provenance-tracked relation contributes to is present in
+every possible world, and its provenance is the semiring one,
+:sqlfunc:`gate_one`. This holds for the untracked rows of a query over
+tracked relations, and for every row of a query over untracked relations,
+``VALUES`` lists, or no relation at all, where ``provenance()`` returns
+:sqlfunc:`gate_one` too:
+
+.. code-block:: sql
+
+    SELECT x, sr_formula(provenance()) FROM (VALUES (1), (2)) v(x);
+    -- 1 | 𝟙
+    -- 2 | 𝟙
+
 In a query that aggregates, ``provenance()`` is read where SQL evaluates
 it. In the ``SELECT`` list or ``HAVING``, outside an aggregate, it is the
 provenance of the group. In ``WHERE``, in a ``GROUP BY`` key and inside an
