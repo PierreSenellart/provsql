@@ -1198,10 +1198,10 @@ BEGIN
   -- guard does that semantically -- and a UNIQUE would reject the
   -- legitimate cross-table UUID copy that just flips the table to
   -- OPAQUE.  We keep a plain index for fast UUID-keyed lookups.
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
   EXECUTE format(
-    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    'ALTER TABLE %s ADD COLUMN provsql UUID DEFAULT public.uuid_generate_v4()',
     _tbl);
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql DROP DEFAULT', _tbl);
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
