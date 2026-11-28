@@ -164,6 +164,7 @@ BEGIN
 
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+  EXECUTE format('ANALYZE %s (provsql)', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 /** @endcond */

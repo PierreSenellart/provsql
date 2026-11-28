@@ -1213,6 +1213,7 @@ BEGIN
   -- inherit unions of source ancestor sets; that is handled by the
   -- CTAS hook (a separate slice), not here.
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+  EXECUTE format('ANALYZE %s (provsql)', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
