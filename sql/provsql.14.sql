@@ -148,10 +148,10 @@ BEGIN
   -- See the common-version body for the rationale of dropping the
   -- column DEFAULT and UNIQUE in favour of provenance_guard + a
   -- plain index.
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
   EXECUTE format(
-    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    'ALTER TABLE %s ADD COLUMN provsql UUID DEFAULT public.uuid_generate_v4()',
     _tbl);
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql DROP DEFAULT', _tbl);
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
@@ -164,6 +164,7 @@ BEGIN
 
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+  EXECUTE format('ANALYZE %s (provsql)', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 /** @endcond */
